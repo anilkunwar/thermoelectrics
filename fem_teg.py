@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import subprocess
 
@@ -6,7 +7,7 @@ def run_elmer_solver(sif_file_path, mesh_file_path):
     command = f"ElmerSolver {sif_file_path}"
 
     # Change directory to the mesh file location
-    mesh_directory = "/".join(mesh_file_path.split("/")[:-1])
+    mesh_directory = os.path.dirname(mesh_file_path)
     command = f"cd {mesh_directory} && {command}"
 
     # Run the command using subprocess
@@ -34,10 +35,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
 
 
 
