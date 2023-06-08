@@ -1,43 +1,20 @@
-import subprocess
 import streamlit as st
-import os
+import subprocess
 
-def run_command(command):
-    process = subprocess.Popen(
-        command.split(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-        env=os.environ  # Pass the current environment variables to the subprocess
-    )
-    
-    # Read the output line by line and display it in the Streamlit interface
-    for line in iter(process.stdout.readline, ''):
-        st.text(line.strip())
-    
-    process.wait()  # Wait for the process to finish
-    return process.returncode
+def run_program(program_name):
+    try:
+        result = subprocess.run(program_name, capture_output=True, text=True)
+        output = result.stdout.strip()
+        st.code(output, language='text')
+    except FileNotFoundError:
+        st.error(f"Error: Program '{program_name}' not found.")
 
 def main():
-    st.title("Remote ElmerSolver Execution")
-    
-    command = "/usr/bin/ElmerSolver_mpi"  # Full path to ElmerSolver_mpi executable
-    
-    if st.button("Run ElmerSolver"):
-        st.text("Executing ElmerSolver...")
-        st.text("----------------------------------")
-        
-        # Set the environment variable(s) required by ElmerSolver
-        os.environ["ELMER_HOME"] = "/usr/bin/ElmerSolver_mpi"
-        
-        returncode = run_command(command)
-        
-        st.text("----------------------------------")
-        if returncode == 0:
-            st.text("ElmerSolver execution completed successfully.")
-        else:
-            st.text("ElmerSolver execution failed.")
-            
+    st.title("Program Runner")
 
-if __name__ == "__main__":
+    program_name = st.text_input("Enter the program name to run")
+    if st.button("Run"):
+        run_program(program_name)
+
+if __name__ == '__main__':
     main()
