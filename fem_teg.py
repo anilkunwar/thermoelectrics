@@ -6,7 +6,7 @@ def run_command(command):
         command.split(),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        universal_newlines=True
+        universal_newlines=True,
     )
     
     # Read the output line by line and display it in the Streamlit interface
@@ -19,7 +19,7 @@ def run_command(command):
 def main():
     st.title("Remote ElmerSolver Execution")
     
-    command = "/usr/bin/ElmerSolver_mpi"  # Full path to ElmerSolver_mpi executable
+    command = "/usr/bin/ElmerSolver"  # Full path to ElmerSolver executable
     
     if st.button("Run ElmerSolver"):
         st.text("Executing ElmerSolver...")
