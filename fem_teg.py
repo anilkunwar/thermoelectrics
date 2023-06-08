@@ -3,6 +3,7 @@ import streamlit as st
 import os
 
 def run_command(command):
+    print("Executing command:", command)  # Print the command for debugging purposes
     process = subprocess.Popen(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     return output.decode(), error.decode()
