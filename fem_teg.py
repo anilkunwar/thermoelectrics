@@ -13,7 +13,7 @@ def main():
     command = st.text_input("Enter the command to run:")
     
     if st.button("Run"):
-        os.environ["PATH"] += ":/use/bin/ElmerSolver"  # Replace "/path/to/directory" with the actual directory containing the executable
+        os.environ["PATH"] += ":/usr/bin/ElmerSolver"  # Replace "/path/to/directory" with the actual directory containing the executable
         output, error = run_command(command)
         
         st.subheader("Output:")
