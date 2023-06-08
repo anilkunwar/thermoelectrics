@@ -4,9 +4,15 @@ import streamlit as st
 # Create Streamlit app
 st.title("FEM Simulation for Thermoelectric Generator")
 
+#For running the function in the local computer
+#def convert_unv_to_msh(file_path, folder_name):
+    ## Run ElmerGrid command to convert UNV to MSH
+    #os.system(f"ElmerGrid 8 2 {file_path} -autoclean -out {folder_name}")
+# For running the function globally
 def convert_unv_to_msh(file_path, folder_name):
     # Run ElmerGrid command to convert UNV to MSH
-    os.system(f"ElmerGrid 8 2 {file_path} -autoclean -out {folder_name}")
+    command = ["ElmerGrid", "8", "2", file_path, "-autoclean", "-out", folder_name]
+    subprocess.run(command)
 
 def generate_sif_file(folder_name, bottom_temperature, top_temperature):
     # Create Elmer sif file content with user-defined temperatures
