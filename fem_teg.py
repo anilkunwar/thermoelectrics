@@ -3,7 +3,7 @@ import subprocess
 
 def run_elmer_solver(sif_file_path):
     # Command to run ElmerSolver
-    command = f"/usr/bin/ElmerSolver {sif_file_path}"
+    command = f"ElmerSolver {sif_file_path}"
 
     # Run the command using subprocess and capture the output
     process = subprocess.Popen(
