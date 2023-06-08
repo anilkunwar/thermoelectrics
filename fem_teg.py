@@ -1,35 +1,19 @@
-import streamlit as st
 import subprocess
+import streamlit as st
 
-def run_elmer_solver(sif_file_path):
-    # Command to run ElmerSolver
-    command = f"ElmerSolver {sif_file_path}"
-
-    # Run the command using subprocess and capture the output
-    process = subprocess.Popen(
-        command,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,
-        universal_newlines=True
-    )
-
-    # Display the output in the web interface
-    with st.empty():
-        for line in process.stdout:
-            st.text(line.strip())
+def run_command(command):
+    process = subprocess.Popen(command.split(), stdout=subprocess.PIPE)
+    output, error = process.communicate()
+    return output.decode()
 
 def main():
-    st.title("ElmerSolver Web Interface")
-    st.write("Please provide the path to the SIF file.")
-
-    # File input
-    sif_file_path = st.text_input("Path to SIF file")
-
-    if sif_file_path:
-        # Run ElmerSolver
-        run_elmer_solver(sif_file_path)
+    st.title("Remote Ubuntu Terminal Command")
+    
+    command = st.text_input("Enter the command to run:")
+    
+    if st.button("Run"):
+        output = run_command(command)
+        st.code(output)
 
 if __name__ == "__main__":
     main()
