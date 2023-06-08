@@ -1,29 +1,18 @@
 import streamlit as st
 import subprocess
-import base64
 
-def run_program(program_path):
+# Streamlit web application code
+st.title("Run Ubuntu Commands")
+
+# Get user input command
+command = st.text_input("Enter the command", "/usr/bin/paraview")
+
+# Run the command
+if st.button("Run"):
     try:
-        result = subprocess.run(program_path, capture_output=True, text=True, shell=True)
-        output = result.stdout.strip()
-        with st.expander("Show Output"):
-            st.code(output, language='text')
-        st.markdown(get_download_link(output), unsafe_allow_html=True)
-    except FileNotFoundError:
-        st.error(f"Error: Program '{program_path}' not found.")
-
-def get_download_link(output):
-    output_encoded = output.encode()
-    b64 = base64.b64encode(output_encoded).decode()
-    href = f'<a href="data:file/txt;base64,{b64}" download="output.txt">Download Output</a>'
-    return href
-
-def main():
-    st.title("Program Runner")
-
-    program_path = st.text_input("Enter the program path to run")
-    if st.button("Run"):
-        run_program(program_path)
-
-if __name__ == '__main__':
-    main()
+        # Execute the command and capture the output
+        output = subprocess.check_output(command.split())
+        st.code(output.decode("utf-8"))
+    except subprocess.CalledProcessError as e:
+        st.error(f"Command execution failed with error code {e.returncode}")
+        st.error(e.output.decode("utf-8"))
