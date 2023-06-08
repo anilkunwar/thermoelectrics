@@ -3,9 +3,17 @@ import subprocess
 
 def run_program(program_path):
     try:
-        result = subprocess.run(program_path, capture_output=True, text=True, shell=True)
-        output = result.stdout.strip()
-        st.code(output, language='text')
+        process = subprocess.Popen(program_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        
+        # Read and display the log messages in real-time
+        for line in process.stdout:
+            st.text(line.strip())
+            
+        # Wait for the process to finish
+        process.wait()
+        
+        st.text(f"Program exited with return code: {process.returncode}")
+        
     except FileNotFoundError:
         st.error(f"Error: Program '{program_path}' not found.")
 
