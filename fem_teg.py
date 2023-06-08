@@ -19,7 +19,7 @@ def run_command(command):
 def main():
     st.title("Remote ElmerSolver Execution")
     
-    command = "/usr/bin/ElmerSolver"  # Full path to ElmerSolver executable
+    command = "/usr/bin/ElmerSolver_mpi"  # Full path to ElmerSolver_mpi executable
     
     if st.button("Run ElmerSolver"):
         st.text("Executing ElmerSolver...")
