@@ -156,7 +156,11 @@ End
         f.write(sif_content)
 
     # Run ElmerSolver command
-    os.system(f"ElmerSolver {sif_file}")
+    #os.system(f"ElmerSolver {sif_file}") # For the app run locally
+    # Run ElmerSolver command
+    command = ["ElmerSolver", sif_file]
+    subprocess.run(command)
+    
 
 # File upload section
 uploaded_file = st.file_uploader("Upload UNV File", type="unv")
