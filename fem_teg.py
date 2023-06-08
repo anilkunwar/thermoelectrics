@@ -3,17 +3,13 @@ import subprocess
 
 def run_program(program_path):
     try:
-        process = subprocess.Popen(program_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-        
-        # Read and display the log messages in real-time
+        process = subprocess.Popen(program_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, shell=True)
+        log_frame = st.empty()
+
         for line in process.stdout:
-            st.text(line.strip())
-            
-        # Wait for the process to finish
+            log_frame.text(line.strip())
+
         process.wait()
-        
-        st.text(f"Program exited with return code: {process.returncode}")
-        
     except FileNotFoundError:
         st.error(f"Error: Program '{program_path}' not found.")
 
