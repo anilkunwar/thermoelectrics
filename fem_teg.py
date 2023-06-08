@@ -6,14 +6,14 @@ import streamlit as st
 st.title("FEM Simulation for Thermoelectric Generator")
 
 #For running the function in the local computer
-#def convert_unv_to_msh(file_path, folder_name):
-    ## Run ElmerGrid command to convert UNV to MSH
-    #os.system(f"ElmerGrid 8 2 {file_path} -autoclean -out {folder_name}")
-# For running the function globally
 def convert_unv_to_msh(file_path, folder_name):
+    ## Run ElmerGrid command to convert UNV to MSH
+    os.system(f"ElmerGrid 8 2 {file_path} -autoclean -out {folder_name}")
+# For running the function 
+#def convert_unv_to_msh(file_path, folder_name):
     # Run ElmerGrid command to convert UNV to MSH
-    command = ["ElmerGrid", "8", "2", file_path, "-autoclean", "-out", folder_name]
-    subprocess.run(command)
+    #command = ["ElmerGrid", "8", "2", file_path, "-autoclean", "-out", folder_name]
+    #subprocess.run(command)
 
 def generate_sif_file(folder_name, bottom_temperature, top_temperature):
     # Create Elmer sif file content with user-defined temperatures
@@ -163,10 +163,10 @@ End
         f.write(sif_content)
 
     # Run ElmerSolver command
-    #os.system(f"ElmerSolver {sif_file}") # For the app run locally
+    os.system(f"ElmerSolver {sif_file}") # For the app run locally
     # Run ElmerSolver command
-    command = ["ElmerSolver", sif_file]
-    subprocess.run(command)
+    #command = ["ElmerSolver", sif_file]
+    #subprocess.run(command)
     
 # User input for boundary temperatures
 bottom_temperature = st.number_input("Bottom Boundary Temperature", value=496.0)
