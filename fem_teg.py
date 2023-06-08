@@ -1,5 +1,6 @@
 import subprocess
 import streamlit as st
+import os
 
 def run_command(command):
     process = subprocess.Popen(
@@ -7,6 +8,7 @@ def run_command(command):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         universal_newlines=True,
+        env=os.environ  # Pass the current environment variables to the subprocess
     )
     
     # Read the output line by line and display it in the Streamlit interface
@@ -19,11 +21,14 @@ def run_command(command):
 def main():
     st.title("Remote ElmerSolver Execution")
     
-    command = "/usr/bin/ElmerSolver"  # Full path to ElmerSolver executable
+    command = "/usr/bin/ElmerSolver_mpi"  # Full path to ElmerSolver_mpi executable
     
     if st.button("Run ElmerSolver"):
         st.text("Executing ElmerSolver...")
         st.text("----------------------------------")
+        
+        # Set the environment variable(s) required by ElmerSolver
+        os.environ["ELMER_HOME"] = "/usr/bin/ElmerSolver_mpi"
         
         returncode = run_command(command)
         
