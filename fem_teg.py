@@ -1,28 +1,38 @@
 import subprocess
 import streamlit as st
-import os
 
 def run_command(command):
-    print("Executing command:", command)  # Print the command for debugging purposes
-    process = subprocess.Popen(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    output, error = process.communicate()
-    return output.decode(), error.decode()
+    process = subprocess.Popen(
+        command.split(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True
+    )
+    
+    # Read the output line by line and display it in the Streamlit interface
+    for line in iter(process.stdout.readline, ''):
+        st.text(line.strip())
+    
+    process.wait()  # Wait for the process to finish
+    return process.returncode
 
 def main():
-    st.title("Remote Ubuntu Terminal Command")
+    st.title("Remote ElmerSolver Execution")
     
-    command = st.text_input("Enter the command to run:")
+    command = "/usr/bin/ElmerSolver"  # Full path to ElmerSolver executable
     
-    if st.button("Run"):
-        os.environ["PATH"] += ":/usr/bin/ElmerSolver"  # Replace "/path/to/directory" with the actual directory containing the executable
-        output, error = run_command(command)
+    if st.button("Run ElmerSolver"):
+        st.text("Executing ElmerSolver...")
+        st.text("----------------------------------")
         
-        st.subheader("Output:")
-        st.code(output)
+        returncode = run_command(command)
         
-        if error:
-            st.subheader("Error:")
-            st.code(error)
+        st.text("----------------------------------")
+        if returncode == 0:
+            st.text("ElmerSolver execution completed successfully.")
+        else:
+            st.text("ElmerSolver execution failed.")
+            
 
 if __name__ == "__main__":
     main()
