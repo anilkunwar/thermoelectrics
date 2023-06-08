@@ -5,9 +5,12 @@ import os
 # Create Streamlit app
 st.title("FEM Simulation for Thermoelectric Generator")
 
+ELMERGRID_PATH = "/usr/bin/ElmerGrid"  # Specify the absolute path to ElmerGrid
+ELMERSOLVER_PATH = "/usr/bin/ElmerSolver"  # Specify the absolute path to ElmerSolver
+
 def convert_unv_to_msh(file_path, folder_name):
     # Run ElmerGrid command to convert UNV to MSH
-    command = ["ElmerGrid", "8", "2", file_path, "-autoclean", "-out", folder_name]
+    command = [ELMERGRID_PATH, "8", "2", file_path, "-autoclean", "-out", folder_name]
     subprocess.run(command)
 
 def generate_sif_file(folder_name, bottom_temperature, top_temperature):
@@ -158,7 +161,7 @@ def generate_sif_file(folder_name, bottom_temperature, top_temperature):
         f.write(sif_content)
 
     # Run ElmerSolver command
-    command = ["ElmerSolver", sif_file]
+    command = [ELMERSOLVER_PATH, sif_file]
     subprocess.run(command)
 
 # User input for boundary temperatures
