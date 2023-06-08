@@ -166,7 +166,7 @@ top_temperature = st.number_input("Top Boundary Temperature", value=500.0)
 
 if st.button("Run Elmer Simulation"):
     # Specify the file path to the UNV file
-    file_path = "path/to/unv/file.unv"
+    file_path = "~/femstlit/Mesh_2-t1h0a0t0.unv"
 
     # Create a folder with the same name as the UNV file
     folder_name = os.path.splitext(os.path.basename(file_path))[0]
