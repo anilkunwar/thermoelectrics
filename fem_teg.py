@@ -24,19 +24,11 @@ def main():
     st.title("ElmerSolver Web Interface")
     st.write("Please provide the path to the SIF file and the mesh file.")
 
-    # File upload
-    sif_file = st.file_uploader("Upload SIF file", type=["sif"])
-    mesh_file = st.file_uploader("Upload Mesh file", type=["mesh"])
+    # File input
+    sif_file_path = st.text_input("~/femstlit/teg.sif")
+    mesh_file_path = st.text_input("~/femstlit/Mesh_2-t1h0a0t0")
 
-    if sif_file and mesh_file:
-        # Save the uploaded files
-        sif_file_path = "uploaded_files/case.sif"
-        mesh_file_path = "uploaded_files/mesh.mesh"
-        with open(sif_file_path, "wb") as sif_out:
-            sif_out.write(sif_file.read())
-        with open(mesh_file_path, "wb") as mesh_out:
-            mesh_out.write(mesh_file.read())
-
+    if sif_file_path and mesh_file_path:
         # Run ElmerSolver
         run_elmer_solver(sif_file_path, mesh_file_path)
 
