@@ -1,5 +1,6 @@
 import subprocess
 import streamlit as st
+import os
 
 # Create Streamlit app
 st.title("FEM Simulation for Thermoelectric Generator")
