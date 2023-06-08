@@ -167,35 +167,58 @@ End
     command = ["ElmerSolver", sif_file]
     subprocess.run(command)
     
+# User input for boundary temperatures
+bottom_temperature = st.number_input("Bottom Boundary Temperature", value=496.0)
+top_temperature = st.number_input("Top Boundary Temperature", value=500.0)
+# the unv file is accesed
+if st.button("Run Elmer Simulation"):
+    # Specify the file path to the UNV file
+    file_path = "~/femstlit/Mesh_2-t1h0a0t0.unv"
 
-# File upload section
-uploaded_file = st.file_uploader("Upload UNV File", type="unv")
-
-if uploaded_file is not None:
-    # Get the uploaded file name
-    file_name = uploaded_file.name
-
-    # Save the uploaded file with the same name
-    with open(file_name, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    # Create a folder with the same name as the uploaded file
-    folder_name = os.path.splitext(file_name)[0]
+    # Create a folder with the same name as the UNV file
+    folder_name = os.path.splitext(os.path.basename(file_path))[0]
     os.makedirs(folder_name, exist_ok=True)
 
     # Convert UNV to MSH
-    convert_unv_to_msh(file_name, folder_name)
+    convert_unv_to_msh(file_path, folder_name)
 
-    # User input for boundary temperatures
-    bottom_temperature = st.number_input("Bottom Boundary Temperature", value=496.0)
-    top_temperature = st.number_input("Top Boundary Temperature", value=500.0)
+    # Generate and run ElmerSolver
+    generate_sif_file(folder_name, bottom_temperature, top_temperature)
 
-    if st.button("Run Elmer Simulation"):
-        # Generate and run ElmerSolver
-        generate_sif_file(folder_name, bottom_temperature, top_temperature)
+    st.success("Elmer simulation completed.")
 
-        st.success("Elmer simulation completed.")
 
-else:
-    st.write("Upload a UNV file of the mesh of Thermoelectric Generator")
+
+
+
+# File upload section for computing in the local browser
+#uploaded_file = st.file_uploader("Upload UNV File", type="unv")
+
+#if uploaded_file is not None:
+    ## Get the uploaded file name
+    #file_name = uploaded_file.name
+
+    ## Save the uploaded file with the same name
+    #with open(file_name, "wb") as f:
+        #f.write(uploaded_file.getbuffer())
+
+    ## Create a folder with the same name as the uploaded file
+    #folder_name = os.path.splitext(file_name)[0]
+    #os.makedirs(folder_name, exist_ok=True)
+
+    ## Convert UNV to MSH
+    #convert_unv_to_msh(file_name, folder_name)
+
+    ## User input for boundary temperatures
+    #bottom_temperature = st.number_input("Bottom Boundary Temperature", value=496.0)
+    #top_temperature = st.number_input("Top Boundary Temperature", value=500.0)
+
+    #if st.button("Run Elmer Simulation"):
+        ## Generate and run ElmerSolver
+        #generate_sif_file(folder_name, bottom_temperature, top_temperature)
+
+        #st.success("Elmer simulation completed.")
+
+#else:
+    #st.write("Upload a UNV file of the mesh of Thermoelectric Generator")
 
