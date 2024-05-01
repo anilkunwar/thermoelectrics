@@ -100,6 +100,7 @@ original_df.insert(temp_col_index, 'modformula', modified_formulas)
 df_combined = pd.concat([original_df.iloc[:, :temp_col_index+1], df, original_df.iloc[:, temp_col_index+1:]], axis=1)
 # Calculate the sum of the values of all elemental columns in each row
 # Select only the elemental columns
+#elemental_columns = ["Mg", "Cs", "Co", "Zr", "Se", "Dy", "Pb", "Ga", "O", "Sn", "Yb", "B", "La", "Si", "V", "Fe", "S", "Sc", "Tl", "Zn", "Cl", "Ce", "Er", "Nd", "Pd", "Y", "P", "Ta", "In", "Te", "Ru", "Rb", "Tm", "Tb", "Sb", "Al", "Lu", "Bi", "Pr", "Eu", "Sm", "Ba", "Cr", "Sr", "Ni", "Ca", "As", "Mn", "Mo", "Cd", "Ti", "Nb", "Hf", "Gd", "Ag", "Ge", "Li", "Br", "Au", "I", "N", "Na", "Cu", "Ho", "K"]
 elemental_columns = ["Cs", "Sn", "Au", "Cl", "Br", "Ag", "Te", "Hf", "Tl", "Fe", "Si", "I", "Cu", "Ti", "Nb", "Rb", "Bi", "Cd", "Sm", "Nd", "Ge", "Se", "Mg", "In", "Ta", "O", "Sb", "Al", "Pb", "Zn"]
 elemental_df = df_combined[elemental_columns]
 
