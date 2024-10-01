@@ -9,9 +9,12 @@ from pymatgen.core.composition import Composition
 import re
 
 # Load the trained models and scalers
-encoder = tf.keras.models.load_model('encoder_model')
-decoder = tf.keras.models.load_model('decoder_model')
-regressor = joblib.load('regressor.pkl')
+#encoder = tf.keras.models.load_model('encoder_model')
+#decoder = tf.keras.models.load_model('decoder_model')
+#regressor = joblib.load('regressor.pkl')
+encoder = joblib.load('encoder_model.pkl')
+decoder = joblib.load('decoder_model.pkl')
+regressor = joblib.load('regressor_model.pkl')
 scaler = joblib.load('scaler.pkl')
 y_scaler = joblib.load('y_scaler.pkl')
 
