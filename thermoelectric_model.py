@@ -12,9 +12,13 @@ import re
 #encoder = tf.keras.models.load_model('encoder_model')
 #decoder = tf.keras.models.load_model('decoder_model')
 #regressor = joblib.load('regressor.pkl')
-encoder = joblib.load('encoder_model.pkl')
-decoder = joblib.load('decoder_model.pkl')
-regressor = joblib.load('regressor_model.pkl')
+#encoder = joblib.load('encoder_model.pkl')
+#decoder = joblib.load('decoder_model.pkl')
+#regressor = joblib.load('regressor_model.pkl')
+# Load models
+encoder = load_model('encoder_model.h5')
+decoder = load_model('decoder_model.h5')
+regressor = load_model('regressor_model.h5')
 scaler = joblib.load('scaler.pkl')
 y_scaler = joblib.load('y_scaler.pkl')
 
