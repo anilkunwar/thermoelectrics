@@ -2,4 +2,5 @@ streamlit
 pyngrok
 pymatgen
 tensorflow
+scikit-learn
 
