@@ -3,7 +3,7 @@ pyngrok
 pymatgen
 tensorflow
 scikit-learn
-keras==2.12.0
+
 
 
 
