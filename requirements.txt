@@ -3,4 +3,5 @@ pyngrok
 pymatgen
 tensorflow
 scikit-learn
+keras
 
