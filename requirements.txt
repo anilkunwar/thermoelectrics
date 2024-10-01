@@ -1,8 +1,8 @@
 streamlit
 pyngrok
 pymatgen
-tensorflow
+tensorflow==2.12.0
 scikit-learn
-keras
+
 
 
