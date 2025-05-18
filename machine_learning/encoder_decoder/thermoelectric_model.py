@@ -8,6 +8,17 @@ from sklearn.impute import SimpleImputer
 import joblib
 from pymatgen.core.composition import Composition
 import re
+import os
+
+# Define the base path for model files (relative to thermoelectric_model.py)
+BASE_DIR = os.path.dirname(__file__)
+
+# Load the trained models and scalers
+encoder = load_model(os.path.join(BASE_DIR, 'encoder_model.h5'))
+decoder = load_model(os.path.join(BASE_DIR, 'decoder_model.h5'))
+regressor = load_model(os.path.join(BASE_DIR, 'regressor_model.h5'))
+scaler = joblib.load(os.path.join(BASE_DIR, 'scaler.pkl'))
+y_scaler = joblib.load(os.path.join(BASE_DIR, 'y_scaler.pkl'))
 
 # Load the trained models and scalers
 #encoder = tf.keras.models.load_model('encoder_model')
@@ -17,11 +28,11 @@ import re
 #decoder = joblib.load('decoder_model.pkl')
 #regressor = joblib.load('regressor_model.pkl')
 # Load models
-encoder = load_model('encoder_model.h5')
-decoder = load_model('decoder_model.h5')
-regressor = load_model('regressor_model.h5')
-scaler = joblib.load('scaler.pkl')
-y_scaler = joblib.load('y_scaler.pkl')
+#encoder = load_model('encoder_model.h5')
+#decoder = load_model('decoder_model.h5')
+#regressor = load_model('regressor_model.h5')
+#scaler = joblib.load('scaler.pkl')
+#y_scaler = joblib.load('y_scaler.pkl')
 
 # Define the available elements
 available_elements = [
