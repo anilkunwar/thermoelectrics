@@ -1,6 +1,1 @@
-pyngrok
-pymatgen
-tensorflow
-scikit-learn
-setuptools
 
