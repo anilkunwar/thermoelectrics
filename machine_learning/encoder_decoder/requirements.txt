@@ -1,3 +1,4 @@
 scikit-learn
 pymatgen
 streamlit
+tensorflow==2.14.0
