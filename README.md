@@ -4,6 +4,9 @@ a. Machine Learning
 
 VAE-with regressor for determination of Seebeck Coefficient
 
+Web App:
+[![machinelearningthermoelectricity](https://img.shields.io/badge/StreamlitAPP-streamlit-red)](https://machinelearningseebeckcoefficient.streamlit.app/)
+
 b. Phase field model for phase decomposition 
 
 input file for MOOSE software
