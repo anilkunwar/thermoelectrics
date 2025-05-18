@@ -13,15 +13,15 @@ import os
 st.write("Current directory:", os.getcwd())
 st.write("Files in directory:", os.listdir())
 
-# Get the directory of the current script
-current_dir = os.path.dirname(os.path.abspath(__file__))
+# Get directory of the current script
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Load models with explicit paths
-encoder = load_model(os.path.join(current_dir, 'encoder_model.h5'))
-decoder = load_model(os.path.join(current_dir, 'decoder_model.h5'))  # Fix typo if needed
-regressor = load_model(os.path.join(current_dir, 'regressor_model.h5'))
-scaler = joblib.load(os.path.join(current_dir, 'scaler.pkl'))
-y_scaler = joblib.load(os.path.join(current_dir, 'y_scaler.pkl'))
+# Load models using absolute paths
+encoder = load_model(os.path.join(script_dir, 'encoder_model.h5'))
+decoder = load_model(os.path.join(script_dir, 'decoder_model.h5'))
+regressor = load_model(os.path.join(script_dir, 'regressor_model.h5'))
+scaler = joblib.load(os.path.join(script_dir, 'scaler.pkl'))
+y_scaler = joblib.load(os.path.join(script_dir, 'y_scaler.pkl'))
 
 # Define the base path for model files (relative to thermoelectric_model.py)
 #BASE_DIR = os.path.dirname(__file__)
