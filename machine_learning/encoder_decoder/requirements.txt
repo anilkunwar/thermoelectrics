@@ -1,14 +1,8 @@
-pyngrok
-setuptools
 streamlit
-pandas
-numpy
-tensorflow==2.15.0
-scikit-learn
-joblib
+pyngrok
 pymatgen
-h5py
-
-
+tensorflow
+scikit-learn
+setuptools
 
 
