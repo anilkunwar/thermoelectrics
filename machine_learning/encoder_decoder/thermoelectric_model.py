@@ -13,15 +13,25 @@ import os
 st.write("Current directory:", os.getcwd())
 st.write("Files in directory:", os.listdir())
 
+# Get the directory of the current script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Load models with explicit paths
+encoder = load_model(os.path.join(current_dir, 'encoder_model.h5'))
+decoder = load_model(os.path.join(current_dir, 'decoder_model.h5'))  # Fix typo if needed
+regressor = load_model(os.path.join(current_dir, 'regressor_model.h5'))
+scaler = joblib.load(os.path.join(current_dir, 'scaler.pkl'))
+y_scaler = joblib.load(os.path.join(current_dir, 'y_scaler.pkl'))
+
 # Define the base path for model files (relative to thermoelectric_model.py)
-BASE_DIR = os.path.dirname(__file__)
+#BASE_DIR = os.path.dirname(__file__)
 
 # Load the trained models and scalers
-encoder = load_model(os.path.join(BASE_DIR, 'encoder_model.h5'))
-decoder = load_model(os.path.join(BASE_DIR, 'decoder_model.h5'))
-regressor = load_model(os.path.join(BASE_DIR, 'regressor_model.h5'))
-scaler = joblib.load(os.path.join(BASE_DIR, 'scaler.pkl'))
-y_scaler = joblib.load(os.path.join(BASE_DIR, 'y_scaler.pkl'))
+#encoder = load_model(os.path.join(BASE_DIR, 'encoder_model.h5'))
+#decoder = load_model(os.path.join(BASE_DIR, 'decoder_model.h5'))
+#regressor = load_model(os.path.join(BASE_DIR, 'regressor_model.h5'))
+#scaler = joblib.load(os.path.join(BASE_DIR, 'scaler.pkl'))
+#y_scaler = joblib.load(os.path.join(BASE_DIR, 'y_scaler.pkl'))
 
 # Load the trained models and scalers
 #encoder = tf.keras.models.load_model('encoder_model')
