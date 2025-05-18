@@ -2,5 +2,5 @@ scikit-learn
 pymatgen
 streamlit==1.22.0
 numpy
-tensorflow<=2.12.0
+tensorflow<=2.14.0
 pyngrok
