@@ -12,6 +12,7 @@ import os
 
 st.write("Current directory:", os.getcwd())
 st.write("Files in directory:", os.listdir())
+st.write("TensorFlow version:", tf.__version__)
 
 # Get directory of the current script
 script_dir = os.path.dirname(os.path.abspath(__file__))
