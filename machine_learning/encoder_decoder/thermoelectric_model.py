@@ -10,7 +10,7 @@ from pymatgen.core.composition import Composition
 import re
 import os
 
-st.write("Current directory:", os.getcwd())
+st.sidebar.write("Current directory:", os.getcwd())
 st.write("Files in directory:", os.listdir())
 st.write("TensorFlow version:", tf.__version__)
 st.write("Streamlit version:", st.__version__)
