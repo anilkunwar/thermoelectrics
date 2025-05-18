@@ -9,10 +9,11 @@ import joblib
 from pymatgen.core.composition import Composition
 import re
 import os
+import sys
 
 #st.sidebar.write("Current directory:", os.getcwd())
 st.sidebar.write("Files in directory:", os.listdir())
-st.sidebar.write("Python version:", 3.11.0)
+st.sidebar.write(f"**Python Version (sys):** `{sys.version}`")
 st.sidebar.write("TensorFlow version:", tf.__version__)
 st.sidebar.write("Streamlit version:", st.__version__)
 st.sidebar.write("Numpy version:", np.__version__)
