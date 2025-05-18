@@ -10,11 +10,11 @@ from pymatgen.core.composition import Composition
 import re
 import os
 
-st.sidebar.write("Current directory:", os.getcwd())
-st.write("Files in directory:", os.listdir())
-st.write("TensorFlow version:", tf.__version__)
-st.write("Streamlit version:", st.__version__)
-st.write("Numpy version:", np.__version__)
+#st.sidebar.write("Current directory:", os.getcwd())
+st.sidebar.write("Files in directory:", os.listdir())
+st.sidebar.write("TensorFlow version:", tf.__version__)
+st.sidebar.write("Streamlit version:", st.__version__)
+st.sidebar.write("Numpy version:", np.__version__)
 
 
 # Get directory of the current script
