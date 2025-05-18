@@ -1,6 +1,6 @@
 streamlit
 pyngrok
 pymatgen
-tensorflow==2.28.0
+tensorflow-keras
 scikit-learn
 setuptools
