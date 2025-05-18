@@ -16,6 +16,10 @@ Data visualization for Model 1 (M1) training using tf:
 
 [![machinelearningthermoelectricity](https://img.shields.io/badge/machinelearningseebeckcoefficientm2-streamlit-red)](https://machinelearningseebeckcoefficientm2.streamlit.app/)
 
+Data visualization for Model 2 (M2) training using PyTorch:
+
+[![machinelearningthermoelectricity](https://img.shields.io/badge/visualizationModel2-streamlit-red)](https://thermoelectricdatavisualizationmodel2.streamlit.app/)
+
 b. Phase field model for phase decomposition 
 
 input file for MOOSE software
