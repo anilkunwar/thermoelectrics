@@ -3,3 +3,4 @@ pymatgen
 streamlit
 numpy==1.23.5
 tensorflow==2.16.0
+pyngrok
