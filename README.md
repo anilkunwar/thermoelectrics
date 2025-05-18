@@ -12,7 +12,9 @@ Data visualization for Model 1 (M1) training using tf:
 
 [![machinelearningthermoelectricity](https://img.shields.io/badge/visualizationModel1-streamlit-red)](https://thermoelectricdatavisualizationmodel1.streamlit.app/)
 
+# Web App (for Model 2 trained using PyTorch):
 
+[![machinelearningthermoelectricity](https://img.shields.io/badge/machinelearningseebeckcoefficientv2-streamlit-red)](https://machinelearningseebeckcoefficientv2.streamlit.app/)
 
 b. Phase field model for phase decomposition 
 
