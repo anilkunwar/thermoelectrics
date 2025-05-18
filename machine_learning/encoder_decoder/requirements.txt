@@ -1,6 +1,6 @@
 scikit-learn
 pymatgen
-streamlit
+streamlit==1.22.0
 numpy
 tensorflow
 pyngrok
