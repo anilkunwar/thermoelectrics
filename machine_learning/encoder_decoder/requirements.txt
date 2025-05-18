@@ -6,3 +6,4 @@ scikit-learn==1.2.2  # Compatible version
 joblib==1.2.0
 pymatgen==2023.3.23  # Verified compatible version
 numpy==1.23.5  # TF 2.12's required version
+streamlit
