@@ -1,9 +1,13 @@
-streamlit
 pyngrok
-pymatgen
+setuptools
+streamlit
+pandas
+numpy
 tensorflow
 scikit-learn
-setuptools
+joblib
+pymatgen
+h5py
 
 
 
