@@ -1,2 +1,3 @@
 scikit-learn
 pymatgen
+streamlit
