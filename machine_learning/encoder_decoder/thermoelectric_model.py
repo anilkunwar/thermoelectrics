@@ -10,6 +10,9 @@ from pymatgen.core.composition import Composition
 import re
 import os
 
+st.write("Current directory:", os.getcwd())
+st.write("Files in directory:", os.listdir())
+
 # Define the base path for model files (relative to thermoelectric_model.py)
 BASE_DIR = os.path.dirname(__file__)
 
