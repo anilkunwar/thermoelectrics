@@ -1,6 +1,2 @@
-streamlit
-pyngrok
-pymatgen
-tensorflow==2.16.0
 scikit-learn
-setuptools
+pymatgen
