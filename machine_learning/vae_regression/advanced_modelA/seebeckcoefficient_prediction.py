@@ -141,7 +141,7 @@ def preprocess_new_data(df, available_elements):
     X_scaled = scaler.transform(X_imputed)
     return X_scaled
 
-st.title("Thermoelectric Material Seebeck Coefficient Prediction (Model Trained using PyTorch)")
+st.title("Thermoelectric Material Seebeck Coefficient Prediction (Model A Trained using PyTorch)")
 formula_input = st.text_input("Enter the chemical formula (e.g., Mg2Si):")
 temperature_input = st.number_input("Enter the temperature (K):", min_value=0, max_value=5000, value=300)
 
