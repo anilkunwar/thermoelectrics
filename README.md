@@ -6,13 +6,17 @@ VAE-with regressor for determination of Seebeck Coefficient
 # Advanced Models
 # Web App (for Model A trained using PyTorch):
 
-Data visualization for Model A (MA) training using PyTorch:
+Data visualization for Model A (MA) training using PyTorch (Interface for User Uploaded Data):
 
 [![machinelearningthermoelectricity](https://img.shields.io/badge/TEvisuals-streamlit-red)](https://thermoelectricdata-advancedvisualization1.streamlit.app/)
 
-Seebeck Coefficient Prediction:
+Web app interface for Seebeck Coefficient Prediction:
 
 [![machinelearningthermoelectricity](https://img.shields.io/badge/seebeckcoefficientPyTorch-streamlit-red)](https://seebeckcoefficientprediction-advancedmodel1.streamlit.app/)
+
+Web app for Data Visualization with Seebeck Coefficient Prediction
+
+[![machinelearningthermoelectricity](https://img.shields.io/badge/TEvisualsSeebeck-streamlit-red)](https://thermoelectricitymachinelearningmodel1.streamlit.app/)
 
 # Basic Models
 
