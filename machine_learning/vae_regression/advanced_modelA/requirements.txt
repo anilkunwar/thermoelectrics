@@ -1,0 +1,9 @@
+streamlit
+pyngrok
+pymatgen
+torch
+scikit-learn
+setuptools
+seaborn
+plotly
+kaleido
