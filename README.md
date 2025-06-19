@@ -10,6 +10,9 @@ Data visualization for Model 2 (M2) training using PyTorch:
 
 [![machinelearningthermoelectricity](https://img.shields.io/badge/TEvisuals-streamlit-red)](https://thermoelectricdata-advancedvisualization1.streamlit.app/)
 
+Seebeck Coefficient Prediction:
+
+[![machinelearningthermoelectricity](https://img.shields.io/badge/seebeckcoefficientPyTorch-streamlit-red)](https://seebeckcoefficientprediction-advancedmodel1.streamlit.app/)
 
 # Basic Models
 
