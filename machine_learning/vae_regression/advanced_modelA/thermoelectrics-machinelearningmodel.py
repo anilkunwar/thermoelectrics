@@ -311,8 +311,29 @@ with tab1:
     history_label_fontsize = st.sidebar.slider("Training History Label Font Size", 8, 16, 12, 1)
     history_tick_fontsize = st.sidebar.slider("Training History Tick Font Size", 6, 14, 10, 1)
     history_axis_linewidth = st.sidebar.slider("Training History Axis Line Width", 0.5, 5.0, 1.5, 0.5)
-    train_color = st.sidebar.selectbox("Training Line Color", ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'], index=0)
-    val_color = st.sidebar.selectbox("Validation Line Color", ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'], index=1)
+    color_options = [
+    '#1f77b4',  # blue
+    '#ff7f0e',  # orange
+    '#2ca02c',  # green
+    '#d62728',  # red
+    '#9467bd',  # purple
+    '#8c564b',  # brown
+    '#e377c2',  # pink
+    '#7f7f7f',  # gray
+    '#bcbd22',  # olive
+    '#17becf',  # cyan
+    '#000000',  # black
+    '#FFD700',  # gold
+    '#00FF00',  # lime
+    '#FF1493',  # deep pink
+    '#00CED1',  # dark turquoise
+    '#FF4500',  # orange red
+    '#6A5ACD',  # slate blue
+    ]
+    train_color = st.sidebar.selectbox("Training Line Color", color_options, index=0)
+    val_color = st.sidebar.selectbox("Validation Line Color", color_options, index=1)
+    #train_color = st.sidebar.selectbox("Training Line Color", ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'], index=0)
+    #val_color = st.sidebar.selectbox("Validation Line Color", ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'], index=1)
     max_samples = st.sidebar.slider("Number of Samples in Radar Plot", 1, 10, 5, 1)
     radar_alpha = st.sidebar.slider("Radar Fill Transparency", 0.1, 0.5, 0.3, 0.05)
     radar_linewidth = st.sidebar.slider("Radar Line Width", 1.0, 5.0, 2.0, 0.5)
