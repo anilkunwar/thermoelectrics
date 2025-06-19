@@ -285,7 +285,7 @@ with tab1:
 
     # Sidebar for visualization settings
     st.sidebar.header("Visualization Settings")
-    marker_size = st.sidebar.slider("Scatter Marker Size", 20, 100, 50, 5)
+    marker_size = st.sidebar.slider("Scatter Marker Size", 5, 100, 50, 5)
     marker_alpha = st.sidebar.slider("Scatter Marker Transparency", 0.1, 1.0, 0.6, 0.1)
     color_scale = st.sidebar.selectbox(
         "Color Scale for Seebeck Plot",
