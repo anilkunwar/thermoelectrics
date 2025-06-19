@@ -322,7 +322,19 @@ with tab1:
     box_linewidth = st.sidebar.slider("Box Plot Line Width", 0.5, 5.0, 1.0, 0.5)
     box_label_fontsize = st.sidebar.slider("Box Plot Label Font Size", 8, 16, 12, 1)
     box_axis_linewidth = st.sidebar.slider("Box Plot Axis Line Width", 0.5, 5.0, 2.0, 0.5)
-    parallel_color_scale = st.sidebar.selectbox("Color Scale for Parallel Coordinates", ['Viridis', 'Plasma', 'Inferno', 'Magma'], index=0)
+    #parallel_color_scale = st.sidebar.selectbox("Color Scale for Parallel Coordinates", ['Viridis', 'Plasma', 'Inferno', 'Magma'], index=0)
+    parallel_color_scale = st.sidebar.selectbox(
+        "Color Scale for Parallel Coordinates",
+        ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow',
+         'Bluered', 'Electric', 'Hot', 'Cool', 'Spring', 'Summer', 'Autumn', 'Winter',
+         'Greys', 'Greens', 'Blues', 'Reds', 'Purples', 'Oranges',
+         'YlOrRd', 'YlOrBr', 'YlGnBu', 'YlGn', 'RdPu', 'PuRd', 'PuBuGn', 'PuBu',
+         'OrRd', 'GnBu', 'BuPu', 'BuGn', 'Pinkyl', 'Coolwarm', 'Spectral',
+         'RdYlBu', 'RdYlGn', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
+         'Viridis_r', 'Plasma_r', 'Inferno_r', 'Magma_r', 'Cividis_r', 'Turbo_r',
+         'Jet_r', 'Rainbow_r', 'Greys_r', 'Blues_r', 'Reds_r'],
+        index=0
+    )
     parallel_label_fontsize = st.sidebar.slider("Parallel Coordinates Label Font Size", 8, 16, 12, 1)
 
     # Latent Space Visualizations
