@@ -256,8 +256,8 @@ available_elements = [
 ]
 
 # Streamlit UI
-st.title("Thermoelectric Material Data Training and Seebeck Coefficient Prediction using PyTorch Library")
-#st.title("VAE-Regressor Model Trained using PyTorch Library")
+st.title("Thermoelectric Material Data and Seebeck Coefficient Prediction ")
+#st.write("VAE-Regressor Model Trained using PyTorch Library")
 
 # Database connection
 db_path = os.path.join(script_dir, 'thermoelectric_data.db')
