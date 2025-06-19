@@ -7,4 +7,4 @@ setuptools
 seaborn
 plotly
 kaleido
-sqlite3
+
