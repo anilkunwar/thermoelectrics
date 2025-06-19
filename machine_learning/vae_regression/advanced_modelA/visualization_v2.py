@@ -332,7 +332,8 @@ if dataset_file is not None:
     box_axis_linewidth = st.sidebar.slider("Box Plot Axis Line Width", 0.5, 5.0, 2.0, 0.5)
     fig_box = plot_latent_box(z_train, box_linewidth=box_linewidth, label_fontsize=box_label_fontsize, axis_linewidth=box_axis_linewidth)
     st.plotly_chart(fig_box, use_container_width=True)
-    fig_box.write_image(os.path.join(script_dir, 'latent_box_plotly.pdf'), format='pdf')
+    #fig_box.write_image(os.path.join(script_dir, 'latent_box_plotly.pdf'), format='pdf')
+    fig_box.write_image(os.path.join(script_dir, 'latent_box_plotly.png'), format='png')
     
     # Plotly: 2D Scatter (Seebeck Coefficient)
     fig = px.scatter(
