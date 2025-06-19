@@ -332,10 +332,7 @@ if dataset_file is not None:
     box_axis_linewidth = st.sidebar.slider("Box Plot Axis Line Width", 0.5, 5.0, 2.0, 0.5)
     fig_box = plot_latent_box(z_train, box_linewidth=box_linewidth, label_fontsize=box_label_fontsize, axis_linewidth=box_axis_linewidth)
     st.plotly_chart(fig_box, use_container_width=True)
-    #fig_box.write_image(os.path.join(script_dir, 'latent_box_plotly.pdf'), format='pdf')
-    #fig_box.write_image(os.path.join(script_dir, 'latent_box_plotly.png'), format='png')
     fig_box.write_html(os.path.join(script_dir, 'latent_box_plotly.html'))
-    
     
     # Plotly: 2D Scatter (Seebeck Coefficient)
     fig = px.scatter(
@@ -357,7 +354,7 @@ if dataset_file is not None:
         margin=dict(l=50, r=50, t=80, b=50)
     )
     st.plotly_chart(fig, use_container_width=True)
-    fig.write_image(os.path.join(script_dir, 'latent_seebeck_plotly.pdf'), format='pdf')
+    fig.write_html(os.path.join(script_dir, 'latent_seebeck_plotly.html'))
     
     # Plotly: 2D Scatter (Dominant Element)
     fig_elements = px.scatter(
@@ -380,7 +377,7 @@ if dataset_file is not None:
         margin=dict(l=50, r=50, t=80, b=50)
     )
     st.plotly_chart(fig_elements, use_container_width=True)
-    fig_elements.write_image(os.path.join(script_dir, 'latent_elements_plotly.pdf'), format='pdf')
+    fig_elements.write_html(os.path.join(script_dir, 'latent_elements_plotly.html'))
     
     # Matplotlib: 2D Scatter
     try:
@@ -465,7 +462,7 @@ if dataset_file is not None:
         margin=dict(l=50, r=50, t=80, b=50)
     )
     st.plotly_chart(fig_parallel, use_container_width=True)
-    fig_parallel.write_image(os.path.join(script_dir, 'latent_parallel_plotly.pdf'), format='pdf')
+    fig_parallel.write_html(os.path.join(script_dir, 'latent_parallel_plotly.html'))
 
 # Upload training history CSVs
 st.write("### Training History Visualizations")
@@ -505,7 +502,7 @@ if vae_history_file is not None:
                                                  linewidth=history_linewidth, label_fontsize=history_label_fontsize, 
                                                  tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
     st.plotly_chart(fig_vae_plotly, use_container_width=True)
-    fig_vae_plotly.write_image(os.path.join(script_dir, 'vae_history_plotly.pdf'), format='pdf')
+    fig_vae_plotly.write_html(os.path.join(script_dir, 'vae_history_plotly.html'))
 
 if regressor_history_file is not None:
     regressor_history_df = pd.read_csv(regressor_history_file)
@@ -522,7 +519,7 @@ if regressor_history_file is not None:
                                                        linewidth=history_linewidth, label_fontsize=history_label_fontsize, 
                                                        tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
     st.plotly_chart(fig_regressor_plotly, use_container_width=True)
-    fig_regressor_plotly.write_image(os.path.join(script_dir, 'regressor_history_plotly.pdf'), format='pdf')
+    fig_regressor_plotly.write_html(os.path.join(script_dir, 'regressor_history_plotly.html'))
 
 if dataset_file is not None or vae_history_file is not None or regressor_history_file is not None:
     st.success("Visualizations generated successfully!")
