@@ -5,4 +5,5 @@ numpy
 tensorflow==2.12.0
 pyngrok
 seaborn
+plotly
 kaleido
