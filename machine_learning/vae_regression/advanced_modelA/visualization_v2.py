@@ -1,0 +1,527 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import torch
+import torch.nn as nn
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import IsolationForest
+from sklearn.decomposition import PCA
+import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+from pymatgen.core.composition import Composition
+import os
+from matplotlib import font_manager
+
+# Set random seed for reproducibility
+torch.manual_seed(42)
+np.random.seed(42)
+
+# Check for GPU
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+st.write(f"Using device: {device}")
+st.write("Current directory:", os.getcwd())
+st.write("Files in directory:", os.listdir())
+
+# Set matplotlib font for publication quality
+plt.rcParams['font.family'] = 'Arial'
+plt.rcParams['font.size'] = 12
+plt.rcParams['axes.linewidth'] = 1.5
+plt.rcParams['xtick.major.width'] = 1.5
+plt.rcParams['ytick.major.width'] = 1.5
+plt.rcParams['xtick.major.size'] = 6
+plt.rcParams['ytick.major.size'] = 6
+
+# VAE Model
+class VAE(nn.Module):
+    def __init__(self, input_dim=66, latent_dim=8):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.BatchNorm1d(128, momentum=0.05),
+            nn.Dropout(0.4),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64, momentum=0.05),
+            nn.Dropout(0.4),
+        )
+        self.z_mean = nn.Linear(64, latent_dim)
+        self.z_log_var = nn.Linear(64, latent_dim)
+
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64, momentum=0.05),
+            nn.Dropout(0.4),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.BatchNorm1d(128, momentum=0.05),
+            nn.Dropout(0.4),
+            nn.Linear(128, input_dim),
+            nn.Sigmoid(),
+        )
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        h = self.encoder(x)
+        mu = self.z_mean(h)
+        log_var = self.z_log_var(h)
+        z = self.reparameterize(mu, log_var)
+        x_recon = self.decoder(z)
+        return x_recon, mu, log_var
+
+# Preprocessing function
+def preprocess_data(df, scaler, y_scaler):
+    input_features = df[['Mg', 'Cs', 'Co', 'Zr', 'Se', 'Dy', 'Pb', 'Ga', 'O', 'Sn', 
+                         'Yb', 'B', 'La', 'Si', 'V', 'Fe', 'S', 'Sc', 'Tl', 'Zn', 
+                         'Cl', 'Ce', 'Er', 'Nd', 'Pd', 'Y', 'P', 'Ta', 'In', 'Te', 
+                         'Ru', 'Rb', 'Tm', 'Tb', 'Sb', 'Al', 'Lu', 'Bi', 'Pr', 'Eu', 
+                         'Sm', 'Ba', 'Cr', 'Sr', 'Ni', 'Ca', 'As', 'Mn', 'Mo', 'Cd', 
+                         'Ti', 'Nb', 'Hf', 'Gd', 'Ag', 'Ge', 'Li', 'Br', 'Au', 'I', 
+                         'N', 'Na', 'Cu', 'Ho', 'K', 'temperature(K)']]
+    output_feature = df['seebeck_coefficient(μV/K)']
+
+    imputer_input = SimpleImputer(strategy='mean')
+    input_features_imputed = imputer_input.fit_transform(input_features)
+
+    imputer_output = SimpleImputer(strategy='mean')
+    output_feature_imputed = imputer_output.fit_transform(output_feature.values.reshape(-1, 1)).ravel()
+
+    iso_forest = IsolationForest(contamination=0.1)
+    outliers = iso_forest.fit_predict(input_features_imputed) == -1
+    input_features_cleaned = input_features_imputed[~outliers]
+    output_feature_cleaned = output_feature_imputed[~outliers]
+    valid_indices = np.where(~outliers)[0]
+
+    mask = (output_feature_cleaned >= -1174.0) & (output_feature_cleaned <= 1052.0)
+    input_features_cleaned = input_features_cleaned[mask]
+    output_feature_cleaned = output_feature_cleaned[mask]
+    valid_indices = valid_indices[mask]
+
+    X_scaled = scaler.transform(input_features_cleaned)
+    y_scaled = y_scaler.transform(output_feature_cleaned.reshape(-1, 1)).ravel()
+
+    return X_scaled, y_scaled, output_feature_cleaned, valid_indices
+
+# Enhanced Radar Plot Function
+def plot_radar(data, labels, title, max_samples=10, alpha=0.3, linewidth=2, fontsize=16, legend_pos='upper right', axis_linewidth=1.5):
+    num_vars = data.shape[1]
+    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
+    angles += angles[:1]
+
+    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+    colors = sns.color_palette("Set2", n_colors=max_samples)
+    for i in range(min(max_samples, len(data))):
+        values = data[i].tolist()
+        values += values[:1]
+        ax.fill(angles, values, color=colors[i], alpha=alpha, label=labels[i])
+        ax.plot(angles, values, color=colors[i], linewidth=linewidth)
+
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+    ax.set_thetagrids(np.degrees(angles[:-1]), [f'Latent Dim {i+1}' for i in range(num_vars)], fontsize=fontsize, weight='bold')
+    ax.set_title(title, fontsize=fontsize + 2, pad=20, weight='bold')
+    ax.legend(loc=legend_pos, bbox_to_anchor=(1.2, 1.1), fontsize=fontsize - 2, frameon=True, edgecolor='black')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.spines['polar'].set_visible(True)
+    ax.spines['polar'].set_linewidth(axis_linewidth)
+    plt.tight_layout()
+    return fig
+
+# Enhanced Training History Plot (Matplotlib)
+def plot_training_history_matplotlib(history_df, title, filename, linewidth=2.5, fontsize=12, train_color='#1f77b4', val_color='#ff7f0e', tick_fontsize=10, axis_linewidth=1.5):
+    try:
+        plt.style.use('seaborn-v0_8-whitegrid')
+    except OSError:
+        plt.style.use('ggplot')
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 6))
+    
+    # Loss Plot
+    ax1.plot(history_df['loss'], label='Training Loss', linewidth=linewidth, color=train_color)
+    ax1.plot(history_df['val_loss'], label='Validation Loss', linewidth=linewidth, color=val_color)
+    ax1.set_xlabel('Epoch', fontsize=fontsize, weight='bold')
+    ax1.set_ylabel('Loss', fontsize=fontsize, weight='bold')
+    ax1.set_title(f'{title} Loss', fontsize=fontsize + 2, weight='bold')
+    ax1.legend(fontsize=fontsize - 2, frameon=True, edgecolor='black')
+    ax1.grid(True, linestyle='--', alpha=0.5)
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+    ax1.spines['left'].set_linewidth(axis_linewidth)
+    ax1.spines['bottom'].set_linewidth(axis_linewidth)
+    ax1.tick_params(axis='both', which='major', labelsize=tick_fontsize, width=axis_linewidth, length=6)
+
+    # MSE Plot
+    ax2.plot(history_df['mse'], label='Training MSE', linewidth=linewidth, color=train_color)
+    ax2.plot(history_df['val_mse'], label='Validation MSE', linewidth=linewidth, color=val_color)
+    ax2.set_xlabel('Epoch', fontsize=fontsize, weight='bold')
+    ax2.set_ylabel('MSE', fontsize=fontsize, weight='bold')
+    ax2.set_title(f'{title} MSE', fontsize=fontsize + 2, weight='bold')
+    ax2.legend(fontsize=fontsize - 2, frameon=True, edgecolor='black')
+    ax2.grid(True, linestyle='--', alpha=0.5)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    ax2.spines['left'].set_linewidth(axis_linewidth)
+    ax2.spines['bottom'].set_linewidth(axis_linewidth)
+    ax2.tick_params(axis='both', which='major', labelsize=tick_fontsize, width=axis_linewidth, length=6)
+
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300, bbox_inches='tight', format='pdf')
+    return fig
+
+# Enhanced Training History Plot (Plotly)
+def plot_training_history_plotly(history_df, title, train_color='#1f77b4', val_color='#ff7f0e', linewidth=3, label_fontsize=12, tick_fontsize=10, axis_linewidth=2):
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=history_df.index,
+        y=history_df['loss'],
+        name='Training Loss',
+        line=dict(width=linewidth, color=train_color),
+        mode='lines+markers',
+        marker=dict(size=6)
+    ))
+    fig.add_trace(go.Scatter(
+        x=history_df.index,
+        y=history_df['val_loss'],
+        name='Validation Loss',
+        line=dict(width=linewidth, color=val_color),
+        mode='lines+markers',
+        marker=dict(size=6)
+    ))
+    fig.add_trace(go.Scatter(
+        x=history_df.index,
+        y=history_df['mse'],
+        name='Training MSE',
+        line=dict(width=linewidth, dash='dash', color=train_color),
+        mode='lines+markers',
+        marker=dict(size=6)
+    ))
+    fig.add_trace(go.Scatter(
+        x=history_df.index,
+        y=history_df['val_mse'],
+        name='Validation MSE',
+        line=dict(width=linewidth, dash='dash', color=val_color),
+        mode='lines+markers',
+        marker=dict(size=6)
+    ))
+
+    fig.update_layout(
+        title=dict(text=f'{title} Training Metrics', x=0.5, xanchor='center', font=dict(size=label_fontsize + 4, family='Arial')),
+        xaxis_title='Epoch',
+        yaxis_title='Value',
+        xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=axis_linewidth, linecolor='black', tickfont=dict(size=tick_fontsize)),
+        yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=axis_linewidth, linecolor='black', tickfont=dict(size=tick_fontsize)),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(family='Arial', size=label_fontsize, color='black'),
+        legend=dict(x=1.05, y=1, font=dict(size=label_fontsize - 2), bordercolor='black', borderwidth=1),
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    
+    return fig
+
+# Plotly Box Plot for Latent Dimensions
+def plot_latent_box(z_train, box_linewidth=1, label_fontsize=12, axis_linewidth=2):
+    fig = go.Figure()
+    for i in range(z_train.shape[1]):
+        fig.add_trace(go.Box(
+            y=z_train[:, i],
+            name=f'Latent Dim {i+1}',
+            boxmean=True,
+            line=dict(width=box_linewidth),
+            marker=dict(size=6)
+        ))
+
+    fig.update_layout(
+        title=dict(text='Distribution of Latent Dimensions', x=0.5, xanchor='center', font=dict(size=label_fontsize + 4, family='Arial')),
+        xaxis_title='Latent Dimensions',
+        yaxis_title='Value',
+        xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=axis_linewidth, linecolor='black', tickfont=dict(size=label_fontsize)),
+        yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=axis_linewidth, linecolor='black', tickfont=dict(size=label_fontsize)),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(family='Arial', size=label_fontsize),
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    
+    return fig
+
+# Streamlit UI
+st.title("Thermoelectric Material Latent Space and Training History Visualization", anchor="title")
+
+# Load model and scalers
+script_dir = os.path.dirname(os.path.abspath(__file__))
+try:
+    vae = VAE().to(device)
+    vae.load_state_dict(torch.load(os.path.join(script_dir, 'vae_model.pt'), map_location=device))
+    scaler = joblib.load(os.path.join(script_dir, 'scaler.pkl'))
+    y_scaler = joblib.load(os.path.join(script_dir, 'y_scaler.pkl'))
+except FileNotFoundError:
+    st.error("Required files (vae_model.pt, scaler.pkl, y_scaler.pkl) not found in the script directory.")
+    st.stop()
+
+# Upload dataset
+dataset_file = st.file_uploader("Upload Dataset CSV", type=["csv"])
+if dataset_file is not None:
+    df = pd.read_csv(dataset_file)
+    
+    # Preprocess data
+    X_scaled, y_scaled, output_feature_cleaned, valid_indices = preprocess_data(df, scaler, y_scaler)
+    
+    # Convert to tensor and get latent representations
+    X_tensor = torch.FloatTensor(X_scaled).to(device)
+    vae.eval()
+    with torch.no_grad():
+        _, z_mean, _ = vae(X_tensor)
+    z_train = z_mean.cpu().numpy()
+    
+    # Normalize latent representations for radar plot
+    z_scaler = MinMaxScaler()
+    z_normalized = z_scaler.fit_transform(z_train)
+    
+    # 2D PCA projection
+    pca = PCA(n_components=2)
+    z_2d = pca.fit_transform(z_train)
+    
+    # Filter dominant elements
+    dominant_elements = df['Formula'].apply(
+        lambda x: Composition(x).get_el_amt_dict().get(
+            max(Composition(x).get_el_amt_dict(), key=Composition(x).get_el_amt_dict().get), 'Unknown'
+        ) if Composition(x).valid else 'Unknown'
+    )
+    dominant_elements_filtered = dominant_elements.iloc[valid_indices].values
+    
+    # Interactive controls for latent space visualizations
+    st.write("### Latent Space Visualizations")
+    st.sidebar.header("Visualization Settings")
+    marker_size = st.sidebar.slider("Scatter Marker Size", 20, 100, 50, 5)
+    marker_alpha = st.sidebar.slider("Scatter Marker Transparency", 0.1, 1.0, 0.6, 0.1)
+    color_scale = st.sidebar.selectbox(
+        "Color Scale for Seebeck Plot",
+        ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow',
+         'Bluered', 'Electric', 'Hot', 'Cool', 'Spring', 'Summer', 'Autumn', 'Winter',
+         'Greys', 'Greens', 'Blues', 'Reds', 'Purples', 'Oranges',
+         'YlOrRd', 'YlOrBr', 'YlGnBu', 'YlGn', 'RdPu', 'PuRd', 'PuBuGn', 'PuBu',
+         'OrRd', 'GnBu', 'BuPu', 'BuGn', 'Pinkyl', 'Coolwarm', 'Spectral',
+         'RdYlBu', 'RdYlGn', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
+         'Viridis_r', 'Plasma_r', 'Inferno_r', 'Magma_r', 'Cividis_r', 'Turbo_r',
+         'Jet_r', 'Rainbow_r', 'Greys_r', 'Blues_r', 'Reds_r'],
+        index=0
+    )
+    scatter_label_fontsize = st.sidebar.slider("Scatter Label Font Size", 8, 16, 12, 1)
+    scatter_axis_linewidth = st.sidebar.slider("Scatter Axis Line Width", 0.5, 5.0, 2.0, 0.5)
+    fig_width = st.sidebar.slider("Matplotlib Figure Width", 6, 12, 8, 1)
+    fig_height = st.sidebar.slider("Matplotlib Figure Height", 4, 10, 6, 1)
+    
+    # Plotly: Box Plot for Latent Dimensions
+    st.write("#### Latent Dimensions Box Plot")
+    box_linewidth = st.sidebar.slider("Box Plot Line Width", 0.5, 5.0, 1.0, 0.5)
+    box_label_fontsize = st.sidebar.slider("Box Plot Label Font Size", 8, 16, 12, 1)
+    box_axis_linewidth = st.sidebar.slider("Box Plot Axis Line Width", 0.5, 5.0, 2.0, 0.5)
+    fig_box = plot_latent_box(z_train, box_linewidth=box_linewidth, label_fontsize=box_label_fontsize, axis_linewidth=box_axis_linewidth)
+    st.plotly_chart(fig_box, use_container_width=True)
+    fig_box.write_image(os.path.join(script_dir, 'latent_box_plotly.pdf'), format='pdf')
+    
+    # Plotly: 2D Scatter (Seebeck Coefficient)
+    fig = px.scatter(
+        x=z_2d[:, 0],
+        y=z_2d[:, 1],
+        color=output_feature_cleaned,
+        color_continuous_scale=color_scale.lower(),
+        labels={'x': 'Latent Dimension 1', 'y': 'Latent Dimension 2', 'color': 'Seebeck Coefficient (μV/K)'},
+        title='Latent Space: Seebeck Coefficient'
+    )
+    fig.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
+    fig.update_layout(
+        title=dict(text='Latent Space: Seebeck Coefficient', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
+        xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
+        yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(family='Arial', size=scatter_label_fontsize),
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    fig.write_image(os.path.join(script_dir, 'latent_seebeck_plotly.pdf'), format='pdf')
+    
+    # Plotly: 2D Scatter (Dominant Element)
+    fig_elements = px.scatter(
+        x=z_2d[:, 0],
+        y=z_2d[:, 1],
+        color=dominant_elements_filtered,
+        color_discrete_sequence=px.colors.qualitative.Set1,
+        labels={'x': 'Latent Dimension 1', 'y': 'Latent Dimension 2', 'color': 'Dominant Element'},
+        title='Latent Space: Dominant Element'
+    )
+    fig_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
+    fig_elements.update_layout(
+        title=dict(text='Latent Space: Dominant Element', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
+        xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
+        yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(family='Arial', size=scatter_label_fontsize),
+        legend=dict(x=1.05, y=1, font=dict(size=scatter_label_fontsize - 2), bordercolor='black', borderwidth=1),
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    st.plotly_chart(fig_elements, use_container_width=True)
+    fig_elements.write_image(os.path.join(script_dir, 'latent_elements_plotly.pdf'), format='pdf')
+    
+    # Matplotlib: 2D Scatter
+    try:
+        plt.style.use('seaborn-v0_8-whitegrid')
+    except OSError:
+        plt.style.use('ggplot')
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
+    scatter1 = ax1.scatter(z_2d[:, 0], z_2d[:, 1], c=output_feature_cleaned, cmap='viridis', s=marker_size, alpha=marker_alpha)
+    ax1.set_xlabel('Latent Dimension 1', fontsize=scatter_label_fontsize, weight='bold')
+    ax1.set_ylabel('Latent Dimension 2', fontsize=scatter_label_fontsize, weight='bold')
+    ax1.set_title('Latent Space: Seebeck Coefficient', fontsize=scatter_label_fontsize + 2, weight='bold')
+    cbar1 = plt.colorbar(scatter1, ax=ax1, label='Seebeck Coefficient (μV/K)', pad=0.02)
+    cbar1.ax.tick_params(labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
+    ax1.grid(True, linestyle='--', alpha=0.5)
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+    ax1.spines['left'].set_linewidth(scatter_axis_linewidth)
+    ax1.spines['bottom'].set_linewidth(scatter_axis_linewidth)
+    ax1.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
+
+    scatter2 = ax2.scatter(z_2d[:, 0], z_2d[:, 1], c=pd.Categorical(dominant_elements_filtered).codes, cmap='Set1', s=marker_size, alpha=marker_alpha)
+    ax2.set_xlabel('Latent Dimension 1', fontsize=scatter_label_fontsize, weight='bold')
+    ax2.set_ylabel('Latent Dimension 2', fontsize=scatter_label_fontsize, weight='bold')
+    ax2.set_title('Latent Space: Dominant Element', fontsize=scatter_label_fontsize + 2, weight='bold')
+    ax2.grid(True, linestyle='--', alpha=0.5)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    ax2.spines['left'].set_linewidth(scatter_axis_linewidth)
+    ax2.spines['bottom'].set_linewidth(scatter_axis_linewidth)
+    ax2.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(script_dir, 'latent_2d_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
+    st.pyplot(fig)
+    
+    # Radar Plot (8D)
+    st.write("#### 8D Latent Space Radar Plot")
+    max_samples = st.sidebar.slider("Number of Samples in Radar Plot", 1, 10, 5, 1)
+    radar_alpha = st.sidebar.slider("Radar Fill Transparency", 0.1, 0.5, 0.3, 0.05)
+    radar_linewidth = st.sidebar.slider("Radar Line Width", 1.0, 5.0, 2.0, 0.5)
+    radar_fontsize = st.sidebar.slider("Radar Font Size", 8, 16, 12, 1)
+    radar_legend_pos = st.sidebar.selectbox("Radar Legend Position", ['upper right', 'upper left', 'lower right', 'lower left'], index=0)
+    radar_axis_linewidth = st.sidebar.slider("Radar Axis Line Width", 0.5, 5.0, 1.5, 0.5)
+    
+    sample_indices = np.random.choice(len(z_normalized), size=max_samples, replace=False)
+    radar_data = z_normalized[sample_indices]
+    radar_labels = [f"Sample {i+1} (Seebeck: {output_feature_cleaned[i]:.1f})" for i in sample_indices]
+    fig_radar = plot_radar(radar_data, radar_labels, "8D Latent Space Radar Plot", max_samples=max_samples, 
+                           alpha=radar_alpha, linewidth=radar_linewidth, fontsize=radar_fontsize, 
+                           legend_pos=radar_legend_pos, axis_linewidth=radar_axis_linewidth)
+    plt.savefig(os.path.join(script_dir, 'latent_radar.pdf'), dpi=300, bbox_inches='tight', format='pdf')
+    st.pyplot(fig_radar)
+    
+    # Parallel Coordinates (8D)
+    st.write("#### 8D Latent Space Parallel Coordinates")
+    parallel_df = pd.DataFrame(z_normalized, columns=[f'Latent Dim {i+1}' for i in range(8)])
+    parallel_df['Seebeck'] = output_feature_cleaned
+    parallel_color_scale = st.sidebar.selectbox(
+        "Color Scale for Parallel Coordinates",
+        ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow',
+         'Bluered', 'Electric', 'Hot', 'Cool', 'Spring', 'Summer', 'Autumn', 'Winter',
+         'Greys', 'Greens', 'Blues', 'Reds', 'Purples', 'Oranges',
+         'YlOrRd', 'YlOrBr', 'YlGnBu', 'YlGn', 'RdPu', 'PuRd', 'PuBuGn', 'PuBu',
+         'OrRd', 'GnBu', 'BuPu', 'BuGn', 'Pinkyl', 'Coolwarm', 'Spectral',
+         'RdYlBu', 'RdYlGn', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
+         'Viridis_r', 'Plasma_r', 'Inferno_r', 'Magma_r', 'Cividis_r', 'Turbo_r',
+         'Jet_r', 'Rainbow_r', 'Greys_r', 'Blues_r', 'Reds_r'],
+        index=0
+    )
+    parallel_label_fontsize = st.sidebar.slider("Parallel Coordinates Label Font Size", 8, 16, 12, 1)
+    
+    fig_parallel = px.parallel_coordinates(
+        parallel_df,
+        color='Seebeck',
+        color_continuous_scale=parallel_color_scale.lower(),
+        labels={f'Latent Dim {i+1}': f'Latent Dim {i+1}' for i in range(8)},
+        title='8D Latent Space Parallel Coordinates'
+    )
+    fig_parallel.update_layout(
+        title=dict(text='8D Latent Space Parallel Coordinates', x=0.5, xanchor='center', font=dict(size=parallel_label_fontsize + 4, family='Arial')),
+        font=dict(family='Arial', size=parallel_label_fontsize),
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    st.plotly_chart(fig_parallel, use_container_width=True)
+    fig_parallel.write_image(os.path.join(script_dir, 'latent_parallel_plotly.pdf'), format='pdf')
+
+# Upload training history CSVs
+st.write("### Training History Visualizations")
+vae_history_file = st.file_uploader("Upload VAE Training History CSV", type=["csv"], key="vae_history")
+regressor_history_file = st.file_uploader("Upload Regressor Training History CSV", type=["csv"], key="regressor_history")
+
+if vae_history_file is not None:
+    vae_history_df = pd.read_csv(vae_history_file)
+    
+    # Matplotlib: VAE History
+    history_linewidth = st.sidebar.slider("Training History Line Width", 1.0, 5.0, 2.5, 0.5)
+    history_label_fontsize = st.sidebar.slider("Training History Label Font Size", 8, 16, 12, 1)
+    history_tick_fontsize = st.sidebar.slider("Training History Tick Font Size", 6, 14, 10, 1)
+    history_axis_linewidth = st.sidebar.slider("Training History Axis Line Width", 0.5, 5.0, 1.5, 0.5)
+    train_color = st.sidebar.selectbox("Training Line Color", ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'], index=0)
+    val_color = st.sidebar.selectbox("Validation Line Color", ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'], index=1)
+    fig_vae = plot_training_history_matplotlib(vae_history_df, "VAE", os.path.join(script_dir, 'vae_history_matplotlib.pdf'), 
+                                              linewidth=history_linewidth, fontsize=history_label_fontsize, 
+                                              train_color=train_color, val_color=val_color, 
+                                              tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
+    st.pyplot(fig_vae)
+    
+    # Plotly: VAE History
+    history_color_scale = st.sidebar.selectbox(
+        "Color Scale for Training History",
+        ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow',
+         'Bluered', 'Electric', 'Hot', 'Cool', 'Spring', 'Summer', 'Autumn', 'Winter',
+         'Greys', 'Greens', 'Blues', 'Reds', 'Purples', 'Oranges',
+         'YlOrRd', 'YlOrBr', 'YlGnBu', 'YlGn', 'RdPu', 'PuRd', 'PuBuGn', 'PuBu',
+         'OrRd', 'GnBu', 'BuPu', 'BuGn', 'Pinkyl', 'Coolwarm', 'Spectral',
+         'RdYlBu', 'RdYlGn', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
+         'Viridis_r', 'Plasma_r', 'Inferno_r', 'Magma_r', 'Cividis_r', 'Turbo_r',
+         'Jet_r', 'Rainbow_r', 'Greys_r', 'Blues_r', 'Reds_r'],
+        index=0
+    )
+    fig_vae_plotly = plot_training_history_plotly(vae_history_df, "VAE", train_color=train_color, val_color=val_color, 
+                                                 linewidth=history_linewidth, label_fontsize=history_label_fontsize, 
+                                                 tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
+    st.plotly_chart(fig_vae_plotly, use_container_width=True)
+    fig_vae_plotly.write_image(os.path.join(script_dir, 'vae_history_plotly.pdf'), format='pdf')
+
+if regressor_history_file is not None:
+    regressor_history_df = pd.read_csv(regressor_history_file)
+    
+    # Matplotlib: Regressor History
+    fig_regressor = plot_training_history_matplotlib(regressor_history_df, "Regressor", os.path.join(script_dir, 'regressor_history_matplotlib.pdf'), 
+                                                    linewidth=history_linewidth, fontsize=history_label_fontsize, 
+                                                    train_color=train_color, val_color=val_color, 
+                                                    tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
+    st.pyplot(fig_regressor)
+    
+    # Plotly: Regressor History
+    fig_regressor_plotly = plot_training_history_plotly(regressor_history_df, "Regressor", train_color=train_color, val_color=val_color, 
+                                                       linewidth=history_linewidth, label_fontsize=history_label_fontsize, 
+                                                       tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
+    st.plotly_chart(fig_regressor_plotly, use_container_width=True)
+    fig_regressor_plotly.write_image(os.path.join(script_dir, 'regressor_history_plotly.pdf'), format='pdf')
+
+if dataset_file is not None or vae_history_file is not None or regressor_history_file is not None:
+    st.success("Visualizations generated successfully!")
+else:
+    st.warning("Please upload at least one CSV file (dataset or training history).")
