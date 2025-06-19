@@ -291,7 +291,7 @@ with tab1:
     #    "Color Scale for Seebeck Plot",
     #    ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow'], index=0
     #)
-     color_scale = st.sidebar.selectbox(
+    color_scale = st.sidebar.selectbox(
         "Color Scale for Seebeck Plot",
         ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow',
          'Bluered', 'Electric', 'Hot', 'Cool', 'Spring', 'Summer', 'Autumn', 'Winter',
