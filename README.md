@@ -6,7 +6,7 @@ VAE-with regressor for determination of Seebeck Coefficient
 # Advanced Models
 # Web App (for Model A trained using PyTorch):
 
-Data visualization for Model 2 (M2) training using PyTorch:
+Data visualization for Model A (MA) training using PyTorch:
 
 [![machinelearningthermoelectricity](https://img.shields.io/badge/TEvisuals-streamlit-red)](https://thermoelectricdata-advancedvisualization1.streamlit.app/)
 
