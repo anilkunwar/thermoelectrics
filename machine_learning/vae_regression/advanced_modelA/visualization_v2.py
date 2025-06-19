@@ -335,6 +335,7 @@ if dataset_file is not None:
     fig_box.write_image(os.path.join(script_dir, 'latent_box_plotly.pdf'), format='pdf')
     #fig_box.write_image(os.path.join(script_dir, 'latent_box_plotly.png'), format='png')
     
+    
     # Plotly: 2D Scatter (Seebeck Coefficient)
     fig = px.scatter(
         x=z_2d[:, 0],
