@@ -16,7 +16,7 @@ Web app interface for Seebeck Coefficient Prediction:
 
 Web app for Data Visualization with Seebeck Coefficient Prediction
 
-[![machinelearningthermoelectricity](https://img.shields.io/badge/TEvisualsSeebeck-streamlit-red)](https://thermoelectricitymachinelearningmodel1.streamlit.app/)
+[![machinelearningthermoelectricity](https://img.shields.io/badge/TEvisualsSeebeckPyTorch-streamlit-red)](https://thermoelectricitymachinelearningmodel1.streamlit.app/)
 
 # Basic Models
 
