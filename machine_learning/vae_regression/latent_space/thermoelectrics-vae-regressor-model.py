@@ -769,8 +769,7 @@ with tab1:
                                                   tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
         st.pyplot(fig_vae)
         try:
-            plt.savefig(os.path.join(script_dir, 'vae_history_matplotlib.pdf'), dpi=300, bbox_inch
-es='tight', format='pdf')
+            plt.savefig(os.path.join(script_dir, 'vae_history_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
         except Exception as e:
             st.warning(f"Error saving VAE history plot: {e}")
         plt.close(fig_vae)
