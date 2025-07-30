@@ -162,14 +162,7 @@ def preprocess_new_data(df, available_elements, scaler):
 # Enhanced Radar Plot Function
 def plot_radar(data, labels, title, max_samples=10, alpha=0.3, linewidth=2, fontsize=16, legend_pos='upper right', axis_linewidth=1.5):
     num_vars = data.shape[1]
-    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
-    angles += angles[:1]
-    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
-    colors = sns.color_palette("Set2", n_colors=max_samples)
-    for i in range(min(max_samples, len(data))):
-        values = data[i].tolist()
-        values += values[:1]
-        ax.fill(angles, values, color=colors[i], alpha=alpha, label=labels[i])
+    anglesEstegharad(angles, values, color=colors[i], alpha=alpha, label=labels[i])
         ax.plot(angles, values, color=colors[i], linewidth=linewidth)
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
@@ -249,7 +242,7 @@ def plot_latent_box(z_train, box_linewidth=1, label_fontsize=12, axis_linewidth=
     )
     return fig
 
-# Enhanced Periodic Table Plot
+# Periodic Table Plot (Present Elements)
 def plot_periodic_table(available_elements, element_color_map, fontsize=12):
     periodic_table_positions = {
         'Li': (3, 1), 'Na': (4, 1), 'K': (5, 1), 'Rb': (6, 1), 'Cs': (7, 1),
@@ -266,8 +259,8 @@ def plot_periodic_table(available_elements, element_color_map, fontsize=12):
         'O': (3, 16), 'S': (4, 16), 'Se': (5, 16), 'Te': (6, 16),
         'F': (3, 17), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17),
         'Au': (7, 11), 'Ag': (6, 11), 'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8),
-        'La': (9, 3), 'Ce': (9, 4), 'Pr': (9, 5), 'Nd': (9, 6), 'Sm': (9, 7), 'Eu': (9, 8),
-        'Gd': (9, 9), 'Tb': (9, 10), 'Dy': (9, 11), 'Ho': (9, 12), 'Er': (9, 13), 'Tm': (9, 14), 'Yb': (9, 15), 'Lu': (9, 16)
+        'La': (8, 3), 'Ce': (8, 4), 'Pr': (8, 5), 'Nd': (8, 6), 'Sm': (8, 7), 'Eu': (8, 8),
+        'Gd': (8, 9), 'Tb': (8, 10), 'Dy': (8, 11), 'Ho': (8, 12), 'Er': (8, 13), 'Tm': (8, 14), 'Yb': (8, 15), 'Lu': (8, 16)
     }
     fig = go.Figure()
     for element in available_elements:
@@ -287,26 +280,56 @@ def plot_periodic_table(available_elements, element_color_map, fontsize=12):
                 name=element,
                 showlegend=False
             ))
-    # Add grid lines
-    shapes = []
-    for col in range(1, 19):
-        shapes.append(dict(type='line', x0=col-0.5, x1=col-0.5, y0=-9.5, y1=-2.5, line=dict(color='black', width=1)))
-    for row in range(3, 10):
-        shapes.append(dict(type='line', x0=0.5, x1=18.5, y0=-row+0.5, y1=-row+0.5, line=dict(color='black', width=1)))
-    # Add group and period labels
-    annotations = [
-        dict(x=col, y=-2, text=str(col), showarrow=False, font=dict(size=fontsize, family='Arial')) for col in range(1, 19)
-    ] + [
-        dict(x=0, y=-row, text=str(row-2), showarrow=False, font=dict(size=fontsize, family='Arial')) for row in range(3, 8)
-    ] + [
-        dict(x=0, y=-9, text='Lanthanides', showarrow=False, font=dict(size=fontsize, family='Arial'))
-    ]
     fig.update_layout(
-        title=dict(text='Periodic Table Legend for Dominant Elements', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
+        title=dict(text='Periodic Table Legend (Present Elements)', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
         xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        yaxis=dict(range=[-10, -2], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        shapes=shapes,
-        annotations=annotations,
+        yaxis=dict(range=[-9, -2], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        plot_bgcolor='white', paper_bgcolor='white',
+        width=900, height=450,
+        margin=dict(l=20, r=20, t=50, b=20)
+    )
+    return fig
+
+# Full Periodic Table Plot (All Elements)
+def plot_full_periodic_table(all_elements, available_elements, element_color_map, fontsize=12):
+    periodic_table_positions = {
+        'H': (1, 1), 'He': (1, 18),
+        'Li': (2, 1), 'Be': (2, 2), 'B': (2, 13), 'C': (2, 14), 'N': (2, 15), 'O': (2, 16), 'F': (2, 17), 'Ne': (2, 18),
+        'Na': (3, 1), 'Mg': (3, 2), 'Al': (3, 13), 'Si': (3, 14), 'P': (3, 15), 'S': (3, 16), 'Cl': (3, 17), 'Ar': (3, 18),
+        'K': (4, 1), 'Ca': (4, 2), 'Sc': (4, 3), 'Ti': (4, 4), 'V': (4, 5), 'Cr': (4, 6), 'Mn': (4, 7), 'Fe': (4, 8),
+        'Co': (4, 9), 'Ni': (4, 10), 'Cu': (4, 11), 'Zn': (4, 12), 'Ga': (4, 13), 'Ge': (4, 14), 'As': (4, 15),
+        'Se': (4, 16), 'Br': (4, 17), 'Kr': (4, 18),
+        'Rb': (5, 1), 'Sr': (5, 2), 'Y': (5, 3), 'Zr': (5, 4), 'Nb': (5, 5), 'Mo': (5, 6), 'Tc': (5, 7), 'Ru': (5, 8),
+        'Rh': (5, 9), 'Pd': (5, 10), 'Ag': (5, 11), 'Cd': (5, 12), 'In': (5, 13), 'Sn': (5, 14), 'Sb': (5, 15),
+        'Te': (5, 16), 'I': (5, 17), 'Xe': (5, 18),
+        'Cs': (6, 1), 'Ba': (6, 2), 'La': (6, 3), 'Ce': (7, 3), 'Pr': (7, 4), 'Nd': (7, 5), 'Pm': (7, 6), 'Sm': (7, 7),
+        'Eu': (7, 8), 'Gd': (7, 9), 'Tb': (7, 10), 'Dy': (7, 11), 'Ho': (7, 12), 'Er': (7, 13), 'Tm': (7, 14),
+        'Yb': (7, 15), 'Lu': (7, 16), 'Hf': (6, 4), 'Ta': (6, 5), 'W': (6, 6), 'Re': (6, 7), 'Os': (6, 8),
+        'Ir': (6, 9), 'Pt': (6, 10), 'Au': (6, 11), 'Hg': (6, 12), 'Tl': (6, 13), 'Pb': (6, 14), 'Bi': (6, 15)
+    }
+    fig = go.Figure()
+    for element in all_elements:
+        if element in periodic_table_positions:
+            row, col = periodic_table_positions[element]
+            en = electronegativity.get(element, 1.0)
+            tw = thermoelectric_weights.get(element, 1.0)
+            color = element_color_map.get(element, '#D3D3D3') if element in available_elements else '#D3D3D3'
+            fig.add_trace(go.Scatter(
+                x=[col], y=[-row],
+                mode='markers+text',
+                text=[element],
+                textposition='middle center',
+                marker=dict(size=40, color=color, line=dict(width=2, color='black')),
+                hoverinfo='text',
+                hovertext=[f"Element: {element}<br>Electronegativity: {en:.2f}<br>Thermoelectric Weight: {tw:.2f}"],
+                customdata=[element],
+                name=element,
+                showlegend=False
+            ))
+    fig.update_layout(
+        title=dict(text='Periodic Table Legend (All Elements)', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
+        xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        yaxis=dict(range=[-8, 0], showgrid=False, zeroline=False, showticklabels=False, title=''),
         plot_bgcolor='white', paper_bgcolor='white',
         width=900, height=450,
         margin=dict(l=20, r=20, t=50, b=20)
@@ -337,16 +360,37 @@ available_elements = [
     'N', 'Na', 'Cu', 'Ho', 'K'
 ]
 
-# Define color map for elements
-color_list = (
+# All elements for full periodic table
+all_elements = [
+    'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
+    'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr',
+    'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te', 'I', 'Xe',
+    'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
+    'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi'
+]
+
+# Color map options
+color_map_options = [
+    'Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow',
+    'Bluered', 'Electric', 'Hot', 'Cool', 'Spring', 'Summer', 'Autumn', 'Winter',
+    'Greys', 'Greens', 'Blues', 'Reds', 'Purples', 'Oranges',
+    'YlOrRd', 'YlOrBr', 'YlGnBu', 'YlGn', 'RdPu', 'PuRd', 'PuBuGn', 'PuBu',
+    'OrRd', 'GnBu', 'BuPu', 'BuGn', 'Pinkyl', 'Coolwarm', 'Spectral',
+    'RdYlBu', 'RdYlGn', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
+    'Viridis_r', 'Plasma_r', 'Inferno_r', 'Magma_r', 'Cividis_r', 'Turbo_r',
+    'Jet_r', 'Rainbow_r', 'Greys_r', 'Blues_r', 'Reds_r'
+]
+
+# Define default color map for scatter plots
+default_color_list = (
     px.colors.qualitative.Plotly + 
     px.colors.qualitative.Pastel1 + 
     list(plt.cm.tab20(np.linspace(0, 1, 20))) + 
     list(plt.cm.tab20b(np.linspace(0, 1, 20))) + 
     list(plt.cm.tab20c(np.linspace(0, 1, 20)))
 )
-color_list = [matplotlib.colors.to_hex(c) if isinstance(c, tuple) else c for c in color_list]
-element_color_map = dict(zip(available_elements, color_list[:len(available_elements)]))
+default_color_list = [matplotlib.colors.to_hex(c) if isinstance(c, tuple) else c for c in default_color_list]
+default_element_color_map = dict(zip(available_elements, default_color_list[:len(available_elements)]))
 
 # Streamlit UI
 st.title("Thermoelectric Material Analysis and Seebeck Coefficient Prediction")
@@ -381,14 +425,12 @@ with tab1:
     marker_alpha = st.sidebar.slider("Scatter Marker Transparency", 0.1, 1.0, 0.6, 0.1)
     color_scale = st.sidebar.selectbox(
         "Color Scale for Seebeck Plot",
-        ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow',
-         'Bluered', 'Electric', 'Hot', 'Cool', 'Spring', 'Summer', 'Autumn', 'Winter',
-         'Greys', 'Greens', 'Blues', 'Reds', 'Purples', 'Oranges',
-         'YlOrRd', 'YlOrBr', 'YlGnBu', 'YlGn', 'RdPu', 'PuRd', 'PuBuGn', 'PuBu',
-         'OrRd', 'GnBu', 'BuPu', 'BuGn', 'Pinkyl', 'Coolwarm', 'Spectral',
-         'RdYlBu', 'RdYlGn', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
-         'Viridis_r', 'Plasma_r', 'Inferno_r', 'Magma_r', 'Cividis_r', 'Turbo_r',
-         'Jet_r', 'Rainbow_r', 'Greys_r', 'Blues_r', 'Reds_r'],
+        color_map_options,
+        index=0
+    )
+    periodic_table_color_map = st.sidebar.selectbox(
+        "Color Map for Periodic Table",
+        color_map_options,
         index=0
     )
     scatter_label_fontsize = st.sidebar.slider("Scatter Label Font Size", 8, 16, 12, 1)
@@ -418,17 +460,19 @@ with tab1:
     box_axis_linewidth = st.sidebar.slider("Box Plot Axis Line Width", 0.5, 5.0, 2.0, 0.5)
     parallel_color_scale = st.sidebar.selectbox(
         "Color Scale for Parallel Coordinates",
-        ['Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow',
-         'Bluered', 'Electric', 'Hot', 'Cool', 'Spring', 'Summer', 'Autumn', 'Winter',
-         'Greys', 'Greens', 'Blues', 'Reds', 'Purples', 'Oranges',
-         'YlOrRd', 'YlOrBr', 'YlGnBu', 'YlGn', 'RdPu', 'PuRd', 'PuBuGn', 'PuBu',
-         'OrRd', 'GnBu', 'BuPu', 'BuGn', 'Pinkyl', 'Coolwarm', 'Spectral',
-         'RdYlBu', 'RdYlGn', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
-         'Viridis_r', 'Plasma_r', 'Inferno_r', 'Magma_r', 'Cividis_r', 'Turbo_r',
-         'Jet_r', 'Rainbow_r', 'Greys_r', 'Blues_r', 'Reds_r'],
+        color_map_options,
         index=0
     )
     parallel_label_fontsize = st.sidebar.slider("Parallel Coordinates Label Font Size", 8, 16, 12, 1)
+
+    # Create element color map based on selected periodic table color map
+    if periodic_table_color_map.endswith('_r'):
+        cmap = plt.cm.get_cmap(periodic_table_color_map[:-2])
+        colors = [matplotlib.colors.to_hex(cmap(i / len(available_elements))) for i in range(len(available_elements))]
+    else:
+        cmap = plt.cm.get_cmap(periodic_table_color_map)
+        colors = [matplotlib.colors.to_hex(cmap(i / len(available_elements))) for i in range(len(available_elements))]
+    element_color_map = dict(zip(available_elements, colors))
 
     # Latent Space Visualizations
     if not df.empty:
@@ -488,19 +532,25 @@ with tab1:
             dominant_elements_filtered_filtered = dominant_elements_filtered
             formulas_filtered_filtered = formulas_filtered
 
-        # Periodic Table Legend
-        st.write("#### Periodic Table Legend")
+        # Periodic Table Legends
+        st.write("#### Periodic Table Legend (Present Elements)")
         st.write("Click an element in the periodic table or use the dropdown to filter scatter plots.")
         fig_periodic = plot_periodic_table(available_elements, element_color_map, fontsize=periodic_table_fontsize)
         st.plotly_chart(fig_periodic, use_container_width=True)
-        fig_periodic.write_html(os.path.join(script_dir, 'periodic_table_legend.html'))
+        fig_periodic.write_html(os.path.join(script_dir, 'periodic_table_present.html'))
+
+        st.write("#### Periodic Table Legend (All Elements)")
+        st.write("Elements not in the database are shown in gray.")
+        fig_full_periodic = plot_full_periodic_table(all_elements, available_elements, element_color_map, fontsize=periodic_table_fontsize)
+        st.plotly_chart(fig_full_periodic, use_container_width=True)
+        fig_full_periodic.write_html(os.path.join(script_dir, 'periodic_table_all.html'))
 
         # Dominant Element Distribution
         st.write("#### Dominant Element Distribution")
         element_counts = pd.Series(dominant_elements_filtered).value_counts()
         fig_bar = px.bar(x=element_counts.index, y=element_counts.values, labels={'x': 'Dominant Element', 'y': 'Count'},
                          title='Distribution of Dominant Elements')
-        fig_bar.update_traces(marker_color=[element_color_map.get(elem, '#FFFFFF') for elem in element_counts.index])
+        fig_bar.update_traces(marker_color=[default_element_color_map.get(elem, '#FFFFFF') for elem in element_counts.index])
         fig_bar.update_layout(
             title=dict(text='Distribution of Dominant Elements', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
             xaxis=dict(tickfont=dict(size=scatter_label_fontsize), showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black'),
@@ -538,7 +588,7 @@ with tab1:
         st.write("#### PCA Latent Space: Dominant Element")
         fig_pca_elements = px.scatter(
             x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=dominant_elements_filtered_filtered,
-            color_discrete_map=element_color_map,
+            color_discrete_map=default_element_color_map,
             labels={'x': 'PC1', 'y': 'PC2', 'color': 'Dominant Element'},
             title=f'PCA Latent Space: Dominant Element ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -577,7 +627,7 @@ with tab1:
         st.write("#### t-SNE Latent Space: Dominant Element")
         fig_tsne_elements = px.scatter(
             x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=dominant_elements_filtered_filtered,
-            color_discrete_map=element_color_map,
+            color_discrete_map=default_element_color_map,
             labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Dominant Element'},
             title=f't-SNE Latent Space: Dominant Element ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -616,7 +666,7 @@ with tab1:
         st.write("#### UMAP Latent Space: Dominant Element")
         fig_umap_elements = px.scatter(
             x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=dominant_elements_filtered_filtered,
-            color_discrete_map=element_color_map,
+            color_discrete_map=default_element_color_map,
             labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Dominant Element'},
             title=f'UMAP Latent Space: Dominant Element ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -654,7 +704,7 @@ with tab1:
         unique_elements = np.unique(dominant_elements_filtered_filtered)
         for element in unique_elements:
             idx = dominant_elements_filtered_filtered == element
-            ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=[element_color_map.get(element, '#FFFFFF')], label=element, s=marker_size, alpha=marker_alpha)
+            ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=default_element_color_map.get(element, '#FFFFFF'), label=element, s=marker_size, alpha=marker_alpha)
         ax2.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_title(f'PCA Latent Space: Dominant Element ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
