@@ -688,13 +688,16 @@ with tab1:
         ax1.spines['left'].set_linewidth(scatter_axis_linewidth)
         ax1.spines['bottom'].set_linewidth(scatter_axis_linewidth)
         ax1.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
+        
+        # FIXED: Use single color per element group
         unique_elements = np.unique(dominant_elements_filtered_filtered)
         for element in unique_elements:
             idx = dominant_elements_filtered_filtered == element
-            count = np.sum(idx)
-            if count > 0:  # Only plot if there are points
-                colors = [default_element_color_map.get(element, '#FFFFFF')] * count
-                ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=colors, label=element, s=marker_size, alpha=marker_alpha)
+            if np.sum(idx) > 0:  # Only plot if there are points
+                color = default_element_color_map.get(element, '#FFFFFF')
+                ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], 
+                            c=color, label=element, s=marker_size, alpha=marker_alpha)
+        
         ax2.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_title(f'PCA Latent Space: Dominant Element ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
