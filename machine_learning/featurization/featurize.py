@@ -3,6 +3,7 @@ import csv
 import pandas as pd
 from pymatgen.core.composition import Composition
 import re
+import os
 
 def parse_formula(formula):
     # Regular expression pattern to match elements and their stoichiometric ratios
@@ -73,7 +74,20 @@ def featurize_materials(csv_file, available_elements):
     return features
 
 # Read the CSV file and count the available elements
-csv_file = 'thermoelectric_materials.csv'
+#csv_file = 'thermoelectric_materials.csv'
+# Get the directory of the current script
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Build the full path to the CSV file in the adjacent directory
+csv_file = os.path.join(script_dir, '..', '..', 'thermoelectric_materials.csv')
+
+# Optional: resolve full path
+csv_file = os.path.abspath(csv_file)
+
+# Check if it exists
+if not os.path.exists(csv_file):
+    st.error(f"CSV file not found at: {csv_file}")
+    st.stop()
 available_elements = count_elements(csv_file)
 
 # Display the number of elements and their list
