@@ -439,11 +439,6 @@ with tab1:
         color_map_options,
         index=0
     )
-    periodic_table_color_map = st.sidebar.selectbox(
-        "Color Map for Periodic Table",
-        color_map_options,
-        index=0
-    )
     scatter_label_fontsize = st.sidebar.slider("Scatter Label Font Size", 8, 16, 12, 1)
     scatter_axis_linewidth = st.sidebar.slider("Scatter Axis Line Width", 0.5, 5.0, 2.0, 0.5)
     fig_width = st.sidebar.slider("Matplotlib Figure Width", 6, 12, 8, 1)
@@ -475,20 +470,6 @@ with tab1:
         index=0
     )
     parallel_label_fontsize = st.sidebar.slider("Parallel Coordinates Label Font Size", 8, 16, 12, 1)
-
-    # Create element color map based on selected periodic table color map
-    if periodic_table_color_map.endswith('_r'):
-        cmap_name = periodic_table_color_map[:-2]
-    else:
-        cmap_name = periodic_table_color_map
-    if cmap_name in plt.colormaps():
-        cmap = plt.colormaps[cmap_name]
-        colors = [matplotlib.colors.to_hex(cmap(i / len(available_elements))) for i in range(len(available_elements))]
-    else:
-        st.warning(f"Invalid colormap '{periodic_table_color_map}', defaulting to 'viridis'")
-        cmap = plt.colormaps['viridis']
-        colors = [matplotlib.colors.to_hex(cmap(i / len(available_elements))) for i in range(len(available_elements))]
-    element_color_map = dict(zip(available_elements, colors))
 
     # Latent Space Visualizations
     if not df.empty:
@@ -546,14 +527,14 @@ with tab1:
             formulas_filtered_filtered = formulas_filtered
 
         st.write("#### Periodic Table Legend (Present Elements)")
-        st.write("Click an element in the periodic table or use the dropdown to filter scatter plots.")
-        fig_periodic = plot_periodic_table(available_elements, element_color_map, fontsize=periodic_table_fontsize)
+        st.write("Click an element in the periodic table or use the dropdown to filter scatter plots. Colors match the Dominant Element scatter plots.")
+        fig_periodic = plot_periodic_table(available_elements, default_element_color_map, fontsize=periodic_table_fontsize)
         st.plotly_chart(fig_periodic, use_container_width=True)
         fig_periodic.write_html(os.path.join(script_dir, 'periodic_table_present.html'))
 
         st.write("#### Periodic Table Legend (All Elements)")
-        st.write("Elements not in the database are shown in gray.")
-        fig_full_periodic = plot_full_periodic_table(all_elements, available_elements, element_color_map, fontsize=periodic_table_fontsize)
+        st.write("Elements not in the database are shown in gray. Colors match the Dominant Element scatter plots.")
+        fig_full_periodic = plot_full_periodic_table(all_elements, available_elements, default_element_color_map, fontsize=periodic_table_fontsize)
         st.plotly_chart(fig_full_periodic, use_container_width=True)
         fig_full_periodic.write_html(os.path.join(script_dir, 'periodic_table_all.html'))
 
@@ -578,7 +559,7 @@ with tab1:
 
         st.write("#### PCA Latent Space: Seebeck Coefficient")
         fig_pca_seebeck = px.scatter(
-            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,  # Use lowercase colormap
+            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,
             labels={'x': 'PC1', 'y': 'PC2', 'color': 'Seebeck Coefficient (μV/K)'},
             title=f'PCA Latent Space: Seebeck Coefficient ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -616,7 +597,7 @@ with tab1:
 
         st.write("#### t-SNE Latent Space: Seebeck Coefficient")
         fig_tsne_seebeck = px.scatter(
-            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,  # Use lowercase colormap
+            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,
             labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Seebeck Coefficient (μV/K)'},
             title=f't-SNE Latent Space: Seebeck Coefficient ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -654,7 +635,7 @@ with tab1:
 
         st.write("#### UMAP Latent Space: Seebeck Coefficient")
         fig_umap_seebeck = px.scatter(
-            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,  # Use lowercase colormap
+            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,
             labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Seebeck Coefficient (μV/K)'},
             title=f'UMAP Latent Space: Seebeck Coefficient ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -747,7 +728,7 @@ with tab1:
         parallel_df = pd.DataFrame(z_normalized, columns=[f'Latent Dim {i+1}' for i in range(8)])
         parallel_df['Seebeck'] = output_feature_cleaned
         fig_parallel = px.parallel_coordinates(
-            parallel_df, color='Seebeck', color_continuous_scale=parallel_color_scale,  # Use lowercase colormap
+            parallel_df, color='Seebeck', color_continuous_scale=parallel_color_scale,
             labels={f'Latent Dim {i+1}': f'Latent Dim {i+1}' for i in range(8)},
             title='8D Latent Space Parallel Coordinates'
         )
