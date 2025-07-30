@@ -25,13 +25,13 @@ thermoelectric_weights = {
     'Bi': 2.0, 'Te': 2.0, 'Sb': 1.8, 'Pb': 1.8, 'Se': 1.5, 'Sn': 1.5, 'Ge': 1.3, 'Si': 1.3, 'Mg': 1.2
 }
 
-# List of all 85 elements
+# List of all 85 elements in the specified order
 all_elements = [
-    'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
-    'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr',
-    'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te', 'I', 'Xe',
-    'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
-    'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi'
+    'In', 'Tl', 'La', 'Sr', 'Mn', 'Ni', 'Ru', 'Pd', 'Hf', 'Cs', 'Sc', 'Co', 'Si', 'Fe', 'Li', 'Cl', 'Yb', 'Te',
+    'N', 'Ti', 'Cd', 'Zr', 'Y', 'Ga', 'Cr', 'Pr', 'Tm', 'Br', 'Ca', 'Mg', 'Rb', 'Au', 'Nd', 'Ce', 'Ho', 'I', 'Ba',
+    'Se', 'Pb', 'Ge', 'Gd', 'Tb', 'Dy', 'Cu', 'Na', 'Sb', 'Bi', 'P', 'As', 'Sm', 'Zn', 'Al', 'Sn', 'Ag', 'Nb', 'Mo',
+    'V', 'S', 'K', 'Lu', 'O', 'Eucaire="text/html">Eu', 'Ta', 'B', 'Er', 'H', 'He', 'Be', 'C', 'F', 'Ne', 'Ar', 'Kr',
+    'Xe', 'Tc', 'Rh', 'Pm', 'Re', 'Os', 'Ir', 'Pt', 'Hg', 'W'
 ]
 
 # Define color map for elements
@@ -45,32 +45,20 @@ default_color_list = (
 default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_elements)]))
 
 def parse_formula(formula):
-    # Regular expression pattern to match elements and their stoichiometric ratios
     pattern = r'([A-Z][a-z]*)(\d*\.?\d*)?'
-    # Extract elements from the formula
     elements = re.findall(pattern, formula)
-    # Return a list of unique elements
     return list(set([element[0] for element in elements]))
 
 def extract_multiplier_and_replace(input_formula):
-    # Define a regular expression pattern to find a number after a closing parenthesis
     pattern = r'\)(\d*\.?\d*)?'
-    # Search for the pattern in the input formula
     match = re.search(pattern, input_formula)
     if match:
-        # If a match is found, extract the multiplier
         multiplier = float(match.group(1)) if match.group(1) else 1.0
-        # Split the input formula based on the pattern
         parts = re.split(pattern, input_formula)
-        # Extract the part without the multiplier
         formula_without_multiplier = parts[0]
-        # Remove the content before the opening parenthesis
         content_within_parentheses = formula_without_multiplier.split('(')[-1]
-        # Find the elements and their stoichiometry within the parentheses
         elements_within_parentheses = re.findall(r'([A-Za-z]+)(\d*\.?\d*)', content_within_parentheses)
-        # Multiply the stoichiometry of each element by the multiplier
         modified_elements = [(element, str(float(stoichiometry) * multiplier) if stoichiometry else '0.0') for element, stoichiometry in elements_within_parentheses]
-        # Construct the modified formula
         modified_formula = formula_without_multiplier.split('(')[0]
         modified_formula += ''.join(element + stoichiometry for element, stoichiometry in modified_elements)
         return modified_formula
@@ -95,6 +83,12 @@ def featurize_materials(df, available_elements):
             composition_dict = composition.fractional_composition.as_dict()
             feature_vector = {element: composition_dict.get(element, 0) for element in available_elements}
             feature_vector['temperature(K)'] = row['temperature(K)']
+            feature_vector['seebeck_coefficient(μV/K)'] = row['seebeck_coefficient(μV/K)']
+            feature_vector['electrical_conductivity(S/m)'] = float('nan')
+            feature_vector['thermal_conductivity(W/mK)'] = float('nan')
+            feature_vector['power_factor(W/mK2)'] = float('nan')
+            feature_vector['ZT'] = float('nan')
+            feature_vector['reference'] = float('nan')
             features.append(feature_vector)
         except Exception as e:
             st.warning(f"Error processing formula {row['Formula']}: {e}")
@@ -152,18 +146,16 @@ st.title("Thermoelectric Material Featurization")
 # File uploader for CSV
 uploaded_file = st.file_uploader("Upload thermoelectric_materials.csv", type=["csv"])
 if uploaded_file is None:
-    st.error("Please upload a CSV file to proceed.")
+    st.error("Please upload a CSV file containing 'Formula', 'temperature(K)', and 'seebeck_coefficient(μV/K)' columns.")
     st.stop()
 
 # Read and process the uploaded CSV
 try:
     csv_content = uploaded_file.read().decode('utf-8')
     df = pd.read_csv(io.StringIO(csv_content))
-    if 'Formula' not in df.columns:
-        st.error("CSV file must contain a 'Formula' column.")
-        st.stop()
-    if 'temperature(K)' not in df.columns:
-        st.error("CSV file must contain a 'temperature(K)' column.")
+    required_columns = ['Formula', 'temperature(K)', 'seebeck_coefficient(μV/K)']
+    if not all(col in df.columns for col in required_columns):
+        st.error("CSV file must contain 'Formula', 'temperature(K)', and 'seebeck_coefficient(μV/K)' columns.")
         st.stop()
 except Exception as e:
     st.error(f"Error reading CSV file: {e}")
@@ -184,16 +176,25 @@ if not features:
 df_features = pd.DataFrame(features)
 
 # Insert modified formulas into original DataFrame
-temp_col_index = df.columns.get_loc("temperature(K)")
 modified_formulas = df['Formula'].apply(extract_multiplier_and_replace)
-df.insert(temp_col_index, 'modformula', modified_formulas)
+df['modformula'] = modified_formulas
 
 # Combine feature vectors with original DataFrame
-df_combined = pd.concat([df.iloc[:, :temp_col_index+1], df_features, df.iloc[:, temp_col_index+1:]], axis=1)
+# Reorder columns to match the specified order
+output_columns = ['Formula', 'modformula'] + all_elements + [
+    'temperature(K)', 'seebeck_coefficient(μV/K)', 'electrical_conductivity(S/m)',
+    'thermal_conductivity(W/mK)', 'power_factor(W/mK2)', 'ZT', 'reference', 'sum_elements'
+]
+df_combined = pd.concat([df[['Formula', 'modformula', 'temperature(K)', 'seebeck_coefficient(μV/K)']], df_features], axis=1)
+df_combined['sum_elements'] = df_combined[all_elements].sum(axis=1)
 
-# Calculate sum of elemental columns
-elemental_columns = all_elements
-df_combined['sum_elements'] = df_combined[elemental_columns].sum(axis=1)
+# Ensure all required columns are present, fill missing ones with NaN
+for col in output_columns:
+    if col not in df_combined.columns:
+        df_combined[col] = float('nan')
+
+# Reorder the DataFrame columns
+df_combined = df_combined[output_columns]
 
 # Drop any unnamed columns
 df_combined = df_combined.loc[:, ~df_combined.columns.str.contains('^Unnamed')]
@@ -206,7 +207,7 @@ st.plotly_chart(fig_periodic, use_container_width=True)
 
 # Display and allow download of combined DataFrame
 st.subheader("Featurized Data")
-st.write("The DataFrame includes feature vectors for all 85 elements, modified formulas, and original columns.")
+st.write("The DataFrame includes feature vectors for all 85 elements, modified formulas, and additional properties (set to NaN where not provided).")
 st.write(df_combined)
 st.download_button(
     label="Download Combined CSV",
