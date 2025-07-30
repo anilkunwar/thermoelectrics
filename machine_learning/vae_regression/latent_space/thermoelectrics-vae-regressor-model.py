@@ -691,7 +691,8 @@ with tab1:
         unique_elements = np.unique(dominant_elements_filtered_filtered)
         for element in unique_elements:
             idx = dominant_elements_filtered_filtered == element
-            ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=default_element_color_map.get(element, '#FFFFFF'), label=element, s=marker_size, alpha=marker_alpha)
+            colors = [default_element_color_map.get(element, '#FFFFFF')] * np.sum(idx)
+            ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=colors, label=element, s=marker_size, alpha=marker_alpha)
         ax2.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_title(f'PCA Latent Space: Dominant Element ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
