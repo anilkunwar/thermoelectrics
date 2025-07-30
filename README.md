@@ -2,6 +2,12 @@
 
 a. Machine Learning
 
+# Fetching the upto date data of thermoelectricity
+[![machinelearningthermoelectricity](https://img.shields.io/badge/tener-streamlit-red)](https://thermoelectrics-namedentityrecognition.streamlit.app/)
+
+
+
+
 # Featurization:
 
 The computer code to convert the chemical formula and temperature row into composition-temperature feature vector
