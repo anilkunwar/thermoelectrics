@@ -1,18 +1,3 @@
-streamlit
-pyngrok
-pymatgen
-scikit-learn
-setuptools
-seaborn
-plotly
-kaleido
-pandas
 chemdataextractor  #chemdataextractor2
-requests
+streamlit 
 arxiv
-transformers
-torch
-spacy
-nltk
-mpi4py
-dawg
