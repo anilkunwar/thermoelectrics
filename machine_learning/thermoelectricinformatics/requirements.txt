@@ -4,3 +4,4 @@ scikit-learn
 plotly
 pymatgen
 arxiv
+chemdataextractor2
