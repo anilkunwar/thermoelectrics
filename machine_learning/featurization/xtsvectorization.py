@@ -30,7 +30,7 @@ all_elements = [
     'In', 'Tl', 'La', 'Sr', 'Mn', 'Ni', 'Ru', 'Pd', 'Hf', 'Cs', 'Sc', 'Co', 'Si', 'Fe', 'Li', 'Cl', 'Yb', 'Te',
     'N', 'Ti', 'Cd', 'Zr', 'Y', 'Ga', 'Cr', 'Pr', 'Tm', 'Br', 'Ca', 'Mg', 'Rb', 'Au', 'Nd', 'Ce', 'Ho', 'I', 'Ba',
     'Se', 'Pb', 'Ge', 'Gd', 'Tb', 'Dy', 'Cu', 'Na', 'Sb', 'Bi', 'P', 'As', 'Sm', 'Zn', 'Al', 'Sn', 'Ag', 'Nb', 'Mo',
-    'V', 'S', 'K', 'Lu', 'O', 'Eucaire="text/html">Eu', 'Ta', 'B', 'Er', 'H', 'He', 'Be', 'C', 'F', 'Ne', 'Ar', 'Kr',
+    'V', 'S', 'K', 'Lu', 'O', 'Eu', 'Ta', 'B', 'Er', 'H', 'He', 'Be', 'C', 'F', 'Ne', 'Ar', 'Kr',
     'Xe', 'Tc', 'Rh', 'Pm', 'Re', 'Os', 'Ir', 'Pt', 'Hg', 'W'
 ]
 
@@ -82,8 +82,7 @@ def featurize_materials(df, available_elements):
             composition = Composition(modified_formula)
             composition_dict = composition.fractional_composition.as_dict()
             feature_vector = {element: composition_dict.get(element, 0) for element in available_elements}
-            feature_vector['temperature(K)'] = row['temperature(K)']
-            feature_vector['seebeck_coefficient(μV/K)'] = row['seebeck_coefficient(μV/K)']
+            # Include only additional properties as NaN, exclude temperature and seebeck to avoid duplicates
             feature_vector['electrical_conductivity(S/m)'] = float('nan')
             feature_vector['thermal_conductivity(W/mK)'] = float('nan')
             feature_vector['power_factor(W/mK2)'] = float('nan')
@@ -180,15 +179,24 @@ modified_formulas = df['Formula'].apply(extract_multiplier_and_replace)
 df['modformula'] = modified_formulas
 
 # Combine feature vectors with original DataFrame
+# Select only the original columns needed to avoid duplicates
+df_combined = pd.concat([df[['Formula', 'modformula', 'temperature(K)', 'seebeck_coefficient(μV/K)']], df_features], axis=1)
+
+# Calculate sum of elemental columns
+df_combined['sum_elements'] = df_combined[all_elements].sum(axis=1)
+
+# Check for duplicate columns
+if df_combined.columns.duplicated().any():
+    duplicate_columns = df_combined.columns[df_combined.columns.duplicated()].tolist()
+    st.error(f"Duplicate columns found in DataFrame: {duplicate_columns}")
+    st.stop()
+
 # Reorder columns to match the specified order
 output_columns = ['Formula', 'modformula'] + all_elements + [
     'temperature(K)', 'seebeck_coefficient(μV/K)', 'electrical_conductivity(S/m)',
     'thermal_conductivity(W/mK)', 'power_factor(W/mK2)', 'ZT', 'reference', 'sum_elements'
 ]
-df_combined = pd.concat([df[['Formula', 'modformula', 'temperature(K)', 'seebeck_coefficient(μV/K)']], df_features], axis=1)
-df_combined['sum_elements'] = df_combined[all_elements].sum(axis=1)
-
-# Ensure all required columns are present, fill missing ones with NaN
+# Ensure all required columns are present
 for col in output_columns:
     if col not in df_combined.columns:
         df_combined[col] = float('nan')
