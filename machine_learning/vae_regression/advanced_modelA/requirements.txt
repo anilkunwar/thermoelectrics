@@ -3,6 +3,7 @@ pyngrok
 pymatgen
 torch
 scikit-learn
+umap-learn
 setuptools
 seaborn
 plotly
