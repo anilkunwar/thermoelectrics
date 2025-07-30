@@ -10,6 +10,8 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import umap
 import joblib
+import matplotlib
+matplotlib.use('Agg')  # Set non-interactive backend for Streamlit
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
@@ -234,6 +236,49 @@ def plot_latent_box(z_train, box_linewidth=1, label_fontsize=12, axis_linewidth=
     )
     return fig
 
+# Periodic Table Plot
+def plot_periodic_table(available_elements, element_color_map, fontsize=12):
+    # Simplified periodic table layout (row, col) for each element
+    periodic_table_positions = {
+        'Li': (3, 1), 'Na': (4, 1), 'K': (5, 1), 'Rb': (6, 1), 'Cs': (7, 1),
+        'Be': (3, 2), 'Mg': (4, 2), 'Ca': (5, 2), 'Sr': (6, 2), 'Ba': (7, 2),
+        'Sc': (5, 3), 'Y': (6, 3), 'La': (7, 3), 'Ce': (8, 3), 'Pr': (8, 4), 'Nd': (8, 5), 'Sm': (8, 6), 'Eu': (8, 7), 'Gd': (8, 8), 'Tb': (8, 9), 'Dy': (8, 10), 'Ho': (8, 11), 'Er': (8, 12), 'Tm': (8, 13), 'Yb': (8, 14), 'Lu': (8, 15),
+        'Ti': (5, 4), 'Zr': (6, 4), 'Hf': (7, 4),
+        'V': (5, 5), 'Nb': (6, 5), 'Ta': (7, 5),
+        'Cr': (5, 6), 'Mo': (6, 6),
+        'Mn': (5, 7),
+        'Fe': (5, 8), 'Co': (5, 9), 'Ni': (5, 10), 'Cu': (5, 11), 'Zn': (5, 12),
+        'B': (3, 13), 'Al': (4, 13), 'Ga': (5, 13), 'In': (6, 13), 'Tl': (7, 13),
+        'C': (3, 14), 'Si': (4, 14), 'Ge': (5, 14), 'Sn': (6, 14), 'Pb': (7, 14),
+        'N': (3, 15), 'P': (4, 15), 'As': (5, 15), 'Sb': (6, 15), 'Bi': (7, 15),
+        'O': (3, 16), 'S': (4, 16), 'Se': (5, 16), 'Te': (6, 16),
+        'F': (3, 17), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17),
+        'Au': (7, 11), 'Ag': (6, 11), 'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8), 'Rb': (6, 1)
+    }
+    fig = go.Figure()
+    for element in available_elements:
+        if element in periodic_table_positions:
+            row, col = periodic_table_positions[element]
+            fig.add_trace(go.Scatter(
+                x=[col], y=[-row],  # Negative row to match periodic table orientation (row 1 at top)
+                mode='markers+text',
+                text=[element],
+                textposition='middle center',
+                marker=dict(size=30, color=element_color_map.get(element, '#FFFFFF'), line=dict(width=1, color='black')),
+                hoverinfo='text',
+                textfont=dict(size=fontsize, color='black', family='Arial'),
+                showlegend=False
+            ))
+    fig.update_layout(
+        title=dict(text='Periodic Table Legend for Dominant Elements', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
+        xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        yaxis=dict(range=[-9, 0], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        plot_bgcolor='white', paper_bgcolor='white',
+        width=800, height=400,
+        margin=dict(l=20, r=20, t=50, b=20)
+    )
+    return fig
+
 # Load models and scalers
 script_dir = os.path.dirname(os.path.abspath(__file__))
 try:
@@ -257,6 +302,18 @@ available_elements = [
     'Sm', 'Ba', 'Cr', 'Sr', 'Ni', 'Ca', 'As', 'Mn', 'Mo', 'Cd', 'Ti', 'Nb', 'Hf', 'Gd', 'Ag', 'Ge', 'Li', 'Br', 'Au', 'I',
     'N', 'Na', 'Cu', 'Ho', 'K'
 ]
+
+# Define color map for elements
+color_list = (
+    px.colors.qualitative.Set1 + 
+    px.colors.qualitative.D3 + 
+    list(plt.cm.tab20(np.linspace(0, 1, 20))) + 
+    list(plt.cm.tab20b(np.linspace(0, 1, 20))) + 
+    list(plt.cm.tab20c(np.linspace(0, 1, 20)))
+)
+# Convert matplotlib colors (RGBA) to hex
+color_list = [matplotlib.colors.to_hex(c) if isinstance(c, tuple) else c for c in color_list]
+element_color_map = dict(zip(available_elements, color_list[:len(available_elements)]))
 
 # Streamlit UI
 st.title("Thermoelectric Material Analysis and Seebeck Coefficient Prediction")
@@ -320,6 +377,7 @@ with tab1:
     radar_alpha = st.sidebar.slider("Radar Fill Transparency", 0.1, 0.5, 0.3, 0.05)
     radar_linewidth = st.sidebar.slider("Radar Line Width", 1.0, 5.0, 2.0, 0.5)
     radar_fontsize = st.sidebar.slider("Radar Font Size", 8, 16, 12, 1)
+    periodic_table_fontsize = st.sidebar.slider("Periodic Table Font Size", 8, 16, 12, 1)
     radar_legend_pos = st.sidebar.selectbox("Radar Legend Position", ['upper right', 'upper left', 'lower right', 'lower left'], index=0)
     radar_axis_linewidth = st.sidebar.slider("Radar Axis Line Width", 0.5, 5.0, 1.5, 0.5)
     box_linewidth = st.sidebar.slider("Box Plot Line Width", 0.5, 5.0, 1.0, 0.5)
@@ -387,11 +445,19 @@ with tab1:
             dominant_elements_filtered_filtered = dominant_elements_filtered
             formulas_filtered_filtered = formulas_filtered
 
+        # Periodic Table Legend
+        st.write("#### Periodic Table Legend")
+        fig_periodic = plot_periodic_table(available_elements, element_color_map, fontsize=periodic_table_fontsize)
+        st.plotly_chart(fig_periodic, use_container_width=True)
+        fig_periodic.write_html(os.path.join(script_dir, 'periodic_table_legend.html'))
+
         # Dominant Element Distribution
         st.write("#### Dominant Element Distribution")
         element_counts = pd.Series(dominant_elements_filtered).value_counts()
         fig_bar = px.bar(x=element_counts.index, y=element_counts.values, labels={'x': 'Dominant Element', 'y': 'Count'},
                          title='Distribution of Dominant Elements')
+        # Apply colors from element_color_map to bar chart
+        fig_bar.update_traces(marker_color=[element_color_map.get(elem, '#FFFFFF') for elem in element_counts.index])
         fig_bar.update_layout(
             title=dict(text='Distribution of Dominant Elements', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
             xaxis=dict(tickfont=dict(size=scatter_label_fontsize), showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black'),
@@ -428,7 +494,8 @@ with tab1:
 
         st.write("#### PCA Latent Space: Dominant Element")
         fig_pca_elements = px.scatter(
-            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=dominant_elements_filtered_filtered, color_discrete_sequence=px.colors.qualitative.Set1,
+            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=dominant_elements_filtered_filtered,
+            color_discrete_map=element_color_map,
             labels={'x': 'PC1', 'y': 'PC2', 'color': 'Dominant Element'},
             title=f'PCA Latent Space: Dominant Element ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -466,7 +533,8 @@ with tab1:
 
         st.write("#### t-SNE Latent Space: Dominant Element")
         fig_tsne_elements = px.scatter(
-            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=dominant_elements_filtered_filtered, color_discrete_sequence=px.colors.qualitative.Set1,
+            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=dominant_elements_filtered_filtered,
+            color_discrete_map=element_color_map,
             labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Dominant Element'},
             title=f't-SNE Latent Space: Dominant Element ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -504,7 +572,8 @@ with tab1:
 
         st.write("#### UMAP Latent Space: Dominant Element")
         fig_umap_elements = px.scatter(
-            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=dominant_elements_filtered_filtered, color_discrete_sequence=px.colors.qualitative.Set1,
+            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=dominant_elements_filtered_filtered,
+            color_discrete_map=element_color_map,
             labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Dominant Element'},
             title=f'UMAP Latent Space: Dominant Element ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -541,11 +610,9 @@ with tab1:
         ax1.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
         # Updated Matplotlib scatter plot for dominant element
         unique_elements = np.unique(dominant_elements_filtered_filtered)
-        colors = plt.cm.Set1(np.linspace(0, 1, len(unique_elements)))
-        color_map = dict(zip(unique_elements, colors))
         for element in unique_elements:
             idx = dominant_elements_filtered_filtered == element
-            ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=[color_map[element]], label=element, s=marker_size, alpha=marker_alpha)
+            ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=[element_color_map.get(element, '#FFFFFF')], label=element, s=marker_size, alpha=marker_alpha)
         ax2.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_title(f'PCA Latent Space: Dominant Element ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
@@ -557,8 +624,13 @@ with tab1:
         ax2.spines['bottom'].set_linewidth(scatter_axis_linewidth)
         ax2.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
         plt.tight_layout()
-        plt.savefig(os.path.join(script_dir, 'latent_2d_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
+        # Save and display
         st.pyplot(fig)
+        try:
+            plt.savefig(os.path.join(script_dir, 'latent_2d_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
+        except Exception as e:
+            st.warning(f"Error saving Matplotlib figure: {e}")
+        plt.close(fig)  # Close figure to free memory
 
         # Radar Plot
         st.write("#### 8D Latent Space Radar Plot")
@@ -568,8 +640,12 @@ with tab1:
         fig_radar = plot_radar(radar_data, radar_labels, "8D Latent Space Radar Plot", max_samples=max_samples,
                                alpha=radar_alpha, linewidth=radar_linewidth, fontsize=radar_fontsize,
                                legend_pos=radar_legend_pos, axis_linewidth=radar_axis_linewidth)
-        plt.savefig(os.path.join(script_dir, 'latent_radar.pdf'), dpi=300, bbox_inches='tight', format='pdf')
         st.pyplot(fig_radar)
+        try:
+            plt.savefig(os.path.join(script_dir, 'latent_radar.pdf'), dpi=300, bbox_inches='tight', format='pdf')
+        except Exception as e:
+            st.warning(f"Error saving radar plot: {e}")
+        plt.close(fig_radar)
 
         # Parallel Coordinates
         st.write("#### 8D Latent Space Parallel Coordinates")
@@ -597,6 +673,11 @@ with tab1:
                                                   train_color=train_color, val_color=val_color,
                                                   tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
         st.pyplot(fig_vae)
+        try:
+            plt.savefig(os.path.join(script_dir, 'vae_history_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
+        except Exception as e:
+            st.warning(f"Error saving VAE history plot: {e}")
+        plt.close(fig_vae)
         fig_vae_plotly = plot_training_history_plotly(vae_history_df, "VAE", train_color=train_color, val_color=val_color,
                                                      linewidth=history_linewidth, label_fontsize=history_label_fontsize,
                                                      tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
@@ -610,6 +691,11 @@ with tab1:
                                                         train_color=train_color, val_color=val_color,
                                                         tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
         st.pyplot(fig_regressor)
+        try:
+            plt.savefig(os.path.join(script_dir, 'regressor_history_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
+        except Exception as e:
+            st.warning(f"Error saving regressor history plot: {e}")
+        plt.close(fig_regressor)
         fig_regressor_plotly = plot_training_history_plotly(regressor_history_df, "Regressor", train_color=train_color, val_color=val_color,
                                                            linewidth=history_linewidth, label_fontsize=history_label_fontsize,
                                                            tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
