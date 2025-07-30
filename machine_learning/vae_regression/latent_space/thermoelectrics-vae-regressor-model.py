@@ -308,7 +308,7 @@ def plot_full_periodic_table(all_elements, available_elements, element_color_map
         'Li': (2, 1), 'Be': (2, 2), 'B': (2, 13), 'C': (2, 14), 'N': (2, 15), 'O': (2, 16), 'F': (2, 17), 'Ne': (2, 18),
         'Na': (3, 1), 'Mg': (3, 2), 'Al': (3, 13), 'Si': (3, 14), 'P': (3, 15), 'S': (3, 16), 'Cl': (3, 17), 'Ar': (3, 18),
         'K': (4, 1), 'Ca': (4, 2), 'Sc': (4, 3), 'Ti': (4, 4), 'V': (4, 5), 'Cr': (4, 6), 'Mn': (4, 7), 'Fe': (4, 8),
-        'Co': (4, 9), 'Ni': (4, 10), 'Cu': (4, 11), 'Zn': (4, 12), 'Ga': (4, 13), 'Ge': (4, 14), 'As': (4, 15),
+        'Co': (4, 9), 'Ni': (4, 10), 'Cu': (4, 11), '218Zn': (4, 12), 'Ga': (4, 13), 'Ge': (4, 14), 'As': (4, 15),
         'Se': (4, 16), 'Br': (4, 17), 'Kr': (4, 18),
         'Rb': (5, 1), 'Sr': (5, 2), 'Y': (5, 3), 'Zr': (5, 4), 'Nb': (5, 5), 'Mo': (5, 6), 'Tc': (5, 7), 'Ru': (5, 8),
         'Rh': (5, 9), 'Pd': (5, 10), 'Ag': (5, 11), 'Cd': (5, 12), 'In': (5, 13), 'Sn': (5, 14), 'Sb': (5, 15),
@@ -688,16 +688,17 @@ with tab1:
         ax1.spines['left'].set_linewidth(scatter_axis_linewidth)
         ax1.spines['bottom'].set_linewidth(scatter_axis_linewidth)
         ax1.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
-        
-        # FIXED: Use single color per element group
         unique_elements = np.unique(dominant_elements_filtered_filtered)
         for element in unique_elements:
             idx = dominant_elements_filtered_filtered == element
-            if np.sum(idx) > 0:  # Only plot if there are points
+            count = np.sum(idx)
+            if count > 0:  # Only plot if there are points
                 color = default_element_color_map.get(element, '#FFFFFF')
-                ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], 
-                            c=color, label=element, s=marker_size, alpha=marker_alpha)
-        
+                colors = [color] * count
+                st.write(f"Scatter debug — element: {element}, idx.shape: {idx.shape}, count: {count}, color: {color}")
+                ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=colors, label=element, s=marker_size, alpha=marker_alpha)
+            else:
+                st.warning(f"No points for element {element}, skipping scatter plot.")
         ax2.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_title(f'PCA Latent Space: Dominant Element ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
