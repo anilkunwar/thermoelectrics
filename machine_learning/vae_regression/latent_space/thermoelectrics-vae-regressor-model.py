@@ -353,7 +353,13 @@ with tab1:
         # Dimensionality Reduction
         pca = PCA(n_components=2)
         z_2d_pca = pca.fit_transform(z_train)
-        tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+        #tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+        tsne = TSNE(n_components=2,perplexity=30,
+                learning_rate='auto',  
+                init='pca',
+                random_state=42
+            )
+
         z_2d_tsne = tsne.fit_transform(z_train)
         umap_reducer = umap.UMAP(n_components=2, random_state=42)
         z_2d_umap = umap_reducer.fit_transform(z_train)
