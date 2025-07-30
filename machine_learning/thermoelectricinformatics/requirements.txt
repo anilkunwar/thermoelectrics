@@ -7,7 +7,7 @@ seaborn
 plotly
 kaleido
 pandas
-chemdataextractor2
+chemdataextractor==1.5.0  #chemdataextractor2
 requests
 arxiv
 transformers
