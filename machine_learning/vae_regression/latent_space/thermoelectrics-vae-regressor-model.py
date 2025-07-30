@@ -39,6 +39,20 @@ plt.rcParams['ytick.major.width'] = 1.5
 plt.rcParams['xtick.major.size'] = 6
 plt.rcParams['ytick.major.size'] = 6
 
+# Electronegativity and thermoelectric weights
+electronegativity = {
+    'O': 3.44, 'Cl': 3.16, 'N': 3.04, 'Br': 2.96, 'I': 2.66, 'S': 2.58, 'Se': 2.55, 'Te': 2.1, 'P': 2.19, 'As': 2.18,
+    'Sb': 2.05, 'Bi': 2.02, 'Si': 1.90, 'Ge': 2.01, 'Sn': 1.96, 'Pb': 2.33, 'B': 2.04, 'Al': 1.61, 'Ga': 1.81,
+    'In': 1.78, 'Tl': 2.04, 'Mg': 1.31, 'Ca': 1.00, 'Sr': 0.95, 'Ba': 0.89, 'Li': 0.98, 'Na': 0.93, 'K': 0.82,
+    'Rb': 0.82, 'Cs': 0.79, 'Sc': 1.36, 'Y': 1.22, 'La': 1.10, 'Ce': 1.12, 'Pr': 1.13, 'Nd': 1.14, 'Sm': 1.17,
+    'Eu': 1.2, 'Gd': 1.2, 'Tb': 1.1, 'Dy': 1.22, 'Ho': 1.23, 'Er': 1.24, 'Tm': 1.25, 'Yb': 1.1, 'Lu': 1.27,
+    'Ti': 1.54, 'Zr': 1.33, 'Hf': 1.3, 'V': 1.63, 'Nb': 1.6, 'Ta': 1.5, 'Cr': 1.66, 'Mo': 2.16, 'Mn': 1.55,
+    'Fe': 1.83, 'Co': 1.88, 'Ni': 1.91, 'Cu': 1.90, 'Zn': 1.65, 'Cd': 1.69, 'Ag': 1.93, 'Au': 2.54, 'Pd': 2.20, 'Ru': 2.2
+}
+thermoelectric_weights = {
+    'Bi': 2.0, 'Te': 2.0, 'Sb': 1.8, 'Pb': 1.8, 'Se': 1.5, 'Sn': 1.5, 'Ge': 1.3, 'Si': 1.3, 'Mg': 1.2
+}
+
 # VAE Model
 class VAE(nn.Module):
     def __init__(self, input_dim=66, latent_dim=8):
@@ -200,7 +214,6 @@ def plot_training_history_matplotlib(history_df, title, filename, linewidth=2.5,
     ax2.spines['bottom'].set_linewidth(axis_linewidth)
     ax2.tick_params(axis='both', which='major', labelsize=tick_fontsize, width=axis_linewidth, length=6)
     plt.tight_layout()
-    plt.savefig(filename, dpi=300, bbox_inches='tight', format='pdf')
     return fig
 
 # Enhanced Training History Plot (Plotly)
@@ -236,13 +249,12 @@ def plot_latent_box(z_train, box_linewidth=1, label_fontsize=12, axis_linewidth=
     )
     return fig
 
-# Periodic Table Plot
+# Enhanced Periodic Table Plot
 def plot_periodic_table(available_elements, element_color_map, fontsize=12):
-    # Simplified periodic table layout (row, col) for each element
     periodic_table_positions = {
         'Li': (3, 1), 'Na': (4, 1), 'K': (5, 1), 'Rb': (6, 1), 'Cs': (7, 1),
         'Be': (3, 2), 'Mg': (4, 2), 'Ca': (5, 2), 'Sr': (6, 2), 'Ba': (7, 2),
-        'Sc': (5, 3), 'Y': (6, 3), 'La': (7, 3), 'Ce': (8, 3), 'Pr': (8, 4), 'Nd': (8, 5), 'Sm': (8, 6), 'Eu': (8, 7), 'Gd': (8, 8), 'Tb': (8, 9), 'Dy': (8, 10), 'Ho': (8, 11), 'Er': (8, 12), 'Tm': (8, 13), 'Yb': (8, 14), 'Lu': (8, 15),
+        'Sc': (5, 3), 'Y': (6, 3),
         'Ti': (5, 4), 'Zr': (6, 4), 'Hf': (7, 4),
         'V': (5, 5), 'Nb': (6, 5), 'Ta': (7, 5),
         'Cr': (5, 6), 'Mo': (6, 6),
@@ -253,28 +265,50 @@ def plot_periodic_table(available_elements, element_color_map, fontsize=12):
         'N': (3, 15), 'P': (4, 15), 'As': (5, 15), 'Sb': (6, 15), 'Bi': (7, 15),
         'O': (3, 16), 'S': (4, 16), 'Se': (5, 16), 'Te': (6, 16),
         'F': (3, 17), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17),
-        'Au': (7, 11), 'Ag': (6, 11), 'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8), 'Rb': (6, 1)
+        'Au': (7, 11), 'Ag': (6, 11), 'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8),
+        'La': (9, 3), 'Ce': (9, 4), 'Pr': (9, 5), 'Nd': (9, 6), 'Sm': (9, 7), 'Eu': (9, 8),
+        'Gd': (9, 9), 'Tb': (9, 10), 'Dy': (9, 11), 'Ho': (9, 12), 'Er': (9, 13), 'Tm': (9, 14), 'Yb': (9, 15), 'Lu': (9, 16)
     }
     fig = go.Figure()
     for element in available_elements:
         if element in periodic_table_positions:
             row, col = periodic_table_positions[element]
+            en = electronegativity.get(element, 1.0)
+            tw = thermoelectric_weights.get(element, 1.0)
             fig.add_trace(go.Scatter(
-                x=[col], y=[-row],  # Negative row to match periodic table orientation (row 1 at top)
+                x=[col], y=[-row],
                 mode='markers+text',
                 text=[element],
                 textposition='middle center',
-                marker=dict(size=30, color=element_color_map.get(element, '#FFFFFF'), line=dict(width=1, color='black')),
+                marker=dict(size=40, color=element_color_map.get(element, '#FFFFFF'), line=dict(width=2, color='black')),
                 hoverinfo='text',
-                textfont=dict(size=fontsize, color='black', family='Arial'),
+                hovertext=[f"Element: {element}<br>Electronegativity: {en:.2f}<br>Thermoelectric Weight: {tw:.2f}"],
+                customdata=[element],
+                name=element,
                 showlegend=False
             ))
+    # Add grid lines
+    shapes = []
+    for col in range(1, 19):
+        shapes.append(dict(type='line', x0=col-0.5, x1=col-0.5, y0=-9.5, y1=-2.5, line=dict(color='black', width=1)))
+    for row in range(3, 10):
+        shapes.append(dict(type='line', x0=0.5, x1=18.5, y0=-row+0.5, y1=-row+0.5, line=dict(color='black', width=1)))
+    # Add group and period labels
+    annotations = [
+        dict(x=col, y=-2, text=str(col), showarrow=False, font=dict(size=fontsize, family='Arial')) for col in range(1, 19)
+    ] + [
+        dict(x=0, y=-row, text=str(row-2), showarrow=False, font=dict(size=fontsize, family='Arial')) for row in range(3, 8)
+    ] + [
+        dict(x=0, y=-9, text='Lanthanides', showarrow=False, font=dict(size=fontsize, family='Arial'))
+    ]
     fig.update_layout(
         title=dict(text='Periodic Table Legend for Dominant Elements', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
         xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        yaxis=dict(range=[-9, 0], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        yaxis=dict(range=[-10, -2], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        shapes=shapes,
+        annotations=annotations,
         plot_bgcolor='white', paper_bgcolor='white',
-        width=800, height=400,
+        width=900, height=450,
         margin=dict(l=20, r=20, t=50, b=20)
     )
     return fig
@@ -305,13 +339,12 @@ available_elements = [
 
 # Define color map for elements
 color_list = (
-    px.colors.qualitative.Set1 + 
-    px.colors.qualitative.D3 + 
+    px.colors.qualitative.Plotly + 
+    px.colors.qualitative.Pastel1 + 
     list(plt.cm.tab20(np.linspace(0, 1, 20))) + 
     list(plt.cm.tab20b(np.linspace(0, 1, 20))) + 
     list(plt.cm.tab20c(np.linspace(0, 1, 20)))
 )
-# Convert matplotlib colors (RGBA) to hex
 color_list = [matplotlib.colors.to_hex(c) if isinstance(c, tuple) else c for c in color_list]
 element_color_map = dict(zip(available_elements, color_list[:len(available_elements)]))
 
@@ -334,7 +367,9 @@ with tab1:
     
     # Load data from database
     try:
-        df = pd.read_sql("SELECT * FROM thermoelectric_materials;", conn)
+        df =
+
+ pd.read_sql("SELECT * FROM thermoelectric_materials;", conn)
         vae_history_df = pd.read_sql("SELECT * FROM vae_training_history;", conn)
         regressor_history_df = pd.read_sql("SELECT * FROM regressor_training_history;", conn)
     except Exception as e:
@@ -417,11 +452,21 @@ with tab1:
         umap_reducer = umap.UMAP(n_components=2, random_state=42)
         z_2d_umap = umap_reducer.fit_transform(z_train)
 
-        dominant_elements = df['Formula'].apply(
-            lambda x: Composition(x).get_el_amt_dict().get(
-                max(Composition(x).get_el_amt_dict(), key=Composition(x).get_el_amt_dict().get), 'Unknown'
-            ) if Composition(x).valid else 'Unknown'
-        )
+        # Improved dominant element selection
+        def get_dominant_element(formula):
+            try:
+                comp = Composition(formula)
+                if not comp.valid:
+                    return 'Unknown'
+                comp_dict = comp.get_el_amt_dict()
+                scores = {
+                    el: comp_dict[el] * electronegativity.get(el, 1.0) * thermoelectric_weights.get(el, 1.0)
+                    for el in comp_dict
+                }
+                return max(scores, key=scores.get)
+            except:
+                return 'Unknown'
+        dominant_elements = df['Formula'].apply(get_dominant_element)
         dominant_elements_filtered = dominant_elements.iloc[valid_indices].values
         formulas_filtered = df['Formula'].iloc[valid_indices].values
 
@@ -447,6 +492,7 @@ with tab1:
 
         # Periodic Table Legend
         st.write("#### Periodic Table Legend")
+        st.write("Click an element in the periodic table or use the dropdown to filter scatter plots.")
         fig_periodic = plot_periodic_table(available_elements, element_color_map, fontsize=periodic_table_fontsize)
         st.plotly_chart(fig_periodic, use_container_width=True)
         fig_periodic.write_html(os.path.join(script_dir, 'periodic_table_legend.html'))
@@ -456,7 +502,6 @@ with tab1:
         element_counts = pd.Series(dominant_elements_filtered).value_counts()
         fig_bar = px.bar(x=element_counts.index, y=element_counts.values, labels={'x': 'Dominant Element', 'y': 'Count'},
                          title='Distribution of Dominant Elements')
-        # Apply colors from element_color_map to bar chart
         fig_bar.update_traces(marker_color=[element_color_map.get(elem, '#FFFFFF') for elem in element_counts.index])
         fig_bar.update_layout(
             title=dict(text='Distribution of Dominant Elements', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
@@ -608,7 +653,6 @@ with tab1:
         ax1.spines['left'].set_linewidth(scatter_axis_linewidth)
         ax1.spines['bottom'].set_linewidth(scatter_axis_linewidth)
         ax1.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
-        # Updated Matplotlib scatter plot for dominant element
         unique_elements = np.unique(dominant_elements_filtered_filtered)
         for element in unique_elements:
             idx = dominant_elements_filtered_filtered == element
@@ -624,13 +668,12 @@ with tab1:
         ax2.spines['bottom'].set_linewidth(scatter_axis_linewidth)
         ax2.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
         plt.tight_layout()
-        # Save and display
         st.pyplot(fig)
         try:
             plt.savefig(os.path.join(script_dir, 'latent_2d_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
         except Exception as e:
             st.warning(f"Error saving Matplotlib figure: {e}")
-        plt.close(fig)  # Close figure to free memory
+        plt.close(fig)
 
         # Radar Plot
         st.write("#### 8D Latent Space Radar Plot")
