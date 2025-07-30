@@ -15,3 +15,4 @@ torch
 spacy
 nltk
 mpi4py
+dawg
