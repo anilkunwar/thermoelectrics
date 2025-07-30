@@ -2,6 +2,12 @@
 
 a. Machine Learning
 
+# Featurization:
+
+The computer code to convert the chemical formula and temperature row into composition-temperature feature vector
+[![machinelearningthermoelectricity](https://img.shields.io/badge/ctbfv-streamlit-red)](https://composition-temperature-featurevector.streamlit.app/)
+
+
 VAE-with regressor for determination of Seebeck Coefficient
 # Advanced Models
 # Web App (for Model A trained using PyTorch):
