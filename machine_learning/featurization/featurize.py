@@ -75,16 +75,14 @@ def featurize_materials(csv_file, available_elements):
 
 # Read the CSV file and count the available elements
 #csv_file = 'thermoelectric_materials.csv'
-# Get the directory of the current script
-script_dir = os.path.dirname(os.path.abspath(__file__))
+# Get absolute path to the script's directory
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Build the full path to the CSV file in the adjacent directory
-csv_file = os.path.join(script_dir, '..', '..', 'thermoelectric_materials.csv')
-
-# Optional: resolve full path
+# Construct the path to the CSV file located two levels up (adjust if needed)
+csv_file = os.path.join(SCRIPT_DIR, '..', '..', 'thermoelectric_materials.csv')
 csv_file = os.path.abspath(csv_file)
 
-# Check if it exists
+# Check that it exists before continuing
 if not os.path.exists(csv_file):
     st.error(f"CSV file not found at: {csv_file}")
     st.stop()
