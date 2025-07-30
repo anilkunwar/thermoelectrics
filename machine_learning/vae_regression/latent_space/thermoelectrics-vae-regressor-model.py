@@ -159,21 +159,43 @@ def preprocess_new_data(df, available_elements, scaler):
     X_scaled = scaler.transform(X_imputed)
     return X_scaled
 
-# Enhanced Radar Plot Function
+
+
 def plot_radar(data, labels, title, max_samples=10, alpha=0.3, linewidth=2, fontsize=16, legend_pos='upper right', axis_linewidth=1.5):
     num_vars = data.shape[1]
-    anglesEstegharad(angles, values, color=colors[i], alpha=alpha, label=labels[i])
+
+    # Compute angles for each axis
+    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
+    angles += angles[:1]  # Complete the loop
+
+    # Create radar plot
+    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+
+    # Color palette
+    colors = plt.cm.tab10(np.linspace(0, 1, min(max_samples, len(data))))
+
+    # Plot each sample
+    for i in range(min(max_samples, len(data))):
+        values = data[i].tolist()
+        values += values[:1]  # Close the radar shape
+
+        ax.fill(angles, values, color=colors[i], alpha=alpha, label=labels[i])
         ax.plot(angles, values, color=colors[i], linewidth=linewidth)
+
+    # Configure plot
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
-    ax.set_thetagrids(np.degrees(angles[:-1]), [f'Latent Dim {i+1}' for i in range(num_vars)], fontsize=fontsize, weight='bold')
+    ax.set_thetagrids(np.degrees(angles[:-1]), [f'Latent Dim {i+1}' for i in range(num_vars)],
+                      fontsize=fontsize, weight='bold')
     ax.set_title(title, fontsize=fontsize + 2, pad=20, weight='bold')
-    ax.legend(loc=legend_pos, bbox_to_anchor=(1.2, 1.1), fontsize=fontsize - 2, frameon=True, edgecolor='black')
+    ax.legend(loc=legend_pos, bbox_to_anchor=(1.2, 1.1), fontsize=fontsize - 2, frameon=True)
     ax.grid(True, linestyle='--', alpha=0.5)
     ax.spines['polar'].set_visible(True)
     ax.spines['polar'].set_linewidth(axis_linewidth)
+
     plt.tight_layout()
     return fig
+
 
 # Enhanced Training History Plot (Matplotlib)
 def plot_training_history_matplotlib(history_df, title, filename, linewidth=2.5, fontsize=12, train_color='#1f77b4', val_color='#ff7f0e', tick_fontsize=10, axis_linewidth=1.5):
