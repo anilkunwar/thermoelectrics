@@ -380,16 +380,16 @@ all_elements = [
     'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi'
 ]
 
-# Color map options
+# Color map options (lowercase for Matplotlib compatibility)
 color_map_options = [
-    'Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis', 'Turbo', 'Jet', 'Rainbow',
-    'Bluered', 'Electric', 'Hot', 'Cool', 'Spring', 'Summer', 'Autumn', 'Winter',
-    'Greys', 'Greens', 'Blues', 'Reds', 'Purples', 'Oranges',
-    'YlOrRd', 'YlOrBr', 'YlGnBu', 'YlGn', 'RdPu', 'PuRd', 'PuBuGn', 'PuBu',
-    'OrRd', 'GnBu', 'BuPu', 'BuGn', 'Pinkyl', 'Coolwarm', 'Spectral',
-    'RdYlBu', 'RdYlGn', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
-    'Viridis_r', 'Plasma_r', 'Inferno_r', 'Magma_r', 'Cividis_r', 'Turbo_r',
-    'Jet_r', 'Rainbow_r', 'Greys_r', 'Blues_r', 'Reds_r'
+    'viridis', 'plasma', 'inferno', 'magma', 'cividis', 'turbo', 'jet', 'rainbow',
+    'bluered', 'electric', 'hot', 'cool', 'spring', 'summer', 'autumn', 'winter',
+    'greys', 'greens', 'blues', 'reds', 'purples', 'oranges',
+    'ylorrd', 'ylorbr', 'ylgnbu', 'ylgn', 'rdpu', 'purd', 'pubugn', 'pubu',
+    'orrd', 'gnbu', 'bupu', 'bugn', 'pinkyl', 'coolwarm', 'spectral',
+    'rdylbu', 'rdylgn', 'rdbu', 'piyg', 'prgn', 'brbg', 'puor', 'rdgy',
+    'viridis_r', 'plasma_r', 'inferno_r', 'magma_r', 'cividis_r', 'turbo_r',
+    'jet_r', 'rainbow_r', 'greys_r', 'blues_r', 'reds_r'
 ]
 
 # Define default color map for scatter plots
@@ -478,10 +478,15 @@ with tab1:
 
     # Create element color map based on selected periodic table color map
     if periodic_table_color_map.endswith('_r'):
-        cmap = plt.colormaps[periodic_table_color_map[:-2]]  # Updated to use plt.colormaps
+        cmap_name = periodic_table_color_map[:-2]
+    else:
+        cmap_name = periodic_table_color_map
+    if cmap_name in plt.colormaps():
+        cmap = plt.colormaps[cmap_name]
         colors = [matplotlib.colors.to_hex(cmap(i / len(available_elements))) for i in range(len(available_elements))]
     else:
-        cmap = plt.colormaps[periodic_table_color_map]  # Updated to use plt.colormaps
+        st.warning(f"Invalid colormap '{periodic_table_color_map}', defaulting to 'viridis'")
+        cmap = plt.colormaps['viridis']
         colors = [matplotlib.colors.to_hex(cmap(i / len(available_elements))) for i in range(len(available_elements))]
     element_color_map = dict(zip(available_elements, colors))
 
@@ -573,7 +578,7 @@ with tab1:
 
         st.write("#### PCA Latent Space: Seebeck Coefficient")
         fig_pca_seebeck = px.scatter(
-            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale.lower(),
+            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,  # Use lowercase colormap
             labels={'x': 'PC1', 'y': 'PC2', 'color': 'Seebeck Coefficient (μV/K)'},
             title=f'PCA Latent Space: Seebeck Coefficient ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -611,7 +616,7 @@ with tab1:
 
         st.write("#### t-SNE Latent Space: Seebeck Coefficient")
         fig_tsne_seebeck = px.scatter(
-            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale.lower(),
+            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,  # Use lowercase colormap
             labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Seebeck Coefficient (μV/K)'},
             title=f't-SNE Latent Space: Seebeck Coefficient ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -649,7 +654,7 @@ with tab1:
 
         st.write("#### UMAP Latent Space: Seebeck Coefficient")
         fig_umap_seebeck = px.scatter(
-            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale.lower(),
+            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,  # Use lowercase colormap
             labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Seebeck Coefficient (μV/K)'},
             title=f'UMAP Latent Space: Seebeck Coefficient ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
@@ -742,7 +747,7 @@ with tab1:
         parallel_df = pd.DataFrame(z_normalized, columns=[f'Latent Dim {i+1}' for i in range(8)])
         parallel_df['Seebeck'] = output_feature_cleaned
         fig_parallel = px.parallel_coordinates(
-            parallel_df, color='Seebeck', color_continuous_scale=parallel_color_scale.lower(),
+            parallel_df, color='Seebeck', color_continuous_scale=parallel_color_scale,  # Use lowercase colormap
             labels={f'Latent Dim {i+1}': f'Latent Dim {i+1}' for i in range(8)},
             title='8D Latent Space Parallel Coordinates'
         )
@@ -764,7 +769,8 @@ with tab1:
                                                   tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
         st.pyplot(fig_vae)
         try:
-            plt.savefig(os.path.join(script_dir, 'vae_history_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
+            plt.savefig(os.path.join(script_dir, 'vae_history_matplotlib.pdf'), dpi=300, bbox_inch
+es='tight', format='pdf')
         except Exception as e:
             st.warning(f"Error saving VAE history plot: {e}")
         plt.close(fig_vae)
