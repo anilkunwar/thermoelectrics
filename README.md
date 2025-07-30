@@ -19,7 +19,7 @@ Web app for Data Visualization with Seebeck Coefficient Prediction
 [![machinelearningthermoelectricity](https://img.shields.io/badge/TEvisualsSeebeckPyTorch-streamlit-red)](https://thermoelectricitymachinelearningmodel1.streamlit.app/)
 
 
-same as the above one with t-SNE and UMAP based visualizations [![machinelearningthermoelectricity](https://img.shields.io/badge/TEtsneUMAPSeebeckPyTorch-streamlit-red)](https://thermoelectricity-vaepredictormodel1.streamlit.app/)
+with t-SNE and UMAP based visualizations [![machinelearningthermoelectricity](https://img.shields.io/badge/TEtsneUMAPSeebeckPyTorch-streamlit-red)](https://thermoelectricity-vaepredictormodel1.streamlit.app/)
 
 # Basic Models
 
