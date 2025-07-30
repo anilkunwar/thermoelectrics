@@ -18,6 +18,7 @@ from pymatgen.core.composition import Composition
 import sqlite3
 import re
 import os
+from matplotlib.lines import Line2D
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -111,7 +112,7 @@ def parse_formula(formula):
     return list(set([element[0] for element in elements]))
 
 def extract_multiplier_and_replace(input_formula):
-    pattern = r'\)(\d*\.?\d*)'
+    pattern = r'\)(\d*\.?\d*)?'
     match = re.search(pattern, input_formula)
     if match:
         multiplier = float(match.group(1)) if match.group(1) else 1.0
@@ -353,13 +354,7 @@ with tab1:
         # Dimensionality Reduction
         pca = PCA(n_components=2)
         z_2d_pca = pca.fit_transform(z_train)
-        #tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
-        tsne = TSNE(n_components=2,perplexity=30,
-                learning_rate='auto',  
-                init='pca',
-                random_state=42
-            )
-
+        tsne = TSNE(n_components=2, perplexity=30, learning_rate='auto', init='pca', random_state=42)
         z_2d_tsne = tsne.fit_transform(z_train)
         umap_reducer = umap.UMAP(n_components=2, random_state=42)
         z_2d_umap = umap_reducer.fit_transform(z_train)
@@ -370,6 +365,41 @@ with tab1:
             ) if Composition(x).valid else 'Unknown'
         )
         dominant_elements_filtered = dominant_elements.iloc[valid_indices].values
+        formulas_filtered = df['Formula'].iloc[valid_indices].values
+
+        # Sidebar filter for dominant element
+        st.sidebar.header("Filter by Dominant Element")
+        unique_elements = np.unique(dominant_elements_filtered)
+        selected_element = st.sidebar.selectbox("Select Dominant Element", ['All'] + list(unique_elements))
+        if selected_element != 'All':
+            mask = dominant_elements_filtered == selected_element
+            z_2d_pca_filtered = z_2d_pca[mask]
+            z_2d_tsne_filtered = z_2d_tsne[mask]
+            z_2d_umap_filtered = z_2d_umap[mask]
+            output_feature_cleaned_filtered = output_feature_cleaned[mask]
+            dominant_elements_filtered_filtered = dominant_elements_filtered[mask]
+            formulas_filtered_filtered = formulas_filtered[mask]
+        else:
+            z_2d_pca_filtered = z_2d_pca
+            z_2d_tsne_filtered = z_2d_tsne
+            z_2d_umap_filtered = z_2d_umap
+            output_feature_cleaned_filtered = output_feature_cleaned
+            dominant_elements_filtered_filtered = dominant_elements_filtered
+            formulas_filtered_filtered = formulas_filtered
+
+        # Dominant Element Distribution
+        st.write("#### Dominant Element Distribution")
+        element_counts = pd.Series(dominant_elements_filtered).value_counts()
+        fig_bar = px.bar(x=element_counts.index, y=element_counts.values, labels={'x': 'Dominant Element', 'y': 'Count'},
+                         title='Distribution of Dominant Elements')
+        fig_bar.update_layout(
+            title=dict(text='Distribution of Dominant Elements', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
+            xaxis=dict(tickfont=dict(size=scatter_label_fontsize), showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black'),
+            yaxis=dict(tickfont=dict(size=scatter_label_fontsize), showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black'),
+            plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize)
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+        fig_bar.write_html(os.path.join(script_dir, 'dominant_element_distribution.html'))
 
         # Box Plot
         st.write("#### Latent Dimensions Box Plot")
@@ -380,13 +410,14 @@ with tab1:
         # PCA Scatter Plots
         st.write("#### PCA Latent Space: Seebeck Coefficient")
         fig_pca_seebeck = px.scatter(
-            x=z_2d_pca[:, 0], y=z_2d_pca[:, 1], color=output_feature_cleaned, color_continuous_scale=color_scale.lower(),
+            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale.lower(),
             labels={'x': 'PC1', 'y': 'PC2', 'color': 'Seebeck Coefficient (μV/K)'},
-            title='PCA Latent Space: Seebeck Coefficient'
+            title=f'PCA Latent Space: Seebeck Coefficient ({selected_element})',
+            hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
         )
         fig_pca_seebeck.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_pca_seebeck.update_layout(
-            title=dict(text='PCA Latent Space: Seebeck Coefficient', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
+            title=dict(text=f'PCA Latent Space: Seebeck Coefficient ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
             xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
@@ -397,13 +428,14 @@ with tab1:
 
         st.write("#### PCA Latent Space: Dominant Element")
         fig_pca_elements = px.scatter(
-            x=z_2d_pca[:, 0], y=z_2d_pca[:, 1], color=dominant_elements_filtered, color_discrete_sequence=px.colors.qualitative.Set1,
+            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=dominant_elements_filtered_filtered, color_discrete_sequence=px.colors.qualitative.Set1,
             labels={'x': 'PC1', 'y': 'PC2', 'color': 'Dominant Element'},
-            title='PCA Latent Space: Dominant Element'
+            title=f'PCA Latent Space: Dominant Element ({selected_element})',
+            hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
         )
         fig_pca_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_pca_elements.update_layout(
-            title=dict(text='PCA Latent Space: Dominant Element', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
+            title=dict(text=f'PCA Latent Space: Dominant Element ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
             xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
@@ -416,13 +448,14 @@ with tab1:
         # t-SNE Scatter Plots
         st.write("#### t-SNE Latent Space: Seebeck Coefficient")
         fig_tsne_seebeck = px.scatter(
-            x=z_2d_tsne[:, 0], y=z_2d_tsne[:, 1], color=output_feature_cleaned, color_continuous_scale=color_scale.lower(),
+            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale.lower(),
             labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Seebeck Coefficient (μV/K)'},
-            title='t-SNE Latent Space: Seebeck Coefficient'
+            title=f't-SNE Latent Space: Seebeck Coefficient ({selected_element})',
+            hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
         )
         fig_tsne_seebeck.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_tsne_seebeck.update_layout(
-            title=dict(text='t-SNE Latent Space: Seebeck Coefficient', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
+            title=dict(text=f't-SNE Latent Space: Seebeck Coefficient ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
             xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
@@ -433,13 +466,14 @@ with tab1:
 
         st.write("#### t-SNE Latent Space: Dominant Element")
         fig_tsne_elements = px.scatter(
-            x=z_2d_tsne[:, 0], y=z_2d_tsne[:, 1], color=dominant_elements_filtered, color_discrete_sequence=px.colors.qualitative.Set1,
+            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=dominant_elements_filtered_filtered, color_discrete_sequence=px.colors.qualitative.Set1,
             labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Dominant Element'},
-            title='t-SNE Latent Space: Dominant Element'
+            title=f't-SNE Latent Space: Dominant Element ({selected_element})',
+            hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
         )
         fig_tsne_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_tsne_elements.update_layout(
-            title=dict(text='t-SNE Latent Space: Dominant Element', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
+            title=dict(text=f't-SNE Latent Space: Dominant Element ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
             xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
@@ -452,13 +486,14 @@ with tab1:
         # UMAP Scatter Plots
         st.write("#### UMAP Latent Space: Seebeck Coefficient")
         fig_umap_seebeck = px.scatter(
-            x=z_2d_umap[:, 0], y=z_2d_umap[:, 1], color=output_feature_cleaned, color_continuous_scale=color_scale.lower(),
+            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale.lower(),
             labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Seebeck Coefficient (μV/K)'},
-            title='UMAP Latent Space: Seebeck Coefficient'
+            title=f'UMAP Latent Space: Seebeck Coefficient ({selected_element})',
+            hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
         )
         fig_umap_seebeck.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_umap_seebeck.update_layout(
-            title=dict(text='UMAP Latent Space: Seebeck Coefficient', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
+            title=dict(text=f'UMAP Latent Space: Seebeck Coefficient ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
             xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
@@ -469,13 +504,14 @@ with tab1:
 
         st.write("#### UMAP Latent Space: Dominant Element")
         fig_umap_elements = px.scatter(
-            x=z_2d_umap[:, 0], y=z_2d_umap[:, 1], color=dominant_elements_filtered, color_discrete_sequence=px.colors.qualitative.Set1,
+            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=dominant_elements_filtered_filtered, color_discrete_sequence=px.colors.qualitative.Set1,
             labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Dominant Element'},
-            title='UMAP Latent Space: Dominant Element'
+            title=f'UMAP Latent Space: Dominant Element ({selected_element})',
+            hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
         )
         fig_umap_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_umap_elements.update_layout(
-            title=dict(text='UMAP Latent Space: Dominant Element', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
+            title=dict(text=f'UMAP Latent Space: Dominant Element ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
             xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
             plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
@@ -491,10 +527,10 @@ with tab1:
         except OSError:
             plt.style.use('ggplot')
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
-        scatter1 = ax1.scatter(z_2d_pca[:, 0], z_2d_pca[:, 1], c=output_feature_cleaned, cmap='viridis', s=marker_size, alpha=marker_alpha)
+        scatter1 = ax1.scatter(z_2d_pca_filtered[:, 0], z_2d_pca_filtered[:, 1], c=output_feature_cleaned_filtered, cmap='viridis', s=marker_size, alpha=marker_alpha)
         ax1.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
         ax1.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
-        ax1.set_title('PCA Latent Space: Seebeck Coefficient', fontsize=scatter_label_fontsize + 2, weight='bold')
+        ax1.set_title(f'PCA Latent Space: Seebeck Coefficient ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
         cbar1 = plt.colorbar(scatter1, ax=ax1, label='Seebeck Coefficient (μV/K)', pad=0.02)
         cbar1.ax.tick_params(labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
         ax1.grid(True, linestyle='--', alpha=0.5)
@@ -503,10 +539,17 @@ with tab1:
         ax1.spines['left'].set_linewidth(scatter_axis_linewidth)
         ax1.spines['bottom'].set_linewidth(scatter_axis_linewidth)
         ax1.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
-        scatter2 = ax2.scatter(z_2d_pca[:, 0], z_2d_pca[:, 1], c=pd.Categorical(dominant_elements_filtered).codes, cmap='Set1', s=marker_size, alpha=marker_alpha)
+        # Updated Matplotlib scatter plot for dominant element
+        unique_elements = np.unique(dominant_elements_filtered_filtered)
+        colors = plt.cm.Set1(np.linspace(0, 1, len(unique_elements)))
+        color_map = dict(zip(unique_elements, colors))
+        for element in unique_elements:
+            idx = dominant_elements_filtered_filtered == element
+            ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=[color_map[element]], label=element, s=marker_size, alpha=marker_alpha)
         ax2.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
-        ax2.set_title('PCA Latent Space: Dominant Element', fontsize=scatter_label_fontsize + 2, weight='bold')
+        ax2.set_title(f'PCA Latent Space: Dominant Element ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
+        ax2.legend(title='Dominant Element', fontsize=scatter_label_fontsize - 2, loc='upper right', bbox_to_anchor=(1.3, 1), frameon=True, edgecolor='black')
         ax2.grid(True, linestyle='--', alpha=0.5)
         ax2.spines['top'].set_visible(False)
         ax2.spines['right'].set_visible(False)
