@@ -671,6 +671,52 @@ with tab1:
         st.plotly_chart(fig_umap_elements, use_container_width=True)
         fig_umap_elements.write_html(os.path.join(script_dir, 'latent_umap_elements_plotly.html'))
 
+        try:
+            plt.style.use('seaborn-v0_8-whitegrid')
+        except OSError:
+            plt.style.use('ggplot')
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
+        scatter1 = ax1.scatter(z_2d_pca_filtered[:, 0], z_2d_pca_filtered[:, 1], c=output_feature_cleaned_filtered, cmap='viridis', s=marker_size, alpha=marker_alpha)
+        ax1.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
+        ax1.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
+        ax1.set_title(f'PCA Latent Space: Seebeck Coefficient ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
+        cbar1 = plt.colorbar(scatter1, ax=ax1, label='Seebeck Coefficient (μV/K)', pad=0.02)
+        cbar1.ax.tick_params(labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
+        ax1.grid(True, linestyle='--', alpha=0.5)
+        ax1.spines['top'].set_visible(False)
+        ax1.spines['right'].set_visible(False)
+        ax1.spines['left'].set_linewidth(scatter_axis_linewidth)
+        ax1.spines['bottom'].set_linewidth(scatter_axis_linewidth)
+        ax1.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
+        unique_elements = np.unique(dominant_elements_filtered_filtered)
+        for element in unique_elements:
+            idx = dominant_elements_filtered_filtered == element
+            count = np.sum(idx)
+            if count > 0:  # Only plot if there are points
+                color = default_element_color_map.get(element, '#FFFFFF')
+                colors = [color] * count
+                st.write(f"Scatter debug — element: {element}, idx.shape: {idx.shape}, count: {count}, color: {color}")
+                ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=colors, label=element, s=marker_size, alpha=marker_alpha)
+            else:
+                st.warning(f"No points for element {element}, skipping scatter plot.")
+        ax2.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
+        ax2.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
+        ax2.set_title(f'PCA Latent Space: Dominant Element ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
+        ax2.legend(title='Dominant Element', fontsize=scatter_label_fontsize - 2, loc='upper right', bbox_to_anchor=(1.3, 1), frameon=True, edgecolor='black')
+        ax2.grid(True, linestyle='--', alpha=0.5)
+        ax2.spines['top'].set_visible(False)
+        ax2.spines['right'].set_visible(False)
+        ax2.spines['left'].set_linewidth(scatter_axis_linewidth)
+        ax2.spines['bottom'].set_linewidth(scatter_axis_linewidth)
+        ax2.tick_params(axis='both', which='major', labelsize=scatter_label_fontsize - 2, width=scatter_axis_linewidth, length=6)
+        plt.tight_layout()
+        st.pyplot(fig)
+        try:
+            plt.savefig(os.path.join(script_dir, 'latent_2d_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
+        except Exception as e:
+            st.warning(f"Error saving Matplotlib figure: {e}")
+        plt.close(fig)
+
         st.write("#### 8D Latent Space Radar Plot")
         sample_indices = np.random.choice(len(z_normalized), size=max_samples, replace=False)
         radar_data = z_normalized[sample_indices]
