@@ -367,9 +367,7 @@ with tab1:
     
     # Load data from database
     try:
-        df =
-
- pd.read_sql("SELECT * FROM thermoelectric_materials;", conn)
+        df = pd.read_sql("SELECT * FROM thermoelectric_materials;", conn)
         vae_history_df = pd.read_sql("SELECT * FROM vae_training_history;", conn)
         regressor_history_df = pd.read_sql("SELECT * FROM regressor_training_history;", conn)
     except Exception as e:
