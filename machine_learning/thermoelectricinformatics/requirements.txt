@@ -1,3 +1,4 @@
-chemdataextractor  #chemdataextractor2
-streamlit 
-arxiv
+streamlit
+pandas
+scikit-learn
+plotly
