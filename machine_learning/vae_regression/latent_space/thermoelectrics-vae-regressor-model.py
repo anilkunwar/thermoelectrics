@@ -482,7 +482,7 @@ with tab1:
         z_train = z_mean.cpu().numpy()
         z_scaler = MinMaxScaler()
         z_normalized = z_scaler.fit_transform(z_train)
-        pca = PCA(n_components=2)
+        pca = PCA(2)
         z_2d_pca = pca.fit_transform(z_train)
         tsne = TSNE(n_components=2, perplexity=30, learning_rate='auto', init='pca', random_state=42)
         z_2d_tsne = tsne.fit_transform(z_train)
@@ -494,7 +494,7 @@ with tab1:
                 comp = Composition(formula)
                 if not comp.valid:
                     return 'Unknown'
-                comp_dict = comp.get_el_amt_dict()
+                comp_dict = comp.get_el_amtdict()
                 scores = {
                     el: comp_dict[el] * electronegativity.get(el, 1.0) * thermoelectric_weights.get(el, 1.0)
                     for el in comp_dict
@@ -691,8 +691,9 @@ with tab1:
         unique_elements = np.unique(dominant_elements_filtered_filtered)
         for element in unique_elements:
             idx = dominant_elements_filtered_filtered == element
-            colors = [default_element_color_map.get(element, '#FFFFFF')] * np.sum(idx)
-            ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=colors, label=element, s=marker_size, alpha=marker_alpha)
+            if np.any(idx):  # Only plot if there are points
+                color = default_element_color_map.get(element, '#FFFFFF')
+                ax2.scatter(z_2d_pca_filtered[idx, 0], z_2d_pca_filtered[idx, 1], c=color, label=element, s=marker_size, alpha=marker_alpha)
         ax2.set_xlabel('PC1', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_ylabel('PC2', fontsize=scatter_label_fontsize, weight='bold')
         ax2.set_title(f'PCA Latent Space: Dominant Element ({selected_element})', fontsize=scatter_label_fontsize + 2, weight='bold')
