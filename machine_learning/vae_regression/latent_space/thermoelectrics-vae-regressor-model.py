@@ -49,6 +49,7 @@ electronegativity = {
     'Ti': 1.54, 'Zr': 1.33, 'Hf': 1.3, 'V': 1.63, 'Nb': 1.6, 'Ta': 1.5, 'Cr': 1.66, 'Mo': 2.16, 'Mn': 1.55,
     'Fe': 1.83, 'Co': 1.88, 'Ni': 1.91, 'Cu': 1.90, 'Zn': 1.65, 'Cd': 1.69, 'Ag': 1.93, 'Au': 2.54, 'Pd': 2.20, 'Ru': 2.2
 }
+
 thermoelectric_weights = {
     'Bi': 2.0, 'Te': 2.0, 'Sb': 1.8, 'Pb': 1.8, 'Se': 1.5, 'Sn': 1.5, 'Ge': 1.3, 'Si': 1.3, 'Mg': 1.2
 }
@@ -70,10 +71,12 @@ class VAE(nn.Module):
             nn.Linear(64, 128), nn.ReLU(), nn.BatchNorm1d(128, momentum=0.05), nn.Dropout(0.4),
             nn.Linear(128, input_dim), nn.Sigmoid(),
         )
+
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
         return mu + eps * std
+
     def forward(self, x):
         h = self.encoder(x)
         mu = self.z_mean(h)
@@ -91,6 +94,7 @@ class Regressor(nn.Module):
             nn.Linear(16, 8), nn.ReLU(), nn.BatchNorm1d(8, momentum=0.05), nn.Dropout(0.4),
             nn.Linear(8, 1), nn.Sigmoid(),
         )
+
     def forward(self, x):
         return self.model(x)
 
@@ -159,30 +163,17 @@ def preprocess_new_data(df, available_elements, scaler):
     X_scaled = scaler.transform(X_imputed)
     return X_scaled
 
-
-
 def plot_radar(data, labels, title, max_samples=10, alpha=0.3, linewidth=2, fontsize=16, legend_pos='upper right', axis_linewidth=1.5):
     num_vars = data.shape[1]
-
-    # Compute angles for each axis
     angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
     angles += angles[:1]  # Complete the loop
-
-    # Create radar plot
     fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
-
-    # Color palette
     colors = plt.cm.tab10(np.linspace(0, 1, min(max_samples, len(data))))
-
-    # Plot each sample
     for i in range(min(max_samples, len(data))):
         values = data[i].tolist()
         values += values[:1]  # Close the radar shape
-
         ax.fill(angles, values, color=colors[i], alpha=alpha, label=labels[i])
         ax.plot(angles, values, color=colors[i], linewidth=linewidth)
-
-    # Configure plot
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
     ax.set_thetagrids(np.degrees(angles[:-1]), [f'Latent Dim {i+1}' for i in range(num_vars)],
@@ -192,10 +183,8 @@ def plot_radar(data, labels, title, max_samples=10, alpha=0.3, linewidth=2, font
     ax.grid(True, linestyle='--', alpha=0.5)
     ax.spines['polar'].set_visible(True)
     ax.spines['polar'].set_linewidth(axis_linewidth)
-
     plt.tight_layout()
     return fig
-
 
 # Enhanced Training History Plot (Matplotlib)
 def plot_training_history_matplotlib(history_df, title, filename, linewidth=2.5, fontsize=12, train_color='#1f77b4', val_color='#ff7f0e', tick_fontsize=10, axis_linewidth=1.5):
@@ -405,10 +394,10 @@ color_map_options = [
 
 # Define default color map for scatter plots
 default_color_list = (
-    px.colors.qualitative.Plotly + 
-    px.colors.qualitative.Pastel1 + 
-    list(plt.cm.tab20(np.linspace(0, 1, 20))) + 
-    list(plt.cm.tab20b(np.linspace(0, 1, 20))) + 
+    px.colors.qualitative.Plotly +
+    px.colors.qualitative.Pastel1 +
+    list(plt.cm.tab20(np.linspace(0, 1, 20))) +
+    list(plt.cm.tab20b(np.linspace(0, 1, 20))) +
     list(plt.cm.tab20c(np.linspace(0, 1, 20)))
 )
 default_color_list = [matplotlib.colors.to_hex(c) if isinstance(c, tuple) else c for c in default_color_list]
@@ -489,10 +478,10 @@ with tab1:
 
     # Create element color map based on selected periodic table color map
     if periodic_table_color_map.endswith('_r'):
-        cmap = plt.cm.get_cmap(periodic_table_color_map[:-2])
+        cmap = plt.colormaps[periodic_table_color_map[:-2]]  # Updated to use plt.colormaps
         colors = [matplotlib.colors.to_hex(cmap(i / len(available_elements))) for i in range(len(available_elements))]
     else:
-        cmap = plt.cm.get_cmap(periodic_table_color_map)
+        cmap = plt.colormaps[periodic_table_color_map]  # Updated to use plt.colormaps
         colors = [matplotlib.colors.to_hex(cmap(i / len(available_elements))) for i in range(len(available_elements))]
     element_color_map = dict(zip(available_elements, colors))
 
@@ -507,8 +496,6 @@ with tab1:
         z_train = z_mean.cpu().numpy()
         z_scaler = MinMaxScaler()
         z_normalized = z_scaler.fit_transform(z_train)
-
-        # Dimensionality Reduction
         pca = PCA(n_components=2)
         z_2d_pca = pca.fit_transform(z_train)
         tsne = TSNE(n_components=2, perplexity=30, learning_rate='auto', init='pca', random_state=42)
@@ -516,7 +503,6 @@ with tab1:
         umap_reducer = umap.UMAP(n_components=2, random_state=42)
         z_2d_umap = umap_reducer.fit_transform(z_train)
 
-        # Improved dominant element selection
         def get_dominant_element(formula):
             try:
                 comp = Composition(formula)
@@ -530,11 +516,11 @@ with tab1:
                 return max(scores, key=scores.get)
             except:
                 return 'Unknown'
+
         dominant_elements = df['Formula'].apply(get_dominant_element)
         dominant_elements_filtered = dominant_elements.iloc[valid_indices].values
         formulas_filtered = df['Formula'].iloc[valid_indices].values
 
-        # Sidebar filter for dominant element
         st.sidebar.header("Filter by Dominant Element")
         unique_elements = np.unique(dominant_elements_filtered)
         selected_element = st.sidebar.selectbox("Select Dominant Element", ['All'] + list(unique_elements))
@@ -554,7 +540,6 @@ with tab1:
             dominant_elements_filtered_filtered = dominant_elements_filtered
             formulas_filtered_filtered = formulas_filtered
 
-        # Periodic Table Legends
         st.write("#### Periodic Table Legend (Present Elements)")
         st.write("Click an element in the periodic table or use the dropdown to filter scatter plots.")
         fig_periodic = plot_periodic_table(available_elements, element_color_map, fontsize=periodic_table_fontsize)
@@ -567,7 +552,6 @@ with tab1:
         st.plotly_chart(fig_full_periodic, use_container_width=True)
         fig_full_periodic.write_html(os.path.join(script_dir, 'periodic_table_all.html'))
 
-        # Dominant Element Distribution
         st.write("#### Dominant Element Distribution")
         element_counts = pd.Series(dominant_elements_filtered).value_counts()
         fig_bar = px.bar(x=element_counts.index, y=element_counts.values, labels={'x': 'Dominant Element', 'y': 'Count'},
@@ -582,13 +566,11 @@ with tab1:
         st.plotly_chart(fig_bar, use_container_width=True)
         fig_bar.write_html(os.path.join(script_dir, 'dominant_element_distribution.html'))
 
-        # Box Plot
         st.write("#### Latent Dimensions Box Plot")
         fig_box = plot_latent_box(z_train, box_linewidth=box_linewidth, label_fontsize=box_label_fontsize, axis_linewidth=box_axis_linewidth)
         st.plotly_chart(fig_box, use_container_width=True)
         fig_box.write_html(os.path.join(script_dir, 'latent_box_plotly.html'))
 
-        # PCA Scatter Plots
         st.write("#### PCA Latent Space: Seebeck Coefficient")
         fig_pca_seebeck = px.scatter(
             x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale.lower(),
@@ -627,7 +609,6 @@ with tab1:
         st.plotly_chart(fig_pca_elements, use_container_width=True)
         fig_pca_elements.write_html(os.path.join(script_dir, 'latent_pca_elements_plotly.html'))
 
-        # t-SNE Scatter Plots
         st.write("#### t-SNE Latent Space: Seebeck Coefficient")
         fig_tsne_seebeck = px.scatter(
             x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale.lower(),
@@ -666,7 +647,6 @@ with tab1:
         st.plotly_chart(fig_tsne_elements, use_container_width=True)
         fig_tsne_elements.write_html(os.path.join(script_dir, 'latent_tsne_elements_plotly.html'))
 
-        # UMAP Scatter Plots
         st.write("#### UMAP Latent Space: Seebeck Coefficient")
         fig_umap_seebeck = px.scatter(
             x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale.lower(),
@@ -705,7 +685,6 @@ with tab1:
         st.plotly_chart(fig_umap_elements, use_container_width=True)
         fig_umap_elements.write_html(os.path.join(script_dir, 'latent_umap_elements_plotly.html'))
 
-        # Matplotlib 2D Scatter (PCA only)
         try:
             plt.style.use('seaborn-v0_8-whitegrid')
         except OSError:
@@ -745,7 +724,6 @@ with tab1:
             st.warning(f"Error saving Matplotlib figure: {e}")
         plt.close(fig)
 
-        # Radar Plot
         st.write("#### 8D Latent Space Radar Plot")
         sample_indices = np.random.choice(len(z_normalized), size=max_samples, replace=False)
         radar_data = z_normalized[sample_indices]
@@ -760,7 +738,6 @@ with tab1:
             st.warning(f"Error saving radar plot: {e}")
         plt.close(fig_radar)
 
-        # Parallel Coordinates
         st.write("#### 8D Latent Space Parallel Coordinates")
         parallel_df = pd.DataFrame(z_normalized, columns=[f'Latent Dim {i+1}' for i in range(8)])
         parallel_df['Seebeck'] = output_feature_cleaned
