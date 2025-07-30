@@ -331,7 +331,7 @@ with tab1:
          'Greys', 'Greens', 'Blues', 'Reds', 'Purples', 'Oranges',
          'YlOrRd', 'YlOrBr', 'YlGnBu', 'YlGn', 'RdPu', 'PuRd', 'PuBuGn', 'PuBu',
          'OrRd', 'GnBu', 'BuPu', 'BuGn', 'Pinkyl', 'Coolwarm', 'Spectral',
-         'RdYlBu', 'RdYl coaster', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
+         'RdYlBu', 'RdYlGn', 'RdBu', 'PiYG', 'PRGn', 'BrBG', 'PuOr', 'RdGy',
          'Viridis_r', 'Plasma_r', 'Inferno_r', 'Magma_r', 'Cividis_r', 'Turbo_r',
          'Jet_r', 'Rainbow_r', 'Greys_r', 'Blues_r', 'Reds_r'],
         index=0
@@ -547,7 +547,7 @@ with tab1:
                                                   linewidth=history_linewidth, fontsize=history_label_fontsize,
                                                   train_color=train_color, val_color=val_color,
                                                   tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
-        st.pyplot(fig_ switches)
+        st.pyplot(fig_vae)
         fig_vae_plotly = plot_training_history_plotly(vae_history_df, "VAE", train_color=train_color, val_color=val_color,
                                                      linewidth=history_linewidth, label_fontsize=history_label_fontsize,
                                                      tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
