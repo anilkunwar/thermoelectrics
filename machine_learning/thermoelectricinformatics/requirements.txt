@@ -14,5 +14,4 @@ transformers
 torch
 spacy
 nltk
-sqlite3
 mpi4py
