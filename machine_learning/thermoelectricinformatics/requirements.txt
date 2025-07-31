@@ -1,18 +1,24 @@
-streamlit
-pandas
-scikit-learn
-plotly
-seaborn
-pymatgen
-torch
-transformers
-spacy
-nltk
-chemdataextractor
-DAWG
+# Core libraries
+streamlit==1.32.2
+pandas==2.2.2
+plotly==5.22.0
+pymatgen==2024.5.30
 
-# Pin dependencies to avoid uninstall/reinstall loops
-rich==14.1.0
-pygments==2.19.2
-markdown-it-py==3.0.0
-mdurl==0.1.2
+# Chemistry/Text processing
+chemdataextractor==2.1.4
+spacy==3.7.4
+nltk==3.8.1
+
+# NLP/ML components
+transformers==4.40.2
+torch==2.2.2
+sentence-transformers==2.7.0
+
+# Utilities
+arxiv==2.1.0
+requests==2.32.3
+scipy==1.13.0
+matplotlib==3.8.4
+
+# MPI handling (cloud-compatible)
+mpi4py==3.1.5 --no-binary mpi4py
