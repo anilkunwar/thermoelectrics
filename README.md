@@ -10,8 +10,13 @@ a. Machine Learning
 
 # Featurization:
 
-The computer code to convert the chemical formula and temperature row into composition-temperature feature vector
+The computer code to convert the multicomponent chemical formula and temperature row into composition-temperature feature vector
 [![machinelearningthermoelectricity](https://img.shields.io/badge/ctbfv-streamlit-red)](https://composition-temperature-featurevector.streamlit.app/)
+
+Binary alloys/compunds with upload from json files
+[![machinelearningthermoelectricity](https://img.shields.io/badge/ctbfvBinaryTE-streamlit-red)](https://binarycomponents-featurization.streamlit.app/)
+
+
 
 
 # VAE-with regressor for determination of Seebeck Coefficient
