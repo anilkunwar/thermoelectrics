@@ -8,7 +8,7 @@ torch
 transformers
 spacy
 nltk
-chemdataextractor2
+chemdataextractor
 
 # Pin dependencies to avoid uninstall/reinstall loops
 rich==14.1.0
