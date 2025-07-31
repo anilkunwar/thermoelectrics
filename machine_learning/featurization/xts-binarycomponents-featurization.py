@@ -89,8 +89,6 @@ def featurize_materials(df, available_elements):
             feature_vector['power_factor(W/mK2)'] = float('nan')
             feature_vector['ZT'] = float('nan')
             feature_vector['reference'] = float('nan')
-            feature_vector['temperature(K)'] = row['temperature(K)']
-            feature_vector['seebeck_coefficient(μV/K)'] = row['seebeck_coefficient(μV/K)']
             features.append(feature_vector)
         except Exception as e:
             st.warning(f"Error processing formula {row['Formula']}: {e}")
@@ -146,6 +144,7 @@ def plot_periodic_table(all_elements, present_elements, element_color_map, fonts
 st.title("Thermoelectric Material Featurization")
 st.markdown("""
 Upload one or more JSON files with the naming convention `AxB1-x.json` (e.g., `Bi2Te3.json`), where each file contains a list of dictionaries with `x` (temperature in K) and `y` (Seebeck coefficient in μV/K). The script extracts the chemical formula from the filename, creates a CSV with `Formula`, `temperature(K)`, and `seebeck_coefficient(μV/K)`, featurizes the data, and allows downloading both the initial and featurized CSVs.
+**Date and Time**: 05:51 AM CEST, Thursday, July 31, 2025
 """)
 
 # File uploader for multiple JSON files
@@ -286,4 +285,3 @@ st.download_button(
     mime='text/csv',
     key='download_featurized'
 )
-
