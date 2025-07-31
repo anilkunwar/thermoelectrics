@@ -9,6 +9,7 @@ transformers
 spacy
 nltk
 chemdataextractor
+dawg
 
 # Pin dependencies to avoid uninstall/reinstall loops
 rich==14.1.0
