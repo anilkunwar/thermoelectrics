@@ -2,6 +2,16 @@ streamlit
 pandas
 scikit-learn
 plotly
+seaborn
 pymatgen
-arxiv
+torch
+transformers
+spacy
+nltk
 chemdataextractor2
+
+# Pin dependencies to avoid uninstall/reinstall loops
+rich==14.1.0
+pygments==2.19.2
+markdown-it-py==3.0.0
+mdurl==0.1.2
