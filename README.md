@@ -41,6 +41,9 @@ Web app for Data Visualization with Seebeck Coefficient Prediction
 
 with t-SNE and UMAP based visualizations [![machinelearningthermoelectricity](https://img.shields.io/badge/TEtsneUMAPSeebeckPyTorch-streamlit-red)](https://thermoelectricity-vaepredictormodel1.streamlit.app/)
 
+with t-SNE and UMAP based visualizations for larger datasets  [![machinelearningthermoelectricity](https://img.shields.io/badge/TEtsneUMAPSeebeck2PyTorch-streamlit-red)](https://thermoelectricity-vaepredictormodel2.streamlit.app/)
+
+
 # Basic Models
 
 # Web App (for Model 1 trained using TF):
