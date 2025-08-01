@@ -16,6 +16,9 @@ The computer code to convert the multicomponent chemical formula and temperature
 Binary alloys/compunds with upload from json files
 [![machinelearningthermoelectricity](https://img.shields.io/badge/ctbfvBinaryTE-streamlit-red)](https://binarycomponents-featurization.streamlit.app/)
 
+Multicomponent alloys/compunds with upload from json files
+[![machinelearningthermoelectricity](https://img.shields.io/badge/ctbfvmulticomponentTE-streamlit-red)](https://multicomponents-featurization.streamlit.app/)
+
 
 
 
