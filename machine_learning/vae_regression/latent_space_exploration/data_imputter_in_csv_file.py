@@ -1,8 +1,20 @@
 import streamlit as st
 import pandas as pd
 import io
+import csv
+from pathlib import Path
 
-st.title("CSV Empty Value Handler")
+st.title("CSV Empty Value Handler with Fixed Columns")
+
+# Define the expected 76 column names
+column_names = [
+    '', 'Formula', 'modformula', 'In', 'Tl', 'La', 'Sr', 'Mn', 'Ni', 'Ru', 'Pd', 'Hf', 'Cs', 'Sc', 'Co', 
+    'Si', 'Fe', 'Li', 'Cl', 'Yb', 'Te', 'N', 'Ti', 'Cd', 'Zr', 'Y', 'Ga', 'Cr', 'Pr', 'Tm', 'Br', 'Ca', 
+    'Mg', 'Rb', 'Au', 'Nd', 'Ce', 'Ho', 'I', 'Ba', 'Se', 'Pb', 'Ge', 'Gd', 'Tb', 'Dy', 'Cu', 'Na', 'Sb', 
+    'Bi', 'P', 'As', 'Sm', 'Zn', 'Al', 'Sn', 'Ag', 'Nb', 'Mo', 'V', 'S', 'K', 'Lu', 'O', 'Eu', 'Ta', 'B', 
+    'Er', 'temperature(K)', 'seebeck_coefficient(μV/K)', 'electrical_conductivity(S/m)', 
+    'thermal_conductivity(W/mK)', 'power_factor(W/mK2)', 'ZT', 'reference', 'sum_elements'
+]
 
 # File uploader for CSV file
 uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
@@ -22,12 +34,29 @@ if fill_option == "Custom Value":
 # Process the CSV file
 if uploaded_file is not None:
     try:
-        # Read CSV with pandas, treating empty strings as NA
-        df = pd.read_csv(uploaded_file, na_values=["", " ", None], keep_default_na=False)
+        # Save uploaded file temporarily
+        temp_csv = "temp.csv"
+        with open(temp_csv, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        # Preprocess CSV to ensure 76 columns
+        processed_lines = []
+        with open(temp_csv, "r", encoding="utf-8") as f:
+            reader = csv.reader(f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL)
+            for row in reader:
+                # Truncate to 76 fields or pad with empty strings
+                if len(row) > len(column_names):
+                    processed_lines.append(row[:len(column_names)])
+                else:
+                    processed_lines.append(row + [""] * (len(column_names) - len(row)))
+
+        # Convert to DataFrame with predefined column names
+        df = pd.DataFrame(processed_lines[1:], columns=column_names)
+        df = df.replace("", None)  # Treat empty strings as None for filling
 
         # Handle empty values based on user selection
         if fill_option == "NaN":
-            pass  # Pandas already converts empty values to NaN
+            pass  # Pandas keeps None as NaN
         elif fill_option == "0":
             df = df.fillna(0)
         elif fill_option == "Custom Value" and custom_value:
@@ -44,7 +73,7 @@ if uploaded_file is not None:
 
         # Provide download link for processed CSV
         csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False)
+        df.to_csv(csv_buffer, index=False, sep=",", quoting=csv.QUOTE_NONNUMERIC)
         st.download_button(
             label="Download Processed CSV",
             data=csv_buffer.getvalue(),
@@ -52,8 +81,12 @@ if uploaded_file is not None:
             mime="text/csv"
         )
 
+        # Clean up temporary file
+        if Path(temp_csv).exists():
+            Path(temp_csv).unlink()
+
     except pd.errors.ParserError as e:
-        st.error(f"Error parsing CSV file: {str(e)}. Please ensure the CSV is well-formed.")
+        st.error(f"Error parsing CSV file: {str(e)}. Ensure the CSV uses commas as delimiters and fields with commas are quoted.")
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
 else:
