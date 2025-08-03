@@ -19,8 +19,12 @@ Binary alloys/compunds with upload from json files
 Multicomponent alloys/compunds with upload from json files
 [![machinelearningthermoelectricity](https://img.shields.io/badge/ctbfvmulticomponentTE-streamlit-red)](https://multicomponents-featurization.streamlit.app/)
 
-Multicomponent alloys/compounds vectorization with file update
+Multicomponent alloys/compounds vectorization with file update (for number of components >=2)
 [![machinelearningthermoelectricity](https://img.shields.io/badge/ctbfvadvancedmulticomponentTE-streamlit-red)](https://multicomponents-vectorization.streamlit.app/)
+
+Multicomponent alloys/compounds vectorization with file update (for number of components >=1, applies to both pure  and multicomponent systems)
+[![machinelearningthermoelectricity](https://img.shields.io/badge/ctbfvuniversalmulticomponentTE-streamlit-red)](https://adaptive-multicomponents-featurization.streamlit.app/)
+
 
 Interactive Multicomponent Alloys/Compounds Vectorization
 [![machinelearningthermoelectricity](https://img.shields.io/badge/interactivectbfvTE-streamlit-red)](https://advanced-multicomponents-vectorization.streamlit.app/)
