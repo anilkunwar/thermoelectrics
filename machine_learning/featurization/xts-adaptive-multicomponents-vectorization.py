@@ -92,7 +92,7 @@ def featurize_materials(df, available_elements, csv_columns):
             continue
     return features
 
-def plot_periodic_table(all_elements, present_elements, element_color_map, fontsize=12):
+def plot_periodic_table(all_elements, present_elements, element_color_map, title, fontsize=12):
     periodic_table_positions = {
         'H': (1, 1), 'He': (1, 18),
         'Li': (2, 1), 'Be': (2, 2), 'B': (2, 13), 'C': (2, 14), 'N': (2, 15), 'O': (2, 16), 'F': (2, 17), 'Ne': (2, 18),
@@ -128,7 +128,7 @@ def plot_periodic_table(all_elements, present_elements, element_color_map, fonts
                 showlegend=False
             ))
     fig.update_layout(
-        title=dict(text='Interactive Periodic Table', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
+        title=dict(text=title, x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
         xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
         yaxis=dict(range=[-8, 0], showgrid=False, zeroline=False, showticklabels=False, title=''),
         plot_bgcolor='white', paper_bgcolor='white',
@@ -141,7 +141,7 @@ def plot_periodic_table(all_elements, present_elements, element_color_map, fonts
 st.title("Thermoelectric Material Featurization")
 st.markdown("""
 Enter the number of components (n) for the system (e.g., 1 for single-component like `Au1.0.json`, 3 for ternary like `Bi1Sb1Te2.json`). Upload a pre-existing featurized CSV (optional) to define the column structure. Then, upload one or more JSON files with the naming convention `AaBbCc...Xn.json` (e.g., `Ni0.0Au1.0.json` or `Au1.0.json` for single-component). Each JSON file contains a list of dictionaries with `x` (temperature in K) and `y` (Seebeck coefficient in μV/K). The script processes multiple JSON files simultaneously, appends new data to the CSV, sets absent features to 0, and allows downloading the updated CSV, which can be reused for further updates.
-**Date and Time**: 07:31 AM CEST, Sunday, August 03, 2025
+**Date and Time**: 07:48 AM CEST, Sunday, August 03, 2025
 """)
 
 # User input for number of components
@@ -265,10 +265,21 @@ st.download_button(
     key='download_initial'
 )
 
-# Count present elements
-present_elements = count_elements(df)
-st.write(f"Number of elements present in the new data: {len(present_elements)}")
-st.write("Present elements:", present_elements)
+# Count present elements for new JSON data
+present_elements_json = count_elements(df)
+st.write(f"Number of elements in new JSON data: {len(present_elements_json)}")
+st.write("Elements in new JSON data:", present_elements_json)
+
+# Display element colors for new JSON data
+st.write("Element colors for new JSON data:")
+color_data_json = [{"Element": el, "Color": default_element_color_map.get(el, '#D3D3D3')} for el in present_elements_json]
+st.table(color_data_json)
+
+# Display periodic table for new JSON data
+st.subheader("Interactive Periodic Table (New JSON Data)")
+st.write("Elements present in the new JSON data are colored; absent elements are gray. Hover to see electronegativity and thermoelectric weight.")
+fig_periodic_json = plot_periodic_table(all_elements, present_elements_json, default_element_color_map, title="Periodic Table (New JSON Data)")
+st.plotly_chart(fig_periodic_json, use_container_width=True)
 
 # Featurize materials
 features = featurize_materials(df, all_elements, csv_columns)
@@ -314,11 +325,21 @@ if csv_file:
 else:
     df_final = df_combined
 
-# Display interactive periodic table
-st.subheader("Interactive Periodic Table")
-st.write("Elements present in the new data are colored; absent elements are gray. Hover to see electronegativity and thermoelectric weight.")
-fig_periodic = plot_periodic_table(all_elements, present_elements, default_element_color_map, fontsize=12)
-st.plotly_chart(fig_periodic, use_container_width=True)
+# Count present elements for combined data
+present_elements_final = count_elements(df_final)
+st.write(f"Number of elements in combined data (CSV + JSON): {len(present_elements_final)}")
+st.write("Elements in combined data:", present_elements_final)
+
+# Display element colors for combined data
+st.write("Element colors for combined data (CSV + JSON):")
+color_data_final = [{"Element": el, "Color": default_element_color_map.get(el, '#D3D3D3')} for el in present_elements_final]
+st.table(color_data_final)
+
+# Display periodic table for combined data
+st.subheader("Interactive Periodic Table (Combined CSV + JSON Data)")
+st.write("Elements present in the combined data (pre-existing CSV and new JSON files) are colored; absent elements are gray. Hover to see electronegativity and thermoelectric weight.")
+fig_periodic_final = plot_periodic_table(all_elements, present_elements_final, default_element_color_map, title="Periodic Table (Combined CSV + JSON Data)")
+st.plotly_chart(fig_periodic_final, use_container_width=True)
 
 # Display and allow download of updated featurized DataFrame
 st.subheader("Updated Featurized Data")
