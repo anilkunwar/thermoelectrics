@@ -278,8 +278,8 @@ def plot_periodic_table(available_elements, element_color_map, fontsize=12):
                 mode='markers+text',
                 text=[element],
                 textposition='middle center',
-                textfont=dict(size=fontsize + 2, color='black', outlinecolor='black', outlinewidth=1),  # Enhanced size and contrast
-                marker=dict(size=40, color=element_color_map.get(element, '#D3D3D3'), line=dict(width=2, color='black')),
+                textfont=dict(size=fontsize + 2, family='Arial'),  # Increased font size
+                marker=dict(size=40, color=element_color_map.get(element, '#FFFFFF'), line=dict(width=2, color='black')),
                 hoverinfo='text',
                 hovertext=[f"Element: {element}<br>Electronegativity: {en:.2f}<br>Thermoelectric Weight: {tw:.2f}"],
                 customdata=[element],
@@ -325,7 +325,7 @@ def plot_full_periodic_table(all_elements, available_elements, element_color_map
                 mode='markers+text',
                 text=[element],
                 textposition='middle center',
-                textfont=dict(size=fontsize + 2, color='black', outlinecolor='black', outlinewidth=1),  # Enhanced size and contrast
+                textfont=dict(size=fontsize + 2, family='Arial'),  # Increased font size
                 marker=dict(size=40, color=color, line=dict(width=2, color='black')),
                 hoverinfo='text',
                 hovertext=[f"Element: {element}<br>Electronegativity: {en:.2f}<br>Thermoelectric Weight: {tw:.2f}"],
@@ -420,7 +420,7 @@ color_map_options = [
 st.title("Thermoelectric Material Analysis and Seebeck Coefficient Prediction")
 st.markdown("""
 This application visualizes thermoelectric material data and predicts Seebeck coefficients using a trained Variational Autoencoder (VAE) and Regressor. Upload a featurized CSV to convert to the required SQLite database, then explore latent space visualizations, training history, and predict Seebeck coefficients for new compositions.
-**Date and Time**: 08:52 AM CEST, Sunday, August 03, 2025
+**Date and Time**: 05:53 PM CEST, Sunday, August 03, 2025
 """)
 
 # CSV to SQLite converter
@@ -493,7 +493,7 @@ with tab1:
     radar_alpha = st.sidebar.slider("Radar Fill Transparency", 0.1, 0.5, 0.3, 0.05)
     radar_linewidth = st.sidebar.slider("Radar Line Width", 1.0, 5.0, 2.0, 0.5)
     radar_fontsize = st.sidebar.slider("Radar Font Size", 8, 16, 12, 1)
-    periodic_table_fontsize = st.sidebar.slider("Periodic Table Font Size", 8, 16, 14, 1)  # Increased default to 14
+    periodic_table_fontsize = st.sidebar.slider("Periodic Table Font Size", 8, 100, 14, 1)  # Increased default to 14
     radar_legend_pos = st.sidebar.selectbox("Radar Legend Position", ['upper right', 'upper left', 'lower right', 'lower left'], index=0)
     radar_axis_linewidth = st.sidebar.slider("Radar Axis Line Width", 0.5, 5.0, 1.5, 0.5)
     box_linewidth = st.sidebar.slider("Box Plot Line Width", 0.5, 5.0, 1.0, 0.5)
