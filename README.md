@@ -7,7 +7,6 @@ a. Machine Learning
 
 
 
-
 # Featurization:
 
 The computer code to convert the multicomponent chemical formula and temperature row into composition-temperature feature vector
@@ -31,8 +30,6 @@ Interactive Multicomponent Alloys/Compounds Vectorization
 
 
 
-
-
 # VAE-with regressor for determination of Seebeck Coefficient
 # Advanced Models
 # Web App (for Model A trained using PyTorch):
@@ -53,6 +50,9 @@ Web app for Data Visualization with Seebeck Coefficient Prediction
 with t-SNE and UMAP based visualizations [![machinelearningthermoelectricity](https://img.shields.io/badge/TEtsneUMAPSeebeckPyTorch-streamlit-red)](https://thermoelectricity-vaepredictormodel1.streamlit.app/)
 
 with t-SNE and UMAP based visualizations for larger datasets  [![machinelearningthermoelectricity](https://img.shields.io/badge/TEtsneUMAPSeebeck2PyTorch-streamlit-red)](https://thermoelectricity-vaepredictormodel2.streamlit.app/)
+
+with t-SNE and UMAP based finetuned visualizations  [![machinelearningthermoelectricity](https://img.shields.io/badge/TEviztsneUMAPSeebeckPyTorch-streamlit-red)](https://thermoelectricity-vaepredictorenhancedvisualization.streamlit.app/)
+
 
 How to inspect a sqlite db file: [![machinelearningthermoelectricity](https://img.shields.io/badge/dbinspector-streamlit-red)](https://database-file-reader.streamlit.app/) 
 
