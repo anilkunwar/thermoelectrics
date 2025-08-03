@@ -145,7 +145,7 @@ with tab1:
     st.markdown("""
     **Upload and Process Data Tab**  
     Enter the number of components (n) for the system (e.g., 3 for ternary). Upload a pre-existing featurized CSV (optional) to define the column structure. Then, upload JSON files with the naming convention `AaBbCc...Xn.json` (e.g., `Bi1Sb1Te2.json` for ternary). Each JSON file contains a list of dictionaries with `x` (temperature in K) and `y` (Seebeck coefficient in μV/K). The script appends new data to the CSV, setting absent features to 0, and displays results. Go to the 'Edit Data' tab to modify the data.  
-    **Date and Time**: 06:52 AM CEST, Sunday, August 03, 2025
+    **Date and Time**: 07:00 AM CEST, Sunday, August 03, 2025
     """)
 
     # User input for number of components
@@ -162,6 +162,11 @@ with tab1:
             if 'S.N.' not in csv_columns:
                 df_csv.insert(0, 'S.N.', range(1, len(df_csv) + 1))
                 csv_columns = ['S.N.'] + csv_columns
+            # Ensure all elements in all_elements are present
+            for col in all_elements:
+                if col not in csv_columns:
+                    df_csv[col] = 0.0
+                    csv_columns.append(col)
             st.write("Loaded CSV column structure:", csv_columns)
         except Exception as e:
             st.error(f"Error reading CSV file: {e}")
@@ -306,6 +311,11 @@ with tab2:
     # Editable DataFrame
     st.subheader("Edit Featurized Data")
     if 'df_final' in locals():
+        # Ensure all elemental columns are present in edited_df
+        for col in all_elements:
+            if col not in df_final.columns:
+                df_final[col] = 0.0
+
         edited_df = st.data_editor(
             df_final,
             num_rows="dynamic",  # Allow adding/deleting rows
@@ -333,7 +343,12 @@ with tab2:
             new_rows['S.N.'] = range(max_sn + 1, max_sn + 1 + len(new_rows))
             edited_df.iloc[-len(new_rows):] = new_rows
 
-        # Ensure sum_elements is recalculated
+        # Ensure all elemental columns are present before summing
+        for col in all_elements:
+            if col not in edited_df.columns:
+                edited_df[col] = 0.0
+
+        # Recalculate sum_elements
         edited_df['sum_elements'] = edited_df[all_elements].sum(axis=1)
 
         # Display updated DataFrame
