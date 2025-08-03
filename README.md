@@ -55,7 +55,8 @@ with t-SNE and UMAP based visualizations [![machinelearningthermoelectricity](ht
 with t-SNE and UMAP based visualizations for larger datasets  [![machinelearningthermoelectricity](https://img.shields.io/badge/TEtsneUMAPSeebeck2PyTorch-streamlit-red)](https://thermoelectricity-vaepredictormodel2.streamlit.app/)
 
 How to inspect a sqlite db file: [![machinelearningthermoelectricity](https://img.shields.io/badge/dbinspector-streamlit-red)](https://database-file-reader.streamlit.app/) 
-Data imputting in csv file: [![machinelearningthermoelectricity](https://img.shields.io/badge/dbinspector-streamlit-red)]( https://dataimputter-in-csv-documents.streamlit.app/) 
+
+Data imputting in csv file: [![machinelearningthermoelectricity](https://img.shields.io/badge/dataimputting-streamlit-red)]( https://dataimputter-in-csv-documents.streamlit.app/) 
 
 
 # Basic Models
