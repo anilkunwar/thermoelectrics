@@ -140,8 +140,8 @@ def plot_periodic_table(all_elements, present_elements, element_color_map, title
 # Streamlit UI
 st.title("Thermoelectric Material Featurization")
 st.markdown("""
-Enter the number of components (n) for the system (e.g., 1 for single-component like `Au1.0.json`, 3 for ternary like `Bi1Sb1Te2.json`). Upload a pre-existing featurized CSV (optional) to define the column structure. Then, upload one or more JSON files with the naming convention `AaBbCc...Xn.json` (e.g., `Ni0.0Au1.0.json` or `Au1.0.json` for single-component). Each JSON file contains a list of dictionaries with `x` (temperature in K) and `y` (Seebeck coefficient in μV/K). The script processes multiple JSON files simultaneously, appends new data to the CSV, sets absent features to 0, and allows downloading the updated CSV, which can be reused for further updates.
-**Date and Time**: 07:48 AM CEST, Sunday, August 03, 2025
+Enter the number of components (n) for the system (e.g., 1 for single-component like `Au1.0.json`, 3 for ternary like `Bi1Sb1Te2.json`). Upload a pre-existing featurized CSV (optional) to define the column structure. Then, upload one or more JSON files with the naming convention `AaBbCc...Xn.json` (e.g., `Ni0.0Au1.0.json` or `Au1.0.json` for single-component). Each JSON file contains a list of dictionaries with `x` (temperature in K) and `y` (Seebeck coefficient in μV/K). The script processes multiple JSON files simultaneously, appends new data to the CSV, sets absent features to 0, and displays two periodic tables: one for new JSON data and one for the combined data (CSV + JSON). Download the updated CSV for reuse in future updates.
+**Date and Time**: 07:55 AM CEST, Sunday, August 03, 2025
 """)
 
 # User input for number of components
@@ -268,12 +268,7 @@ st.download_button(
 # Count present elements for new JSON data
 present_elements_json = count_elements(df)
 st.write(f"Number of elements in new JSON data: {len(present_elements_json)}")
-st.write("Elements in new JSON data:", present_elements_json)
-
-# Display element colors for new JSON data
-st.write("Element colors for new JSON data:")
-color_data_json = [{"Element": el, "Color": default_element_color_map.get(el, '#D3D3D3')} for el in present_elements_json]
-st.table(color_data_json)
+st.write("Present elements in new JSON data:", present_elements_json)
 
 # Display periodic table for new JSON data
 st.subheader("Interactive Periodic Table (New JSON Data)")
@@ -328,12 +323,7 @@ else:
 # Count present elements for combined data
 present_elements_final = count_elements(df_final)
 st.write(f"Number of elements in combined data (CSV + JSON): {len(present_elements_final)}")
-st.write("Elements in combined data:", present_elements_final)
-
-# Display element colors for combined data
-st.write("Element colors for combined data (CSV + JSON):")
-color_data_final = [{"Element": el, "Color": default_element_color_map.get(el, '#D3D3D3')} for el in present_elements_final]
-st.table(color_data_final)
+st.write("Present elements in combined data:", present_elements_final)
 
 # Display periodic table for combined data
 st.subheader("Interactive Periodic Table (Combined CSV + JSON Data)")
