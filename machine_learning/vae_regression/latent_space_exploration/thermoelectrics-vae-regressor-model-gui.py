@@ -458,7 +458,7 @@ with tab1:
     radar_alpha = st.sidebar.slider("Radar Fill Transparency", 0.1, 0.5, 0.3, 0.05)
     radar_linewidth = st.sidebar.slider("Radar Line Width", 1.0, 5.0, 2.0, 0.5)
     radar_fontsize = st.sidebar.slider("Radar Font Size", 8, 16, 12, 1)
-    periodic_table_fontsize = st.sidebar.slider("Periodic Table Font Size", 8, 16, 12, 1)
+    periodic_table_fontsize = st.sidebar.slider("Periodic Table Font Size", 8, 100, 12, 1)
     radar_legend_pos = st.sidebar.selectbox("Radar Legend Position", ['upper right', 'upper left', 'lower right', 'lower left'], index=0)
     radar_axis_linewidth = st.sidebar.slider("Radar Axis Line Width", 0.5, 5.0, 1.5, 0.5)
     box_linewidth = st.sidebar.slider("Box Plot Line Width", 0.5, 5.0, 1.0, 0.5)
