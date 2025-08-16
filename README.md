@@ -52,7 +52,7 @@ with t-SNE and UMAP based visualizations [![machinelearningthermoelectricity](ht
 with t-SNE and UMAP based visualizations for larger datasets  [![machinelearningthermoelectricity](https://img.shields.io/badge/TEtsneUMAPSeebeck2PyTorch-streamlit-red)](https://thermoelectricity-vaepredictormodel2.streamlit.app/)
 
 with t-SNE and UMAP based finetuned visualizations  [![machinelearningthermoelectricity](https://img.shields.io/badge/TEviztsneUMAPSeebeckPyTorch-streamlit-red)](https://thermoelectricity-vaepredictorenhancedvisualization.streamlit.app/)
-
+ [![machinelearningthermoelectricity](https://img.shields.io/badge/scorefunctionSeebeckPyTorch-streamlit-red)](https://thermoelectric-vaepredictorscorefunction.streamlit.app/)
 
 How to inspect a sqlite db file: [![machinelearningthermoelectricity](https://img.shields.io/badge/dbinspector-streamlit-red)](https://database-file-reader.streamlit.app/) 
 
