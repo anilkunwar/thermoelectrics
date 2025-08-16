@@ -3,7 +3,7 @@
 a. Machine Learning
 
 # Fetching the upto date data of thermoelectricity (Informatics)
-[![machinelearningthermoelectricity](https://img.shields.io/badge/tener-streamlit-red)](https://thermoelectrics-namedentityrecognition.streamlit.app/)
+[![machinelearningthermoelectricity](https://img.shields.io/badge/tener-streamlit-red)](https://thermoelectrics-attention-ner.streamlit.app/)
 
 
 
