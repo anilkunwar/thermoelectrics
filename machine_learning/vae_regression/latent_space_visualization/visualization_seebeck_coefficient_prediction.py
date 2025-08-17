@@ -171,7 +171,7 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the dropdown below, input their proportions, and view the absolute Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum absolute Seebeck coefficients and plots their variation with temperature.
-**Date and Time**: 07:49 PM CEST, Sunday, August 17, 2025
+**Date and Time**: 07:53 PM CEST, Sunday, August 17, 2025
 """)
 
 # Sidebar for figure customization
@@ -205,13 +205,13 @@ try:
     if 'compositions' not in st.session_state:
         st.session_state.compositions = {}
     if 'temperature' not in st.session_state:
-        st.session_state.temperature = 300
+        st.session_state.temperature = 500  # Set to user input
 except Exception as e:
     st.warning(f"Session state initialization failed: {e}. Resetting to defaults.")
     st.session_state.selected_elements = []
     st.session_state.proportions = {}
     st.session_state.compositions = {}
-    st.session_state.temperature = 300
+    st.session_state.temperature = 500
 
 # Periodic Table for Reference
 st.header("Periodic Table Reference")
@@ -345,7 +345,7 @@ def complete_to_three_elements(selected_elements, proportions, compositions, ava
     return selected_elements, proportions, compositions
 
 # Generate ternary diagram with caching
-@st.cache_data(hash_funcs={nn.Module: id, MinMaxScaler: id, SimpleImputer: id})
+@st.cache_resource(hash_funcs={nn.Module: id, MinMaxScaler: id, SimpleImputer: id})
 def generate_ternary_data(elements, temperature, available_elements, scaler, vae, regressor, y_scaler, steps=30):
     compositions = []
     seebeck_values = []
@@ -361,7 +361,7 @@ def generate_ternary_data(elements, temperature, available_elements, scaler, vae
     return np.array(compositions), np.array(seebeck_values)
 
 # Optimize for maximum and minimum absolute Seebeck coefficient with caching
-@st.cache_data(hash_funcs={nn.Module: id, MinMaxScaler: id, SimpleImputer: id})
+@st.cache_resource(hash_funcs={nn.Module: id, MinMaxScaler: id, SimpleImputer: id})
 def optimize_seebeck(elements, temperature, available_elements, scaler, vae, regressor, y_scaler, maximize=True):
     def objective(x):
         comp_dict = {elements[i]: x[i] for i in range(3)}
@@ -522,14 +522,26 @@ if st.button("Generate Ternary Diagram"):
             if user_seebeck is None:
                 st.error("Failed to predict Seebeck coefficient for user composition.")
             else:
-                # Generate ternary data
-                compositions_array, seebeck_values = generate_ternary_data(elements, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler)
+                # Generate ternary data with error handling
+                try:
+                    compositions_array, seebeck_values = generate_ternary_data(elements, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler)
+                except Exception as e:
+                    st.error(f"Failed to generate ternary data due to caching or computation error: {e}")
+                    compositions_array, seebeck_values = [], []
                 if len(compositions_array) == 0:
-                    st.error("Failed to generate ternary data due to prediction errors.")
+                    st.error("No valid ternary data generated. Please try different inputs.")
                 else:
                     # Optimize for min and max absolute Seebeck
-                    min_comp, min_seebeck_abs, min_seebeck_signed = optimize_seebeck(elements, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler, maximize=False)
-                    max_comp, max_seebeck_abs, max_seebeck_signed = optimize_seebeck(elements, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler, maximize=True)
+                    try:
+                        min_comp, min_seebeck_abs, min_seebeck_signed = optimize_seebeck(elements, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler, maximize=False)
+                    except Exception as e:
+                        st.error(f"Failed to optimize minimum Seebeck coefficient: {e}")
+                        min_comp, min_seebeck_abs, min_seebeck_signed = [1/3, 1/3, 1/3], float('inf'), 0.0
+                    try:
+                        max_comp, max_seebeck_abs, max_seebeck_signed = optimize_seebeck(elements, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler, maximize=True)
+                    except Exception as e:
+                        st.error(f"Failed to optimize maximum Seebeck coefficient: {e}")
+                        max_comp, max_seebeck_abs, max_seebeck_signed = [1/3, 1/3, 1/3], float('-inf'), 0.0
                     # Display composition and Seebeck
                     st.write("### Composition and Seebeck Coefficient")
                     st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
