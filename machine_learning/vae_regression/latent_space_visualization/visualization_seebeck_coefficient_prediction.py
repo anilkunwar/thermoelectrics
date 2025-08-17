@@ -95,17 +95,17 @@ def preprocess_new_data(df, available_elements, scaler):
     X_scaled = scaler.transform(X_imputed)
     return X_scaled
 
-def predict_seebeck(composition_dict, temperature, available_elements, scaler, vae, regressor, y_scaler):
+def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler):
     try:
         df = featurize_composition(composition_dict, available_elements, temperature)
-        X_scaled = preprocess_new_data(df, available_elements, scaler)
+        X_scaled = preprocess_new_data(df, available_elements, _scaler)
         X_tensor = torch.FloatTensor(X_scaled).to(device)
-        vae.eval()
-        regressor.eval()
+        _vae.eval()
+        _regressor.eval()
         with torch.no_grad():
-            _, z_mean, _ = vae(X_tensor)
-            y_scaled_pred = regressor(z_mean)
-            y_pred = y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
+            _, z_mean, _ = _vae(X_tensor)
+            y_scaled_pred = _regressor(z_mean)
+            y_pred = _y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
         return y_pred[0]
     except Exception as e:
         st.error(f"Prediction failed: {e}")
@@ -171,7 +171,7 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the dropdown below, input their proportions, and view the absolute Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum absolute Seebeck coefficients and plots their variation with temperature.
-**Date and Time**: 07:53 PM CEST, Sunday, August 17, 2025
+**Date and Time**: 08:00 PM CEST, Sunday, August 17, 2025
 """)
 
 # Sidebar for figure customization
@@ -345,8 +345,8 @@ def complete_to_three_elements(selected_elements, proportions, compositions, ava
     return selected_elements, proportions, compositions
 
 # Generate ternary diagram with caching
-@st.cache_resource(hash_funcs={nn.Module: id, MinMaxScaler: id, SimpleImputer: id})
-def generate_ternary_data(elements, temperature, available_elements, scaler, vae, regressor, y_scaler, steps=30):
+@st.cache_resource
+def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, steps=30):
     compositions = []
     seebeck_values = []
     for a in np.linspace(0, 1, steps):
@@ -354,18 +354,18 @@ def generate_ternary_data(elements, temperature, available_elements, scaler, vae
             c = 1 - a - b
             if c >= 0:
                 comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
-                seebeck = predict_seebeck(comp_dict, temperature, available_elements, scaler, vae, regressor, y_scaler)
+                seebeck = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler)
                 if seebeck is not None:
                     compositions.append([a, b, c])
                     seebeck_values.append(abs(seebeck))
     return np.array(compositions), np.array(seebeck_values)
 
 # Optimize for maximum and minimum absolute Seebeck coefficient with caching
-@st.cache_resource(hash_funcs={nn.Module: id, MinMaxScaler: id, SimpleImputer: id})
-def optimize_seebeck(elements, temperature, available_elements, scaler, vae, regressor, y_scaler, maximize=True):
+@st.cache_resource
+def optimize_seebeck(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, maximize=True):
     def objective(x):
         comp_dict = {elements[i]: x[i] for i in range(3)}
-        seebeck = predict_seebeck(comp_dict, temperature, available_elements, scaler, vae, regressor, y_scaler)
+        seebeck = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler)
         if seebeck is None:
             return float('inf') if maximize else float('-inf')
         return -abs(seebeck) if maximize else abs(seebeck)
@@ -374,7 +374,7 @@ def optimize_seebeck(elements, temperature, available_elements, scaler, vae, reg
     bounds = [(0, 1)] * 3
     result = minimize(objective, initial_guess, method='SLSQP', bounds=bounds, constraints=constraints)
     optimal_comp = result.x
-    signed_seebeck = predict_seebeck({elements[i]: optimal_comp[i] for i in range(3)}, temperature, available_elements, scaler, vae, regressor, y_scaler)
+    signed_seebeck = predict_seebeck({elements[i]: optimal_comp[i] for i in range(3)}, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler)
     return optimal_comp, abs(signed_seebeck) if signed_seebeck is not None else (float('-inf') if maximize else float('inf')), signed_seebeck
 
 def plot_ternary_diagram(compositions, seebeck_values, elements, user_composition, user_seebeck, min_comp, min_seebeck, max_comp, max_seebeck, color_scale, font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing):
@@ -450,15 +450,15 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
         return None
     return fig
 
-def plot_temperature_variance(elements, user_composition, min_comp, max_comp, temp_range, available_elements, scaler, vae, regressor, y_scaler, font_size, axes_line_width, grid_width, user_line_color, min_line_color, max_line_color, point_size, axes_box_thickness):
+def plot_temperature_variance(elements, user_composition, min_comp, max_comp, temp_range, available_elements, _scaler, _vae, _regressor, _y_scaler, font_size, axes_line_width, grid_width, user_line_color, min_line_color, max_line_color, point_size, axes_box_thickness):
     temps = np.linspace(temp_range[0], temp_range[1], 20)
     user_seebeck = []
     min_seebeck = []
     max_seebeck = []
     for temp in temps:
-        user_val = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, scaler, vae, regressor, y_scaler)
-        min_val = predict_seebeck({elements[i]: min_comp[i] for i in range(3)}, temp, available_elements, scaler, vae, regressor, y_scaler)
-        max_val = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, scaler, vae, regressor, y_scaler)
+        user_val = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler)
+        min_val = predict_seebeck({elements[i]: min_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler)
+        max_val = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler)
         user_seebeck.append(abs(user_val) if user_val is not None else np.nan)
         min_seebeck.append(abs(min_val) if min_val is not None else np.nan)
         max_seebeck.append(abs(max_val) if max_val is not None else np.nan)
@@ -524,7 +524,7 @@ if st.button("Generate Ternary Diagram"):
             else:
                 # Generate ternary data with error handling
                 try:
-                    compositions_array, seebeck_values = generate_ternary_data(elements, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler)
+                    compositions_array, seebeck_values = generate_ternary_data(vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements)
                 except Exception as e:
                     st.error(f"Failed to generate ternary data due to caching or computation error: {e}")
                     compositions_array, seebeck_values = [], []
@@ -533,12 +533,12 @@ if st.button("Generate Ternary Diagram"):
                 else:
                     # Optimize for min and max absolute Seebeck
                     try:
-                        min_comp, min_seebeck_abs, min_seebeck_signed = optimize_seebeck(elements, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler, maximize=False)
+                        min_comp, min_seebeck_abs, min_seebeck_signed = optimize_seebeck(vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements, maximize=False)
                     except Exception as e:
                         st.error(f"Failed to optimize minimum Seebeck coefficient: {e}")
                         min_comp, min_seebeck_abs, min_seebeck_signed = [1/3, 1/3, 1/3], float('inf'), 0.0
                     try:
-                        max_comp, max_seebeck_abs, max_seebeck_signed = optimize_seebeck(elements, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler, maximize=True)
+                        max_comp, max_seebeck_abs, max_seebeck_signed = optimize_seebeck(vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements, maximize=True)
                     except Exception as e:
                         st.error(f"Failed to optimize maximum Seebeck coefficient: {e}")
                         max_comp, max_seebeck_abs, max_seebeck_signed = [1/3, 1/3, 1/3], float('-inf'), 0.0
