@@ -697,7 +697,6 @@ with tab1:
             title=f'UMAP Latent Space: Dominant Element ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
         )
-       olerant
         fig_umap_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_umap_elements.update_layout(
             title=dict(text=f'UMAP Latent Space: Dominant Element ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
