@@ -1,4 +1,5 @@
 streamlit
+streamlit-image-coordinates # required for periodic table
 pyngrok
 pymatgen
 torch
