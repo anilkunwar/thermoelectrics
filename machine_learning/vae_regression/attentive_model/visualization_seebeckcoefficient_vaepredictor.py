@@ -170,7 +170,7 @@ def query_arxiv_and_extract(elements, temperature, max_results=10, relevance_thr
         seebeck_pattern = re.compile(r'([-]?\d+\.?\d*)\s*μV/K')
         type_pattern = re.compile(r'\b(p-type|n-type)\b', re.IGNORECASE)
 
-        user_text = f"{' '.join(f'{el}{comp}' for el, comp in zip(elements, [0.64, 0.16, 0.20]))} at {temperature} K"
+        user_text = f"{' '.join(f'{el}{comp}' for el, comp in zip(elements, [0.25, 0.25, 0.50]))} at {temperature} K"
         user_inputs = tokenizer(user_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
         with torch.no_grad():
             user_outputs = scibert_model(**user_inputs)
@@ -257,9 +257,9 @@ def compute_latent_bias(extracted_data, user_composition_dict, user_temperature,
 
         type_factor = 1.0
         if material_type == 'p-type' and seebeck > 0:
-            type_factor = 1.2  # Boost p-type if positive Seebeck
+            type_factor = 1.2
         elif material_type == 'n-type' and seebeck < 0:
-            type_factor = 1.2  # Boost n-type if negative Seebeck
+            type_factor = 1.2
         weight *= type_factor
 
         weights.append(weight)
@@ -381,7 +381,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 
 **Maximum Seebeck Calculation**: The maximum absolute Seebeck coefficient `|S(x)|` is determined from the ternary data (496 compositions at the specified temperature) by selecting the composition with the highest `|S(x)|`, where `x = [x₁, x₂, x₃]` satisfies `x₁ + x₂ + x₃ = 1` and `0 ≤ xᵢ ≤ 1`. The data is available for download as a CSV for further analysis.
 
-**Date and Time**: 09:44 PM CEST, Sunday, August 17, 2025
+**Date and Time**: 11:45 PM CEST, Sunday, August 17, 2025
 """)
 
 # Sidebar for figure customization
@@ -557,12 +557,12 @@ def complete_to_three_elements(selected_elements, proportions, compositions, ava
 
 # Generate ternary diagram with caching
 @st.cache_resource
-def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, steps=30):
+def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, user_composition_dict, steps=30):
     compositions = []
     seebeck_values = []
     bias = compute_latent_bias(
         query_arxiv_and_extract(elements, temperature),
-        {elements[i]: compositions.get(elements[i], 0) for i in range(3)},
+        user_composition_dict,
         temperature,
         elements,
         available_elements,
@@ -575,14 +575,22 @@ def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temper
             if c >= 0:
                 comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
                 seebeck = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, bias)
-                if seebeck is not None:
-                    compositions.append([a, b, c])
-                    seebeck_values.append(abs(seebeck))
-                else:
-                    logger.warning(f"Skipping composition {comp_dict} due to prediction failure.")
+                if seebeck is None:
+                    logger.warning(f"Biased prediction failed for composition {comp_dict}, trying unbiased.")
+                    seebeck = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, bias=None)
+                if seebeck is None:
+                    logger.error(f"Unbiased prediction also failed for composition {comp_dict}, skipping.")
+                    continue
+                compositions.append([a, b, c])
+                seebeck_values.append(abs(seebeck))
+    if not compositions:
+        logger.error("No valid compositions generated.")
     return np.array(compositions), np.array(seebeck_values)
 
 def plot_ternary_diagram(compositions, seebeck_values, elements, user_composition, user_seebeck, max_comp, max_seebeck, color_scale, font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing, user_point_color, max_point_color, ternary_grid_color, ternary_axes_color):
+    if len(compositions) == 0:
+        st.warning("No valid ternary data to plot. Please check inputs or model files.")
+        return None
     fig = go.Figure()
     hover_texts = [f"{elements[0]}: {comp[0]:.2f}<br>{elements[1]}: {comp[1]:.2f}<br>{elements[2]}: {comp[2]:.2f}<br>|Seebeck|: {s:.2f} μV/K" for comp, s in zip(compositions, seebeck_values)]
     fig.add_trace(go.Scatterternary(
@@ -627,7 +635,7 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
         ))
     try:
         fig.update_layout(
-            title=dict(text=f"Ternary Diagram: |Seebeck Coefficient| at {st.session_state.temperature} K", x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+            title=dict(text=f"Ternary Diagram: |Sebeck Coefficient| at {st.session_state.temperature} K", x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
             ternary=dict(
                 sum=1,
                 aaxis=dict(
@@ -678,7 +686,11 @@ def plot_temperature_variance(elements, user_composition, max_comp, temp_range, 
     )
     for temp in temps:
         user_val = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, bias)
+        if user_val is None:
+            user_val = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, bias=None)
         max_val = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, bias)
+        if max_val is None:
+            max_val = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, bias=None)
         user_seebeck.append(abs(user_val) if user_val is not None else np.nan)
         max_seebeck.append(abs(max_val) if max_val is not None else np.nan)
     fig = go.Figure()
@@ -735,10 +747,11 @@ if st.button("Generate Ternary Diagram"):
         else:
             # Normalize user composition
             user_composition = [compositions.get(elements[i], 0) for i in range(3)]
+            user_composition_dict = {elements[i]: user_composition[i] for i in range(3)}
             # Compute latent space bias
             bias = compute_latent_bias(
                 query_arxiv_and_extract(elements, st.session_state.temperature),
-                {elements[i]: user_composition[i] for i in range(3)},
+                user_composition_dict,
                 st.session_state.temperature,
                 elements,
                 available_elements,
@@ -747,7 +760,7 @@ if st.button("Generate Ternary Diagram"):
             )
             # Predict Seebeck for user composition
             user_seebeck = predict_seebeck(
-                {elements[i]: user_composition[i] for i in range(3)},
+                user_composition_dict,
                 st.session_state.temperature,
                 available_elements,
                 scaler,
@@ -757,9 +770,9 @@ if st.button("Generate Ternary Diagram"):
                 bias
             )
             if user_seebeck is None:
-                st.warning("Failed to predict Seebeck coefficient for user composition, using unbiased prediction.")
+                st.warning("Failed to predict Seebeck coefficient for user composition with bias, using unbiased prediction.")
                 user_seebeck = predict_seebeck(
-                    {elements[i]: user_composition[i] for i in range(3)},
+                    user_composition_dict,
                     st.session_state.temperature,
                     available_elements,
                     scaler,
@@ -770,26 +783,37 @@ if st.button("Generate Ternary Diagram"):
                 )
             if user_seebeck is None:
                 st.error("Failed to predict Seebeck coefficient even without bias. Please check inputs or model files.")
+                user_seebeck = 0.0
+            # Generate ternary data with error handling
+            try:
+                compositions_array, seebeck_values = generate_ternary_data(
+                    vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements, user_composition_dict
+                )
+            except Exception as e:
+                st.error(f"Failed to generate ternary data due to computation error: {e}")
+                compositions_array, seebeck_values = [], []
+            if len(compositions_array) == 0:
+                st.error("No valid ternary data generated. Using user composition as fallback.")
+                max_comp, max_seebeck_abs, max_seebeck_signed = user_composition, abs(user_seebeck), user_seebeck
             else:
-                # Generate ternary data with error handling
-                try:
-                    compositions_array, seebeck_values = generate_ternary_data(
-                        vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements
-                    )
-                except Exception as e:
-                    st.error(f"Failed to generate ternary data due to caching or computation error: {e}")
-                    compositions_array, seebeck_values = [], []
-                if len(compositions_array) == 0:
-                    st.error("No valid ternary data generated. Please try different inputs.")
-                    max_comp, max_seebeck_abs, max_seebeck_signed = user_composition, abs(user_seebeck), user_seebeck
-                else:
-                    # Find maximum Seebeck from ternary data
-                    ternary_df = pd.DataFrame(compositions_array, columns=[elements[0], elements[1], elements[2]])
-                    ternary_df['|Seebeck| (μV/K)'] = seebeck_values
-                    max_row = ternary_df.loc[ternary_df['|Seebeck| (μV/K)'].idxmax()]
-                    max_comp = [max_row[elements[0]], max_row[elements[1]], max_row[elements[2]]]
-                    max_seebeck_abs = max_row['|Seebeck| (μV/K)']
-                    # Compute signed Seebeck for max composition
+                # Find maximum Seebeck from ternary data
+                ternary_df = pd.DataFrame(compositions_array, columns=[elements[0], elements[1], elements[2]])
+                ternary_df['|Seebeck| (μV/K)'] = seebeck_values
+                max_row = ternary_df.loc[ternary_df['|Seebeck| (μV/K)'].idxmax()]
+                max_comp = [max_row[elements[0]], max_row[elements[1]], max_row[elements[2]]]
+                max_seebeck_abs = max_row['|Seebeck| (μV/K)']
+                # Compute signed Seebeck for max composition
+                max_seebeck_signed = predict_seebeck(
+                    {elements[i]: max_comp[i] for i in range(3)},
+                    st.session_state.temperature,
+                    available_elements,
+                    scaler,
+                    vae,
+                    regressor,
+                    y_scaler,
+                    bias
+                )
+                if max_seebeck_signed is None:
                     max_seebeck_signed = predict_seebeck(
                         {elements[i]: max_comp[i] for i in range(3)},
                         st.session_state.temperature,
@@ -798,80 +822,69 @@ if st.button("Generate Ternary Diagram"):
                         vae,
                         regressor,
                         y_scaler,
-                        bias
+                        bias=None
                     )
                     if max_seebeck_signed is None:
-                        max_seebeck_signed = predict_seebeck(
-                            {elements[i]: max_comp[i] for i in range(3)},
-                            st.session_state.temperature,
-                            available_elements,
-                            scaler,
-                            vae,
-                            regressor,
-                            y_scaler,
-                            bias=None
-                        )
-                        if max_seebeck_signed is None:
-                            max_seebeck_signed = user_seebeck
-                            max_comp = user_composition
-                            max_seebeck_abs = abs(user_seebeck)
-                # Display composition and Seebeck
-                st.write("### Composition and Seebeck Coefficient")
-                st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
-                st.write(f"**User |Seebeck Coefficient|**: {abs(user_seebeck):.2f} μV/K")
-                st.write(f"**User Signed Seebeck Coefficient**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
-                st.write(f"**Maximum |Seebeck| Composition**: {elements[0]}: {max_comp[0]:.2f}, {elements[1]}: {max_comp[1]:.2f}, {elements[2]}: {max_comp[2]:.2f}")
-                st.write(f"**Maximum |Seebeck Coefficient|**: {max_seebeck_abs:.2f} μV/K")
-                st.write(f"**Maximum Signed Seebeck Coefficient**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
-                # Plot ternary diagram
-                st.write("### Ternary Diagram")
-                fig_ternary = plot_ternary_diagram(
-                    compositions_array, seebeck_values, elements, user_composition, user_seebeck,
-                    max_comp, max_seebeck_abs, color_scale, font_size, axes_line_width, point_size,
-                    axes_box_thickness, legend_spacing, user_point_color, max_point_color,
-                    ternary_grid_color, ternary_axes_color
+                        max_seebeck_signed = user_seebeck
+                        max_comp = user_composition
+                        max_seebeck_abs = abs(user_seebeck)
+            # Display composition and Seebeck
+            st.write("### Composition and Seebeck Coefficient")
+            st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
+            st.write(f"**User |Seebeck Coefficient|**: {abs(user_seebeck):.2f} μV/K")
+            st.write(f"**User Signed Seebeck Coefficient**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
+            st.write(f"**Maximum |Seebeck| Composition**: {elements[0]}: {max_comp[0]:.2f}, {elements[1]}: {max_comp[1]:.2f}, {elements[2]}: {max_comp[2]:.2f}")
+            st.write(f"**Maximum |Seebeck Coefficient|**: {max_seebeck_abs:.2f} μV/K")
+            st.write(f"**Maximum Signed Seebeck Coefficient**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
+            # Plot ternary diagram
+            st.write("### Ternary Diagram")
+            fig_ternary = plot_ternary_diagram(
+                compositions_array, seebeck_values, elements, user_composition, user_seebeck,
+                max_comp, max_seebeck_abs, color_scale, font_size, axes_line_width, point_size,
+                axes_box_thickness, legend_spacing, user_point_color, max_point_color,
+                ternary_grid_color, ternary_axes_color
+            )
+            if fig_ternary:
+                st.plotly_chart(fig_ternary, use_container_width=True)
+                try:
+                    fig_ternary.write_html(os.path.join(script_dir, 'ternary_diagram.html'))
+                except Exception as e:
+                    st.warning(f"Failed to save ternary diagram: {e}")
+                # Prepare ternary data for download
+                ternary_df = pd.DataFrame(compositions_array, columns=[elements[0], elements[1], elements[2]])
+                ternary_df['|Seebeck| (μV/K)'] = seebeck_values
+                csv = ternary_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Ternary Data as CSV",
+                    data=csv,
+                    file_name="ternary_data.csv",
+                    mime="text/csv"
                 )
-                if fig_ternary:
-                    st.plotly_chart(fig_ternary, use_container_width=True)
-                    try:
-                        fig_ternary.write_html(os.path.join(script_dir, 'ternary_diagram.html'))
-                    except Exception as e:
-                        st.warning(f"Failed to save ternary diagram: {e}")
-                    # Prepare ternary data for download
-                    ternary_df = pd.DataFrame(compositions_array, columns=[elements[0], elements[1], elements[2]])
-                    ternary_df['|Seebeck| (μV/K)'] = seebeck_values
-                    csv = ternary_df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="Download Ternary Data as CSV",
-                        data=csv,
-                        file_name="ternary_data.csv",
-                        mime="text/csv"
-                    )
-                # Plot temperature variance
-                st.write("### |Seebeck Coefficient| vs Temperature")
-                fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(
-                    elements, user_composition, max_comp, [100, 1000], available_elements,
-                    scaler, vae, regressor, y_scaler, font_size, axes_line_width, grid_width,
-                    user_point_color, max_point_color, point_size, axes_box_thickness
+            # Plot temperature variance
+            st.write("### |Seebeck Coefficient| vs Temperature")
+            fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(
+                elements, user_composition, max_comp, [100, 1000], available_elements,
+                scaler, vae, regressor, y_scaler, font_size, axes_line_width, grid_width,
+                user_point_color, max_point_color, point_size, axes_box_thickness
+            )
+            if fig_temp:
+                st.plotly_chart(fig_temp, use_container_width=True)
+                try:
+                    fig_temp.write_html(os.path.join(script_dir, 'temperature_variance.html'))
+                except Exception as e:
+                    st.warning(f"Failed to save temperature variance plot: {e}")
+                # Prepare temperature variance data for download
+                temp_df = pd.DataFrame({
+                    'Temperature (K)': temps,
+                    'User |Seebeck| (μV/K)': user_seebeck_vals,
+                    'Max |Seebeck| (μV/K)': max_seebeck_vals
+                })
+                csv = temp_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Temperature Variance Data as CSV",
+                    data=csv,
+                    file_name="temperature_variance_data.csv",
+                    mime="text/csv"
                 )
-                if fig_temp:
-                    st.plotly_chart(fig_temp, use_container_width=True)
-                    try:
-                        fig_temp.write_html(os.path.join(script_dir, 'temperature_variance.html'))
-                    except Exception as e:
-                        st.warning(f"Failed to save temperature variance plot: {e}")
-                    # Prepare temperature variance data for download
-                    temp_df = pd.DataFrame({
-                        'Temperature (K)': temps,
-                        'User |Seebeck| (μV/K)': user_seebeck_vals,
-                        'Max |Seebeck| (μV/K)': max_seebeck_vals
-                    })
-                    csv = temp_df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="Download Temperature Variance Data as CSV",
-                        data=csv,
-                        file_name="temperature_variance_data.csv",
-                        mime="text/csv"
-                    )
     else:
         st.error("Please select at least one element.")
