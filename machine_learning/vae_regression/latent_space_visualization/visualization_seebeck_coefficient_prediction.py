@@ -15,7 +15,7 @@ import colorsys
 from scipy.optimize import minimize
 from itertools import combinations
 from streamlit_image_coordinates import streamlit_image_coordinates
-from PIL import Image
+from PIL import Image, ImageDraw
 import io
 
 # Set random seed for reproducibility
@@ -170,8 +170,16 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements using either the dropdown or the interactive periodic table below, input their stoichiometric coefficients, and view the Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum Seebeck coefficients and plots their variation with temperature.
-**Date and Time**: 05:58 PM CEST, Sunday, August 17, 2025
+**Date and Time**: 06:06 PM CEST, Sunday, August 17, 2025
 """)
+
+# Initialize session state
+if 'selected_elements' not in st.session_state:
+    st.session_state.selected_elements = []
+if 'compositions' not in st.session_state:
+    st.session_state.compositions = {}
+if 'temperature' not in st.session_state:
+    st.session_state.temperature = 300
 
 # Periodic Table with Clickable Regions
 st.header("Interactive Periodic Table")
@@ -243,8 +251,6 @@ st.session_state.selected_elements = st.multiselect(
 )
 
 # Update compositions based on selected elements
-if 'compositions' not in st.session_state:
-    st.session_state.compositions = {}
 for element in st.session_state.selected_elements:
     if element not in st.session_state.compositions:
         st.session_state.compositions[element] = 0.0
@@ -272,8 +278,6 @@ else:
     st.write("Please select up to three elements using the periodic table or dropdown.")
 
 # Temperature input
-if 'temperature' not in st.session_state:
-    st.session_state.temperature = 300
 st.session_state.temperature = st.number_input("Enter Temperature (K):", min_value=0, max_value=5000, value=st.session_state.temperature, step=10)
 
 # Complete to three elements if fewer are selected
