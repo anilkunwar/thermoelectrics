@@ -14,6 +14,9 @@ import joblib
 import colorsys
 from scipy.optimize import minimize
 from itertools import combinations
+from streamlit_image_coordinates import streamlit_image_coordinates
+from PIL import Image
+import io
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -166,14 +169,18 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 # Streamlit UI
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the periodic table, input their stoichiometric coefficients, and view the Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum Seebeck coefficients and plots their variation with temperature.
-**Date and Time**: 05:42 PM CEST, Sunday, August 17, 2025
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements using either the dropdown or the interactive periodic table below, input their stoichiometric coefficients, and view the Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum Seebeck coefficients and plots their variation with temperature.
+**Date and Time**: 05:58 PM CEST, Sunday, August 17, 2025
 """)
 
-# Interactive Periodic Table for Element Selection
-st.header("Select Elements")
-st.write("Click on the periodic table to select up to three elements. Only available elements are clickable.")
-def plot_interactive_periodic_table(available_elements, selected_elements, element_color_map, fontsize=14):
+# Periodic Table with Clickable Regions
+st.header("Interactive Periodic Table")
+st.write("Click on available elements (colored) to select/deselect up to three elements. Alternatively, use the dropdown below.")
+def generate_periodic_table_image(available_elements, selected_elements, element_color_map):
+    # Create a simple periodic table image using PIL
+    width, height = 900, 450
+    image = Image.new('RGB', (width, height), 'white')
+    draw = ImageDraw.Draw(image)
     periodic_table_positions = {
         'Li': (3, 1), 'Na': (4, 1), 'K': (5, 1), 'Rb': (6, 1), 'Cs': (7, 1),
         'Be': (3, 2), 'Mg': (4, 2), 'Ca': (5, 2), 'Sr': (6, 2), 'Ba': (7, 2),
@@ -188,64 +195,60 @@ def plot_interactive_periodic_table(available_elements, selected_elements, eleme
         'Te': (6, 16), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17), 'Au': (7, 11), 'Ag': (6, 11),
         'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8), 'N': (3, 15), 'Na': (3, 1), 'K': (4, 1)
     }
-    fig = go.Figure()
+    cell_width, cell_height = width // 18, height // 8
+    element_boxes = {}
     for element in all_elements:
         if element in periodic_table_positions:
             row, col = periodic_table_positions[element]
+            x = (col - 1) * cell_width
+            y = (row - 1) * cell_height
             color = element_color_map.get(element, '#D3D3D3') if element in available_elements else '#D3D3D3'
             opacity = 1.0 if element in selected_elements else (0.7 if element in available_elements else 0.3)
-            fig.add_trace(go.Scatter(
-                x=[col], y=[-row],
-                mode='markers+text',
-                text=[element],
-                textposition='middle center',
-                textfont=dict(size=fontsize, family='Arial'),
-                marker=dict(size=40, color=color, opacity=opacity, line=dict(width=2, color='black')),
-                hoverinfo='text',
-                hovertext=[f"Element: {element}<br>Electronegativity: {electronegativity.get(element, 1.0):.2f}<br>Thermoelectric Weight: {thermoelectric_weights.get(element, 1.0):.2f}"],
-                customdata=[element],
-                name=element,
-                showlegend=False
-            ))
-    fig.update_layout(
-        title=dict(text='Interactive Periodic Table (Click to Select Elements)', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
-        xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        yaxis=dict(range=[-9, -2], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        plot_bgcolor='white', paper_bgcolor='white',
-        width=900, height=450,
-        margin=dict(l=20, r=20, t=50, b=20),
-        clickmode='event+select'
-    )
-    return fig
+            rgb = tuple(int(color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+            fill_color = (*rgb, int(255 * opacity))
+            draw.rectangle([x, y, x + cell_width, y + cell_height], fill=fill_color, outline='black')
+            draw.text((x + cell_width//2, y + cell_height//2), element, fill='black', anchor='mm', font_size=14)
+            element_boxes[element] = (x, y, x + cell_width, y + cell_height)
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='PNG')
+    img_byte_arr.seek(0)
+    return img_byte_arr, element_boxes
 
-# Initialize session state for selected elements
-if 'selected_elements' not in st.session_state:
-    st.session_state.selected_elements = []
+# Generate and display periodic table image
+img_byte_arr, element_boxes = generate_periodic_table_image(available_elements, st.session_state.selected_elements, default_element_color_map)
+coordinates = streamlit_image_coordinates(img_byte_arr, key='periodic_table_image')
+
+# Handle click on periodic table
+if coordinates:
+    x, y = coordinates['x'], coordinates['y']
+    for element, (x1, y1, x2, y2) in element_boxes.items():
+        if x1 <= x <= x2 and y1 <= y <= y2 and element in available_elements:
+            if element not in st.session_state.selected_elements and len(st.session_state.selected_elements) < 3:
+                st.session_state.selected_elements.append(element)
+                st.session_state.compositions[element] = 0.0
+            elif element in st.session_state.selected_elements:
+                st.session_state.selected_elements.remove(element)
+                st.session_state.compositions.pop(element, None)
+            st.rerun()
+            break
+
+# Multiselect for element selection
+st.header("Select Elements via Dropdown")
+st.session_state.selected_elements = st.multiselect(
+    "Select up to three elements",
+    options=available_elements,
+    default=st.session_state.selected_elements,
+    max_selections=3,
+    key='element_selector'
+)
+
+# Update compositions based on selected elements
 if 'compositions' not in st.session_state:
     st.session_state.compositions = {}
-if 'temperature' not in st.session_state:
-    st.session_state.temperature = 300
-
-# Plot interactive periodic table
-fig_periodic = plot_interactive_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map)
-periodic_selection = st.plotly_chart(fig_periodic, use_container_width=True, key='periodic_table')
-
-# Handle element selection from periodic table clicks
-if periodic_selection:
-    try:
-        selected_points = periodic_selection['plotly_click']
-        if selected_points:
-            clicked_element = selected_points[0]['customdata'][0]
-            if clicked_element in available_elements:
-                if clicked_element not in st.session_state.selected_elements and len(st.session_state.selected_elements) < 3:
-                    st.session_state.selected_elements.append(clicked_element)
-                    st.session_state.compositions[clicked_element] = 0.0
-                elif clicked_element in st.session_state.selected_elements:
-                    st.session_state.selected_elements.remove(clicked_element)
-                    st.session_state.compositions.pop(clicked_element, None)
-                st.rerun()
-    except:
-        pass
+for element in st.session_state.selected_elements:
+    if element not in st.session_state.compositions:
+        st.session_state.compositions[element] = 0.0
+st.session_state.compositions = {k: v for k, v in st.session_state.compositions.items() if k in st.session_state.selected_elements}
 
 # Display selected elements and allow composition input
 st.header("Input Stoichiometric Coefficients")
@@ -255,7 +258,8 @@ if st.session_state.selected_elements:
     for idx, element in enumerate(st.session_state.selected_elements):
         with cols[idx]:
             st.session_state.compositions[element] = st.number_input(
-                f"Composition for {element} (0 to 1)", min_value=0.0, max_value=1.0, value=0.0, step=0.1, key=f"comp_{element}"
+                f"Composition for {element} (0 to 1)", min_value=0.0, max_value=1.0,
+                value=st.session_state.compositions.get(element, 0.0), step=0.1, key=f"comp_{element}"
             )
     # Normalize compositions
     if st.button("Normalize Compositions"):
@@ -265,10 +269,12 @@ if st.session_state.selected_elements:
                 st.session_state.compositions[element] /= total
             st.rerun()
 else:
-    st.write("Please select up to three elements from the periodic table.")
+    st.write("Please select up to three elements using the periodic table or dropdown.")
 
 # Temperature input
-st.session_state.temperature = st.number_input("Enter Temperature (K):", min_value=0, max_value=5000, value=300, step=10)
+if 'temperature' not in st.session_state:
+    st.session_state.temperature = 300
+st.session_state.temperature = st.number_input("Enter Temperature (K):", min_value=0, max_value=5000, value=st.session_state.temperature, step=10)
 
 # Complete to three elements if fewer are selected
 def complete_to_three_elements(selected_elements, compositions, available_elements):
