@@ -396,11 +396,14 @@ all_elements = [
 
 # Color map for all elements (aligned with featurization script)
 default_color_list = (
-    px.colors.qualitative.Plotly +
-    px.colors.qualitative.Pastel1 +
-    px.colors.qualitative.D3 +
-    px.colors.qualitative.G10 +
-    px.colors.qualitative.T10
+    px.colors.qualitative.Plotly +           # 10 colors
+    px.colors.qualitative.Pastel1 +         # 9 colors
+    px.colors.qualitative.D3 +              # 10 colors
+    px.colors.qualitative.G10 +             # 10 colors
+    px.colors.qualitative.T10 +             # 10 colors
+    px.colors.qualitative.Set1 +            # 9 colors
+    px.colors.qualitative.Set2 +            # 8 colors
+    px.colors.qualitative.Set3              # 12 colors
 )
 default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_elements)]))
 
@@ -420,7 +423,7 @@ color_map_options = [
 st.title("Thermoelectric Material Analysis and Seebeck Coefficient Prediction")
 st.markdown("""
 This application visualizes thermoelectric material data and predicts Seebeck coefficients using a trained Variational Autoencoder (VAE) and Regressor. Upload a featurized CSV to convert to the required SQLite database, then explore latent space visualizations, training history, and predict Seebeck coefficients for new compositions.
-**Date and Time**: 05:53 PM CEST, Sunday, August 03, 2025
+**Date and Time**: 08:40 AM CEST, Sunday, August 17, 2025
 """)
 
 # CSV to SQLite converter
@@ -694,6 +697,7 @@ with tab1:
             title=f'UMAP Latent Space: Dominant Element ({selected_element})',
             hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
         )
+       olerant
         fig_umap_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_umap_elements.update_layout(
             title=dict(text=f'UMAP Latent Space: Dominant Element ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
