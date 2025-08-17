@@ -16,6 +16,7 @@ import arxiv
 from transformers import AutoTokenizer, AutoModel
 import re
 import logging
+from scipy.spatial.distance import cosine
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -111,11 +112,40 @@ def load_scibert():
         logger.error(f"Error loading SciBERT: {e}")
         return None, None
 
-# Query arXiv and extract data
+# Compute PMI for element-thermoelectric term associations
+def compute_pmi(elements, abstracts, thermo_terms=["thermoelectric", "Seebeck", "p-type", "n-type"]):
+    element_counts = {el: 0 for el in elements}
+    thermo_counts = {t: 0 for t in thermo_terms}
+    cooccur_counts = {(el, t): 0 for el in elements for t in thermo_terms}
+    total_words = 0
+
+    for abstract in abstracts:
+        words = abstract.lower().split()
+        total_words += len(words)
+        for el in elements:
+            if el.lower() in words:
+                element_counts[el] += 1
+        for t in thermo_terms:
+            if t.lower() in words:
+                thermo_counts[t] += 1
+        for el, t in cooccur_counts.keys():
+            if el.lower() in words and t.lower() in words:
+                cooccur_counts[(el, t)] += 1
+
+    pmi_scores = {}
+    for el, t in cooccur_counts:
+        p_joint = cooccur_counts[(el, t)] / total_words if total_words > 0 else 0
+        p_el = element_counts[el] / total_words if total_words > 0 else 0
+        p_t = thermo_counts[t] / total_words if total_words > 0 else 0
+        pmi = np.log2(p_joint / (p_el * p_t)) if p_joint > 0 and p_el > 0 and p_t > 0 else 0
+        pmi_scores[(el, t)] = pmi
+    return pmi_scores
+
+# Query arXiv and extract data with relaxed matching
 @st.cache_data(show_spinner=False)
-def query_arxiv_and_extract(elements, temperature, max_results=10):
+def query_arxiv_and_extract(elements, temperature, max_results=10, relevance_threshold=0.2, temp_range=100):
     try:
-        query = f"thermoelectric {' '.join(elements)} Seebeck {temperature} K"
+        query = f"thermoelectric {' '.join(elements)} Seebeck"
         search = arxiv.Search(
             query=query,
             max_results=max_results,
@@ -131,10 +161,20 @@ def query_arxiv_and_extract(elements, temperature, max_results=10):
             logger.error("SciBERT model not loaded.")
             return []
 
+        abstracts = [result.summary for result in results]
+        pmi_scores = compute_pmi(elements, abstracts)
+
         extracted_data = []
         composition_pattern = re.compile(r'([A-Z][a-z]?)[\d.]+')
         temperature_pattern = re.compile(r'(\d+)\s*[Kk]')
-        seebeck_pattern = re.compile(r'(\d+\.?\d*)\s*μV/K')
+        seebeck_pattern = re.compile(r'([-]?\d+\.?\d*)\s*μV/K')
+        type_pattern = re.compile(r'\b(p-type|n-type)\b', re.IGNORECASE)
+
+        user_text = f"{' '.join(f'{el}{comp}' for el, comp in zip(elements, [0.64, 0.16, 0.20]))} at {temperature} K"
+        user_inputs = tokenizer(user_text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+        with torch.no_grad():
+            user_outputs = scibert_model(**user_inputs)
+            user_embedding = user_outputs.last_hidden_state.mean(dim=1).squeeze()
 
         for result in results:
             abstract = result.summary
@@ -142,36 +182,49 @@ def query_arxiv_and_extract(elements, temperature, max_results=10):
             with torch.no_grad():
                 outputs = scibert_model(**inputs)
                 hidden_states = outputs.last_hidden_state
+                abstract_embedding = hidden_states.mean(dim=1).squeeze()
+                similarity = 1 - cosine(user_embedding.cpu().numpy(), abstract_embedding.cpu().numpy())
 
             attention_layer = Attention(hidden_states.size(-1)).to(device)
-            context, weights = attention_layer(hidden_states)
+            _, weights = attention_layer(hidden_states)
+            max_weight = weights.max().item()
 
-            tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
+            if max_weight < relevance_threshold:
+                continue
+
             comp_matches = composition_pattern.findall(abstract)
             temp_matches = temperature_pattern.findall(abstract)
             seebeck_matches = seebeck_pattern.findall(abstract)
+            type_matches = type_pattern.findall(abstract)
 
             compositions = []
             for comp in comp_matches:
                 try:
                     parsed = Composition(comp).as_dict()
-                    if all(elem in elements for elem in parsed.keys()):
+                    if any(elem in elements for elem in parsed.keys()):
                         total = sum(parsed.values())
                         normalized = {k: v/total for k, v in parsed.items()}
                         compositions.append(normalized)
                 except:
                     continue
 
-            temperatures = [float(t) for t in temp_matches]
+            temperatures = [float(t) for t in temp_matches if abs(float(t) - temperature) <= temp_range]
             seebeck_values = [float(s) for s in seebeck_matches]
+            material_type = 'p-type' if any('p-type' in t.lower() for t in type_matches) else 'n-type' if any('n-type' in t.lower() for t in type_matches) else None
 
-            if compositions and temperatures and seebeck_values:
+            pmi_weight = max(pmi_scores.get((el, t), 0) for el in elements for t in ["thermoelectric", "Seebeck", "p-type", "n-type"])
+
+            if compositions and (temperatures or seebeck_values):
                 extracted_data.append({
                     'composition': compositions[0] if compositions else {},
                     'temperature': temperatures[0] if temperatures else temperature,
-                    'seebeck': seebeck_values[0] if seebeck_values else None
+                    'seebeck': seebeck_values[0] if seebeck_values else None,
+                    'type': material_type,
+                    'similarity': similarity,
+                    'pmi': pmi_weight
                 })
 
+        logger.info(f"Extracted {len(extracted_data)} relevant abstracts.")
         return extracted_data
     except Exception as e:
         logger.error(f"arXiv query failed: {e}")
@@ -180,6 +233,7 @@ def query_arxiv_and_extract(elements, temperature, max_results=10):
 # Compute latent space bias from arXiv data
 def compute_latent_bias(extracted_data, user_composition_dict, user_temperature, elements, available_elements, _scaler, _vae):
     if not extracted_data:
+        logger.warning("No relevant arXiv data found, using zero bias.")
         return torch.zeros(_vae.latent_dim).to(device)
 
     bias = torch.zeros(_vae.latent_dim).to(device)
@@ -188,14 +242,26 @@ def compute_latent_bias(extracted_data, user_composition_dict, user_temperature,
         comp = data['composition']
         temp = data['temperature']
         seebeck = data['seebeck']
+        material_type = data['type']
+        similarity = data['similarity']
+        pmi = data['pmi']
+
         if not comp or seebeck is None:
             continue
 
         comp_dict = {el: comp.get(el, 0) for el in elements}
         comp_vector = [comp_dict.get(el, 0) for el in elements]
         comp_similarity = 1 - np.mean((np.array(comp_vector) - np.array([user_composition_dict.get(el, 0) for el in elements]))**2)
-        temp_similarity = 1 - abs(temp - user_temperature) / max(temp, user_temperature)
-        weight = comp_similarity * temp_similarity
+        temp_similarity = 1 - abs(temp - user_temperature) / max(temp, user_temperature, 1)
+        weight = comp_similarity * temp_similarity * similarity * (1 + pmi)
+
+        type_factor = 1.0
+        if material_type == 'p-type' and seebeck > 0:
+            type_factor = 1.2  # Boost p-type if positive Seebeck
+        elif material_type == 'n-type' and seebeck < 0:
+            type_factor = 1.2  # Boost n-type if negative Seebeck
+        weight *= type_factor
+
         weights.append(weight)
 
         df = featurize_composition(comp_dict, available_elements, temp)
@@ -209,7 +275,27 @@ def compute_latent_bias(extracted_data, user_composition_dict, user_temperature,
         total_weight = sum(weights)
         if total_weight > 0:
             bias /= total_weight
+        else:
+            logger.warning("No valid weights for bias, using zero bias.")
+            return torch.zeros(_vae.latent_dim).to(device)
+    else:
+        logger.warning("No valid data for bias, using zero bias.")
+        return torch.zeros(_vae.latent_dim).to(device)
+
     return bias
+
+# Preprocessing for prediction
+def featurize_composition(composition_dict, available_elements, temperature):
+    feature_vector = {element: composition_dict.get(element, 0) for element in available_elements}
+    feature_vector['temperature(K)'] = temperature
+    return pd.DataFrame([feature_vector])
+
+def preprocess_new_data(df, available_elements, scaler):
+    features_df = df
+    imputer = SimpleImputer(strategy='mean')
+    X_imputed = imputer.fit_transform(features_df)
+    X_scaled = scaler.transform(X_imputed)
+    return X_scaled
 
 # Modified predict_seebeck with latent space bias
 def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, bias=None):
@@ -291,11 +377,11 @@ st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the dropdown below, input their proportions, and view the absolute Seebeck coefficient across compositions. The app identifies the composition with the maximum absolute Seebeck coefficient from the computed ternary data and plots its variation with temperature.
 
-**Physics-Based Bias**: Predictions are enhanced by querying arXiv abstracts using SciBERT with quantitative NER and attention mechanisms to extract chemical compositions, temperatures, and Seebeck coefficients. These are used to compute a bias for the VAE's latent space, ensuring physically consistent outputs aligned with reported thermoelectric properties (e.g., influenced by electronegativity and thermoelectric weights).
+**Physics-Based Bias**: Predictions are enhanced by querying arXiv abstracts using SciBERT with quantitative NER and attention mechanisms (relevance threshold 0.2) to extract chemical compositions, temperatures, and Seebeck coefficients, even for partial element matches. Semantic similarity and PMI ensure contextually relevant data, with n-type/p-type feedback adjusting the signed Seebeck coefficient. The VAE's latent space is biased to align with reported thermoelectric properties (e.g., influenced by electronegativity and thermoelectric weights).
 
 **Maximum Seebeck Calculation**: The maximum absolute Seebeck coefficient `|S(x)|` is determined from the ternary data (496 compositions at the specified temperature) by selecting the composition with the highest `|S(x)|`, where `x = [x₁, x₂, x₃]` satisfies `x₁ + x₂ + x₃ = 1` and `0 ≤ xᵢ ≤ 1`. The data is available for download as a CSV for further analysis.
 
-**Date and Time**: 09:22 PM CEST, Sunday, August 17, 2025
+**Date and Time**: 09:44 PM CEST, Sunday, August 17, 2025
 """)
 
 # Sidebar for figure customization
@@ -492,6 +578,8 @@ def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temper
                 if seebeck is not None:
                     compositions.append([a, b, c])
                     seebeck_values.append(abs(seebeck))
+                else:
+                    logger.warning(f"Skipping composition {comp_dict} due to prediction failure.")
     return np.array(compositions), np.array(seebeck_values)
 
 def plot_ternary_diagram(compositions, seebeck_values, elements, user_composition, user_seebeck, max_comp, max_seebeck, color_scale, font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing, user_point_color, max_point_color, ternary_grid_color, ternary_axes_color):
@@ -658,13 +746,36 @@ if st.button("Generate Ternary Diagram"):
                 vae
             )
             # Predict Seebeck for user composition
-            user_seebeck = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler, bias)
+            user_seebeck = predict_seebeck(
+                {elements[i]: user_composition[i] for i in range(3)},
+                st.session_state.temperature,
+                available_elements,
+                scaler,
+                vae,
+                regressor,
+                y_scaler,
+                bias
+            )
             if user_seebeck is None:
-                st.error("Failed to predict Seebeck coefficient for user composition.")
+                st.warning("Failed to predict Seebeck coefficient for user composition, using unbiased prediction.")
+                user_seebeck = predict_seebeck(
+                    {elements[i]: user_composition[i] for i in range(3)},
+                    st.session_state.temperature,
+                    available_elements,
+                    scaler,
+                    vae,
+                    regressor,
+                    y_scaler,
+                    bias=None
+                )
+            if user_seebeck is None:
+                st.error("Failed to predict Seebeck coefficient even without bias. Please check inputs or model files.")
             else:
                 # Generate ternary data with error handling
                 try:
-                    compositions_array, seebeck_values = generate_ternary_data(vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements)
+                    compositions_array, seebeck_values = generate_ternary_data(
+                        vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements
+                    )
                 except Exception as e:
                     st.error(f"Failed to generate ternary data due to caching or computation error: {e}")
                     compositions_array, seebeck_values = [], []
@@ -679,11 +790,31 @@ if st.button("Generate Ternary Diagram"):
                     max_comp = [max_row[elements[0]], max_row[elements[1]], max_row[elements[2]]]
                     max_seebeck_abs = max_row['|Seebeck| (μV/K)']
                     # Compute signed Seebeck for max composition
-                    max_seebeck_signed = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler, bias)
+                    max_seebeck_signed = predict_seebeck(
+                        {elements[i]: max_comp[i] for i in range(3)},
+                        st.session_state.temperature,
+                        available_elements,
+                        scaler,
+                        vae,
+                        regressor,
+                        y_scaler,
+                        bias
+                    )
                     if max_seebeck_signed is None:
-                        max_seebeck_signed = user_seebeck
-                        max_comp = user_composition
-                        max_seebeck_abs = abs(user_seebeck)
+                        max_seebeck_signed = predict_seebeck(
+                            {elements[i]: max_comp[i] for i in range(3)},
+                            st.session_state.temperature,
+                            available_elements,
+                            scaler,
+                            vae,
+                            regressor,
+                            y_scaler,
+                            bias=None
+                        )
+                        if max_seebeck_signed is None:
+                            max_seebeck_signed = user_seebeck
+                            max_comp = user_composition
+                            max_seebeck_abs = abs(user_seebeck)
                 # Display composition and Seebeck
                 st.write("### Composition and Seebeck Coefficient")
                 st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
@@ -694,7 +825,12 @@ if st.button("Generate Ternary Diagram"):
                 st.write(f"**Maximum Signed Seebeck Coefficient**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
                 # Plot ternary diagram
                 st.write("### Ternary Diagram")
-                fig_ternary = plot_ternary_diagram(compositions_array, seebeck_values, elements, user_composition, user_seebeck, max_comp, max_seebeck_abs, color_scale, font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing, user_point_color, max_point_color, ternary_grid_color, ternary_axes_color)
+                fig_ternary = plot_ternary_diagram(
+                    compositions_array, seebeck_values, elements, user_composition, user_seebeck,
+                    max_comp, max_seebeck_abs, color_scale, font_size, axes_line_width, point_size,
+                    axes_box_thickness, legend_spacing, user_point_color, max_point_color,
+                    ternary_grid_color, ternary_axes_color
+                )
                 if fig_ternary:
                     st.plotly_chart(fig_ternary, use_container_width=True)
                     try:
@@ -713,7 +849,11 @@ if st.button("Generate Ternary Diagram"):
                     )
                 # Plot temperature variance
                 st.write("### |Seebeck Coefficient| vs Temperature")
-                fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(elements, user_composition, max_comp, [100, 1000], available_elements, scaler, vae, regressor, y_scaler, font_size, axes_line_width, grid_width, user_point_color, max_point_color, point_size, axes_box_thickness)
+                fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(
+                    elements, user_composition, max_comp, [100, 1000], available_elements,
+                    scaler, vae, regressor, y_scaler, font_size, axes_line_width, grid_width,
+                    user_point_color, max_point_color, point_size, axes_box_thickness
+                )
                 if fig_temp:
                     st.plotly_chart(fig_temp, use_container_width=True)
                     try:
