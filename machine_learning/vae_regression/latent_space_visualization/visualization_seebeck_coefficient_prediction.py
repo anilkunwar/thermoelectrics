@@ -170,15 +170,21 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements using either the dropdown or the interactive periodic table below, input their stoichiometric coefficients, and view the Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum Seebeck coefficients and plots their variation with temperature.
-**Date and Time**: 06:06 PM CEST, Sunday, August 17, 2025
+**Date and Time**: 06:16 PM CEST, Sunday, August 17, 2025
 """)
 
-# Initialize session state
-if 'selected_elements' not in st.session_state:
+# Initialize session state with fallback
+try:
+    if 'selected_elements' not in st.session_state:
+        st.session_state.selected_elements = []
+    if 'compositions' not in st.session_state:
+        st.session_state.compositions = {}
+    if 'temperature' not in st.session_state:
+        st.session_state.temperature = 300
+except Exception as e:
+    st.warning(f"Session state initialization failed: {e}. Resetting to defaults.")
     st.session_state.selected_elements = []
-if 'compositions' not in st.session_state:
     st.session_state.compositions = {}
-if 'temperature' not in st.session_state:
     st.session_state.temperature = 300
 
 # Periodic Table with Clickable Regions
@@ -211,10 +217,15 @@ def generate_periodic_table_image(available_elements, selected_elements, element
             x = (col - 1) * cell_width
             y = (row - 1) * cell_height
             color = element_color_map.get(element, '#D3D3D3') if element in available_elements else '#D3D3D3'
+            # Convert hex color to RGB tuple
+            try:
+                rgb = tuple(int(color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+            except ValueError:
+                rgb = (211, 211, 211)  # Fallback to gray if color parsing fails
             opacity = 1.0 if element in selected_elements else (0.7 if element in available_elements else 0.3)
-            rgb = tuple(int(color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-            fill_color = (*rgb, int(255 * opacity))
-            draw.rectangle([x, y, x + cell_width, y + cell_height], fill=fill_color, outline='black')
+            # Adjust RGB values for opacity effect (blend with white background)
+            adjusted_rgb = tuple(int(c * opacity + 255 * (1 - opacity)) for c in rgb)
+            draw.rectangle([x, y, x + cell_width, y + cell_height], fill=adjusted_rgb, outline='black')
             draw.text((x + cell_width//2, y + cell_height//2), element, fill='black', anchor='mm', font_size=14)
             element_boxes[element] = (x, y, x + cell_width, y + cell_height)
     img_byte_arr = io.BytesIO()
