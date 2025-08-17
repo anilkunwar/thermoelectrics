@@ -21,6 +21,7 @@ import sqlite3
 import re
 import os
 from matplotlib.lines import Line2D
+import colorsys
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -279,7 +280,7 @@ def plot_periodic_table(available_elements, element_color_map, fontsize=12):
                 text=[element],
                 textposition='middle center',
                 textfont=dict(size=fontsize + 2, family='Arial'),  # Increased font size
-                marker=dict(size=40, color=element_color_map.get(element, '#FFFFFF'), line=dict(width=2, color='black')),
+                marker=dict(size=40, color=element_color_map.get(element, '#D3D3D3'), line=dict(width=2, color='black')),
                 hoverinfo='text',
                 hovertext=[f"Element: {element}<br>Electronegativity: {en:.2f}<br>Thermoelectric Weight: {tw:.2f}"],
                 customdata=[element],
@@ -395,7 +396,8 @@ all_elements = [
 ]
 
 # Color map for all elements (aligned with featurization script)
-default_color_list = (
+# Combine Plotly qualitative palettes
+base_color_list = (
     px.colors.qualitative.Plotly +           # 10 colors
     px.colors.qualitative.Pastel1 +         # 9 colors
     px.colors.qualitative.D3 +              # 10 colors
@@ -403,8 +405,19 @@ default_color_list = (
     px.colors.qualitative.T10 +             # 10 colors
     px.colors.qualitative.Set1 +            # 9 colors
     px.colors.qualitative.Set2 +            # 8 colors
-    px.colors.qualitative.Set3              # 12 colors
+    px.colors.qualitative.Set3 +            # 12 colors
+    px.colors.qualitative.Pastel2 +         # 8 colors
+    px.colors.qualitative.Dark2             # 8 colors
 )
+# Generate additional colors using HSV to reach 83
+num_additional_colors = len(all_elements) - len(base_color_list)
+additional_colors = []
+for i in range(num_additional_colors):
+    hue = i / num_additional_colors
+    rgb = colorsys.hsv_to_rgb(hue, 0.7, 0.9)
+    hex_color = '#{:02x}{:02x}{:02x}'.format(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
+    additional_colors.append(hex_color)
+default_color_list = base_color_list + additional_colors
 default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_elements)]))
 
 # Color map options
@@ -423,7 +436,7 @@ color_map_options = [
 st.title("Thermoelectric Material Analysis and Seebeck Coefficient Prediction")
 st.markdown("""
 This application visualizes thermoelectric material data and predicts Seebeck coefficients using a trained Variational Autoencoder (VAE) and Regressor. Upload a featurized CSV to convert to the required SQLite database, then explore latent space visualizations, training history, and predict Seebeck coefficients for new compositions.
-**Date and Time**: 08:40 AM CEST, Sunday, August 17, 2025
+**Date and Time**: 08:50 AM CEST, Sunday, August 17, 2025
 """)
 
 # CSV to SQLite converter
