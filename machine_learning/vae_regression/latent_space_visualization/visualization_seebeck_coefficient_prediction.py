@@ -171,7 +171,7 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the dropdown below, input their proportions, and view the absolute Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum absolute Seebeck coefficients and plots their variation with temperature.
-**Date and Time**: 07:34 PM CEST, Sunday, August 17, 2025
+**Date and Time**: 07:38 PM CEST, Sunday, August 17, 2025
 """)
 
 # Sidebar for figure customization
@@ -420,9 +420,9 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
             title=dict(text=f"Ternary Diagram: |Seebeck Coefficient| at {st.session_state.temperature} K", x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
             ternary=dict(
                 sum=1,
-                aaxis=dict(title=elements[0], tickformat='.2f', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
-                baxis=dict(title=elements[1], tickformat='.2f', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
-                caxis=dict(title=elements[2], tickformat='.2f', titlefont=dict(size=font_size), tickfont=dict(size=font_size))
+                aaxis=dict(title=dict(text=elements[0], font=dict(size=font_size)), tickfont=dict(size=font_size)),
+                baxis=dict(title=dict(text=elements[1], font=dict(size=font_size)), tickfont=dict(size=font_size)),
+                caxis=dict(title=dict(text=elements[2], font=dict(size=font_size)), tickfont=dict(size=font_size))
             ),
             showlegend=True,
             legend=dict(x=1.05, y=1, font=dict(size=legend_font_size)),
@@ -455,8 +455,28 @@ def plot_temperature_variance(elements, user_composition, min_comp, max_comp, te
         fig.update_layout(
             title=dict(text='|Seebeck Coefficient| vs Temperature', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
             xaxis_title='Temperature (K)', yaxis_title='|Seebeck Coefficient| (μV/K)',
-            xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', gridwidth=grid_width, zeroline=False, showline=True, linewidth=axes_box_thickness, linecolor='black', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
-            yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', gridwidth=grid_width, zeroline=False, showline=True, linewidth=axes_box_thickness, linecolor='black', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
+            xaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)',
+                gridwidth=grid_width,
+                zeroline=False,
+                showline=True,
+                linewidth=axes_box_thickness,
+                linecolor='black',
+                title=dict(text='Temperature (K)', font=dict(size=font_size)),
+                tickfont=dict(size=font_size)
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)',
+                gridwidth=grid_width,
+                zeroline=False,
+                showline=True,
+                linewidth=axes_box_thickness,
+                linecolor='black',
+                title=dict(text='|Seebeck Coefficient| (μV/K)', font=dict(size=font_size)),
+                tickfont=dict(size=font_size)
+            ),
             plot_bgcolor='white',
             paper_bgcolor='white',
             legend=dict(x=1.05, y=1, font=dict(size=legend_font_size)),
