@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 from pymatgen.core.composition import Composition
 import sqlite3
 import os
+import joblib
 import colorsys
 from scipy.optimize import minimize
 from itertools import combinations
