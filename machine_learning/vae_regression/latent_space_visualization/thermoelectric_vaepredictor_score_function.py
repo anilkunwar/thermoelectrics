@@ -21,6 +21,7 @@ import sqlite3
 import re
 import os
 from matplotlib.lines import Line2D
+import colorsys
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -180,7 +181,7 @@ def plot_radar(data, labels, title, max_samples=10, alpha=0.3, linewidth=2, font
     plt.tight_layout()
     return fig
 
-def plot_training_history_matplotlib(history_df, title, filename, linewidth=2.5, fontsize=12, train_color='#1f77b4', val_color='#ff7f0e', tick_fontsize=10, axis_linewidth=1.5):
+def plot_training_history_matplotlib(history_df, title, filename, linewidth=2.5, fontsize=12, train_color='#1f77b4', val_color='#ff7f0e', tick_fontsize=10, axis_linewidth=1. restrained
     try:
         plt.style.use('seaborn-v0_8-whitegrid')
     except OSError:
@@ -275,7 +276,7 @@ def plot_periodic_table(available_elements, element_color_map, fontsize=12):
                 text=[element],
                 textposition='middle center',
                 textfont=dict(size=fontsize + 2, family='Arial'),
-                marker=dict(size=40, color=element_color_map.get(element, '#FFFFFF'), line=dict(width=2, color='black')),
+                marker=dict(size=40, color=element_color_map.get(element, '#D3D3D3'), line=dict(width=2, color='black')),
                 hoverinfo='text',
                 hovertext=[f"Element: {element}<br>Electronegativity: {en:.2f}<br>Thermoelectric Weight: {tw:.2f}"],
                 customdata=[element],
@@ -388,13 +389,26 @@ all_elements = [
 ]
 
 # Color map for all elements
-default_color_list = (
-    px.colors.qualitative.Plotly +
-    px.colors.qualitative.Pastel1 +
-    px.colors.qualitative.D3 +
-    px.colors.qualitative.G10 +
-    px.colors.qualitative.T10
+base_color_list = (
+    px.colors.qualitative.Plotly +           # 10 colors
+    px.colors.qualitative.Pastel1 +         # 9 colors
+    px.colors.qualitative.D3 +              # 10 colors
+    px.colors.qualitative.G10 +             # 10 colors
+    px.colors.qualitative.T10 +             # 10 colors
+    px.colors.qualitative.Set1 +            # 9 colors
+    px.colors.qualitative.Set2 +            # 8 colors
+    px.colors.qualitative.Set3 +            # 12 colors
+    px.colors.qualitative.Pastel2 +         # 8 colors
+    px.colors.qualitative.Dark2             # 8 colors
 )
+num_additional_colors = len(all_elements) - len(base_color_list)
+additional_colors = []
+for i in range(num_additional_colors):
+    hue = i / num_additional_colors
+    rgb = colorsys.hsv_to_rgb(hue, 0.7, 0.9)
+    hex_color = '#{:02x}{:02x}{:02x}'.format(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
+    additional_colors.append(hex_color)
+default_color_list = base_color_list + additional_colors
 default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_elements)]))
 
 # Color map options
@@ -428,8 +442,8 @@ def get_dominant_element(formula):
 # Streamlit UI
 st.title("Thermoelectric Material Analysis and Seebeck Coefficient Prediction")
 st.markdown("""
-This application visualizes thermoelectric material data and predicts Seebeck coefficients using a trained Variational Autoencoder (VAE) and Regressor. Upload a featurized CSV to convert to the required SQLite database, then explore latent space visualizations, training history, and predict Seebeck coefficients for new compositions. Hover over points in the Dominant Element scatter plots to see scores for all elements in the formula.
-**Date and Time**: 06:52 AM CEST, Saturday, August 16, 2025
+This application visualizes thermoelectric material data and predicts Seebeck coefficients using a trained Variational Autoencoder (VAE) and Regressor. Upload a featurized CSV to convert to the required SQLite database, then explore latent space visualizations, training history, and predict Seebeck coefficients for new compositions. Hover over points in the scatter plots to see scores for all elements in the formula and the temperature.
+**Date and Time**: 08:58 AM CEST, Sunday, August 17, 2025
 """)
 
 # CSV to SQLite converter
@@ -533,13 +547,13 @@ with tab1:
         umap_reducer = umap.UMAP(n_components=2, random_state=42)
         z_2d_umap = umap_reducer.fit_transform(z_train)
 
-        # Compute dominant elements and scores
+        # Compute dominant elements, scores, and temperatures
         dominant_elements = []
         element_scores = []
+        temperatures = df['temperature(K)'].iloc[valid_indices].values
         for formula in df['Formula']:
             dom, scores = get_dominant_element(formula)
             dominant_elements.append(dom)
-            # Format scores as a string for hover display
             scores_str = '<br>'.join([f"{el}: {score:.2f}" for el, score in scores.items()])
             element_scores.append(scores_str)
         dominant_elements = np.array(dominant_elements)
@@ -547,6 +561,7 @@ with tab1:
         dominant_elements_filtered = dominant_elements[valid_indices]
         element_scores_filtered = element_scores[valid_indices]
         formulas_filtered = df['Formula'].iloc[valid_indices].values
+        temperatures_filtered = temperatures
 
         st.sidebar.header("Filter by Dominant Element")
         unique_elements = np.unique(dominant_elements_filtered)
@@ -560,6 +575,7 @@ with tab1:
             dominant_elements_filtered_filtered = dominant_elements_filtered[mask]
             element_scores_filtered_filtered = element_scores_filtered[mask]
             formulas_filtered_filtered = formulas_filtered[mask]
+            temperatures_filtered_filtered = temperatures_filtered[mask]
         else:
             z_2d_pca_filtered = z_2d_pca
             z_2d_tsne_filtered = z_2d_tsne
@@ -568,6 +584,7 @@ with tab1:
             dominant_elements_filtered_filtered = dominant_elements_filtered
             element_scores_filtered_filtered = element_scores_filtered
             formulas_filtered_filtered = formulas_filtered
+            temperatures_filtered_filtered = temperatures_filtered
 
         st.write("#### Periodic Table Legend (Present Elements)")
         st.write("Click an element in the periodic table or use the dropdown to filter scatter plots. Colors match the Dominant Element scatter plots.")
@@ -605,7 +622,13 @@ with tab1:
             x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,
             labels={'x': 'PC1', 'y': 'PC2', 'color': 'Seebeck Coefficient (μV/K)'},
             title=f'PCA Latent Space: Seebeck Coefficient ({selected_element})',
-            hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
+            hover_data={
+                'Formula': formulas_filtered_filtered,
+                'Dominant Element': dominant_elements_filtered_filtered,
+                'Seebeck (μV/K)': output_feature_cleaned_filtered,
+                'Element Scores': element_scores_filtered_filtered,
+                'Temperature (K)': temperatures_filtered_filtered
+            }
         )
         fig_pca_seebeck.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_pca_seebeck.update_layout(
@@ -624,7 +647,12 @@ with tab1:
             color_discrete_map=default_element_color_map,
             labels={'x': 'PC1', 'y': 'PC2', 'color': 'Dominant Element'},
             title=f'PCA Latent Space: Dominant Element ({selected_element})',
-            hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered, 'Element Scores': element_scores_filtered_filtered}
+            hover_data={
+                'Formula': formulas_filtered_filtered,
+                'Seebeck (μV/K)': output_feature_cleaned_filtered,
+                'Element Scores': element_scores_filtered_filtered,
+                'Temperature (K)': temperatures_filtered_filtered
+            }
         )
         fig_pca_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_pca_elements.update_layout(
@@ -643,7 +671,13 @@ with tab1:
             x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,
             labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Seebeck Coefficient (μV/K)'},
             title=f't-SNE Latent Space: Seebeck Coefficient ({selected_element})',
-            hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
+            hover_data={
+                'Formula': formulas_filtered_filtered,
+                'Dominant Element': dominant_elements_filtered_filtered,
+                'Seebeck (μV/K)': output_feature_cleaned_filtered,
+                'Element Scores': element_scores_filtered_filtered,
+                'Temperature (K)': temperatures_filtered_filtered
+            }
         )
         fig_tsne_seebeck.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_tsne_seebeck.update_layout(
@@ -662,7 +696,12 @@ with tab1:
             color_discrete_map=default_element_color_map,
             labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Dominant Element'},
             title=f't-SNE Latent Space: Dominant Element ({selected_element})',
-            hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered, 'Element Scores': element_scores_filtered_filtered}
+            hover_data={
+                'Formula': formulas_filtered_filtered,
+                'Seebeck (μV/K)': output_feature_cleaned_filtered,
+                'Element Scores': element_scores_filtered_filtered,
+                'Temperature (K)': temperatures_filtered_filtered
+            }
         )
         fig_tsne_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_tsne_elements.update_layout(
@@ -681,7 +720,13 @@ with tab1:
             x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,
             labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Seebeck Coefficient (μV/K)'},
             title=f'UMAP Latent Space: Seebeck Coefficient ({selected_element})',
-            hover_data={'Formula': formulas_filtered_filtered, 'Dominant Element': dominant_elements_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered}
+            hover_data={
+                'Formula': formulas_filtered_filtered,
+                'Dominant Element': dominant_elements_filtered_filtered,
+                'Seebeck (μV/K)': output_feature_cleaned_filtered,
+                'Element Scores': element_scores_filtered_filtered,
+                'Temperature (K)': temperatures_filtered_filtered
+            }
         )
         fig_umap_seebeck.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_umap_seebeck.update_layout(
@@ -700,7 +745,12 @@ with tab1:
             color_discrete_map=default_element_color_map,
             labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Dominant Element'},
             title=f'UMAP Latent Space: Dominant Element ({selected_element})',
-            hover_data={'Formula': formulas_filtered_filtered, 'Seebeck (μV/K)': output_feature_cleaned_filtered, 'Element Scores': element_scores_filtered_filtered}
+            hover_data={
+                'Formula': formulas_filtered_filtered,
+                'Seebeck (μV/K)': output_feature_cleaned_filtered,
+                'Element Scores': element_scores_filtered_filtered,
+                'Temperature (K)': temperatures_filtered_filtered
+            }
         )
         fig_umap_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
         fig_umap_elements.update_layout(
