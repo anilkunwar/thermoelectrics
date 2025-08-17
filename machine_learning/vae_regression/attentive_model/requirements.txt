@@ -1,0 +1,11 @@
+streamlit
+streamlit-image-coordinates # required for periodic table
+pyngrok
+pymatgen
+torch
+scikit-learn
+setuptools
+seaborn
+plotly
+kaleido
+umap-learn
