@@ -171,7 +171,7 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the dropdown below, input their proportions, and view the absolute Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum absolute Seebeck coefficients and plots their variation with temperature.
-**Date and Time**: 07:29 PM CEST, Sunday, August 17, 2025
+**Date and Time**: 07:34 PM CEST, Sunday, August 17, 2025
 """)
 
 # Sidebar for figure customization
@@ -415,19 +415,24 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
             hoverinfo='text',
             name='Max |Seebeck|'
         ))
-    fig.update_layout(
-        title=dict(text=f"Ternary Diagram: |Seebeck Coefficient| at {st.session_state.temperature} K", x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
-        ternary=dict(
-            sum=1,
-            aaxis=dict(title=elements[0], tickformat='.2f', titlefont=dict(size=font_size), tickfont=dict(size=font_size), linewidth=axes_line_width),
-            baxis=dict(title=elements[1], tickformat='.2f', titlefont=dict(size=font_size), tickfont=dict(size=font_size), linewidth=axes_line_width),
-            caxis=dict(title=elements[2], tickformat='.2f', titlefont=dict(size=font_size), tickfont=dict(size=font_size), linewidth=axes_line_width)
-        ),
-        showlegend=True,
-        legend=dict(x=1.05, y=1, font=dict(size=legend_font_size)),
-        plot_bgcolor='white', paper_bgcolor='white',
-        margin=dict(l=50, r=50, t=80, b=50)
-    )
+    try:
+        fig.update_layout(
+            title=dict(text=f"Ternary Diagram: |Seebeck Coefficient| at {st.session_state.temperature} K", x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+            ternary=dict(
+                sum=1,
+                aaxis=dict(title=elements[0], tickformat='.2f', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
+                baxis=dict(title=elements[1], tickformat='.2f', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
+                caxis=dict(title=elements[2], tickformat='.2f', titlefont=dict(size=font_size), tickfont=dict(size=font_size))
+            ),
+            showlegend=True,
+            legend=dict(x=1.05, y=1, font=dict(size=legend_font_size)),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=50, r=50, t=80, b=50)
+        )
+    except Exception as e:
+        st.error(f"Error updating ternary plot layout: {e}")
+        return None
     return fig
 
 def plot_temperature_variance(elements, user_composition, min_comp, max_comp, temp_range, available_elements, scaler, vae, regressor, y_scaler, font_size, axes_line_width, grid_width, user_line_color, min_line_color, max_line_color, point_size, axes_box_thickness):
@@ -446,15 +451,20 @@ def plot_temperature_variance(elements, user_composition, min_comp, max_comp, te
     fig.add_trace(go.Scatter(x=temps, y=user_seebeck, mode='lines+markers', name='User Composition', line=dict(color=user_line_color, width=axes_line_width), marker=dict(size=point_size)))
     fig.add_trace(go.Scatter(x=temps, y=min_seebeck, mode='lines+markers', name='Min |Seebeck|', line=dict(color=min_line_color, width=axes_line_width), marker=dict(size=point_size)))
     fig.add_trace(go.Scatter(x=temps, y=max_seebeck, mode='lines+markers', name='Max |Seebeck|', line=dict(color=max_line_color, width=axes_line_width), marker=dict(size=point_size)))
-    fig.update_layout(
-        title=dict(text='|Seebeck Coefficient| vs Temperature', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
-        xaxis_title='Temperature (K)', yaxis_title='|Seebeck Coefficient| (μV/K)',
-        xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', gridwidth=grid_width, zeroline=False, showline=True, linewidth=axes_box_thickness, linecolor='black', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
-        yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', gridwidth=grid_width, zeroline=False, showline=True, linewidth=axes_box_thickness, linecolor='black', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
-        plot_bgcolor='white', paper_bgcolor='white',
-        legend=dict(x=1.05, y=1, font=dict(size=legend_font_size)),
-        margin=dict(l=50, r=50, t=80, b=50)
-    )
+    try:
+        fig.update_layout(
+            title=dict(text='|Seebeck Coefficient| vs Temperature', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+            xaxis_title='Temperature (K)', yaxis_title='|Seebeck Coefficient| (μV/K)',
+            xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', gridwidth=grid_width, zeroline=False, showline=True, linewidth=axes_box_thickness, linecolor='black', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
+            yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', gridwidth=grid_width, zeroline=False, showline=True, linewidth=axes_box_thickness, linecolor='black', titlefont=dict(size=font_size), tickfont=dict(size=font_size)),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            legend=dict(x=1.05, y=1, font=dict(size=legend_font_size)),
+            margin=dict(l=50, r=50, t=80, b=50)
+        )
+    except Exception as e:
+        st.error(f"Error updating temperature variance plot layout: {e}")
+        return None
     return fig
 
 # Generate ternary diagram and temperature variance plot
@@ -499,18 +509,20 @@ if st.button("Generate Ternary Diagram"):
                     # Plot ternary diagram
                     st.write("### Ternary Diagram")
                     fig_ternary = plot_ternary_diagram(compositions_array, seebeck_values, elements, user_composition, user_seebeck, min_comp, min_seebeck_abs, max_comp, max_seebeck_abs, color_scale, font_size, axes_line_width, point_size, axes_box_thickness)
-                    st.plotly_chart(fig_ternary, use_container_width=True)
-                    try:
-                        fig_ternary.write_html(os.path.join(script_dir, 'ternary_diagram.html'))
-                    except Exception as e:
-                        st.warning(f"Failed to save ternary diagram: {e}")
+                    if fig_ternary:
+                        st.plotly_chart(fig_ternary, use_container_width=True)
+                        try:
+                            fig_ternary.write_html(os.path.join(script_dir, 'ternary_diagram.html'))
+                        except Exception as e:
+                            st.warning(f"Failed to save ternary diagram: {e}")
                     # Plot temperature variance
                     st.write("### |Seebeck Coefficient| vs Temperature")
                     fig_temp = plot_temperature_variance(elements, user_composition, min_comp, max_comp, [100, 1000], available_elements, scaler, vae, regressor, y_scaler, font_size, axes_line_width, grid_width, user_line_color, min_line_color, max_line_color, point_size, axes_box_thickness)
-                    st.plotly_chart(fig_temp, use_container_width=True)
-                    try:
-                        fig_temp.write_html(os.path.join(script_dir, 'temperature_variance.html'))
-                    except Exception as e:
-                        st.warning(f"Failed to save temperature variance plot: {e}")
+                    if fig_temp:
+                        st.plotly_chart(fig_temp, use_container_width=True)
+                        try:
+                            fig_temp.write_html(os.path.join(script_dir, 'temperature_variance.html'))
+                        except Exception as e:
+                            st.warning(f"Failed to save temperature variance plot: {e}")
     else:
         st.error("Please select at least one element.")
