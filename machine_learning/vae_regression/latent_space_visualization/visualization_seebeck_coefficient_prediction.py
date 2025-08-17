@@ -170,7 +170,7 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 # Streamlit UI
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the dropdown below, input their proportions, and view the absolute Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum absolute Seebeck coefficients and plots their variation with temperature.
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the dropdown below, input their proportions, and view the absolute Seebeck coefficient across compositions. The app also identifies the composition with maximum absolute Seebeck coefficient (using calculus-based optimization with SLSQP method from scipy.optimize.minimize, which minimizes -|Seebeck| to find the max |Seebeck|) and plots its variation with temperature along with the user-selected composition. The initial guess for optimization is equimolar composition [1/3, 1/3, 1/3], but the final maxima is computed through gradient-based iterations. The minimum Seebeck calculation is for future scope.
 **Date and Time**: 08:00 PM CEST, Sunday, August 17, 2025
 """)
 
@@ -190,11 +190,10 @@ axes_line_width = st.sidebar.slider("Axes Line Width", 1, 5, 2)
 font_size = st.sidebar.slider("Font Size (Axes/Title)", 8, 20, 16)
 grid_width = st.sidebar.slider("Grid Width", 0.5, 3.0, 1.0, step=0.5)
 user_line_color = st.sidebar.color_picker("User Composition Line Color", '#FF0000')
-min_line_color = st.sidebar.color_picker("Min |Seebeck| Line Color", '#0000FF')
 max_line_color = st.sidebar.color_picker("Max |Seebeck| Line Color", '#00FF00')
 point_size = st.sidebar.slider("Point Size (Ternary/Temperature)", 5, 20, 10)
 axes_box_thickness = st.sidebar.slider("Axes Box Thickness", 1, 5, 2)
-legend_spacing = st.sidebar.slider("Legend Spacing (Colorbar to Point Legend)", 0.0, 0.5, 0.2, step=0.05)
+legend_spacing = st.sidebar.slider("Legend Spacing (Colorbar to Point Legend)", 0.0, 0.5, 0.3, step=0.05)  # Increased default to 0.3
 
 # Initialize session state with fallback
 try:
@@ -205,13 +204,13 @@ try:
     if 'compositions' not in st.session_state:
         st.session_state.compositions = {}
     if 'temperature' not in st.session_state:
-        st.session_state.temperature = 500  # Set to user input
+        st.session_state.temperature = 300
 except Exception as e:
     st.warning(f"Session state initialization failed: {e}. Resetting to defaults.")
     st.session_state.selected_elements = []
     st.session_state.proportions = {}
     st.session_state.compositions = {}
-    st.session_state.temperature = 500
+    st.session_state.temperature = 300
 
 # Periodic Table for Reference
 st.header("Periodic Table Reference")
