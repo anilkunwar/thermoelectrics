@@ -58,8 +58,11 @@ How to inspect a sqlite db file: [![machinelearningthermoelectricity](https://im
 
 Data imputting in csv file: [![machinelearningthermoelectricity](https://img.shields.io/badge/dataimputting-streamlit-red)]( https://dataimputter-in-csv-documents.streamlit.app/) 
 
-# Visualization of the Distribution of Composition and Temperature dependent Seebeck Cofficient (via Materials Discovery Algorithm) 
+# Visualization of the Distribution of Composition and Temperature dependent Seebeck Cofficient (via Attentive Model aided Discovery Learning) 
 [![machinelearningthermoelectricity](https://img.shields.io/badge/viseebeck-streamlit-red)](https://visualization-seebeckcoefficientprediction.streamlit.app/) 
+
+Robust Attentive Model
+[![machinelearningthermoelectricity](https://img.shields.io/badge/attentiveVAERseebeck-streamlit-red)](https://physics-informed-visualization-seebeckcoefficient.streamlit.app/) 
 
 # Basic Models
 
