@@ -171,7 +171,7 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the dropdown below, input their proportions, and view the absolute Seebeck coefficient across compositions. The app also identifies compositions with minimum and maximum absolute Seebeck coefficients and plots their variation with temperature.
-**Date and Time**: 07:38 PM CEST, Sunday, August 17, 2025
+**Date and Time**: 07:49 PM CEST, Sunday, August 17, 2025
 """)
 
 # Sidebar for figure customization
@@ -194,6 +194,7 @@ min_line_color = st.sidebar.color_picker("Min |Seebeck| Line Color", '#0000FF')
 max_line_color = st.sidebar.color_picker("Max |Seebeck| Line Color", '#00FF00')
 point_size = st.sidebar.slider("Point Size (Ternary/Temperature)", 5, 20, 10)
 axes_box_thickness = st.sidebar.slider("Axes Box Thickness", 1, 5, 2)
+legend_spacing = st.sidebar.slider("Legend Spacing (Colorbar to Point Legend)", 0.0, 0.5, 0.2, step=0.05)
 
 # Initialize session state with fallback
 try:
@@ -343,7 +344,8 @@ def complete_to_three_elements(selected_elements, proportions, compositions, ava
             return selected_elements, proportions, compositions
     return selected_elements, proportions, compositions
 
-# Generate ternary diagram
+# Generate ternary diagram with caching
+@st.cache_data(hash_funcs={nn.Module: id, MinMaxScaler: id, SimpleImputer: id})
 def generate_ternary_data(elements, temperature, available_elements, scaler, vae, regressor, y_scaler, steps=30):
     compositions = []
     seebeck_values = []
@@ -358,7 +360,8 @@ def generate_ternary_data(elements, temperature, available_elements, scaler, vae
                     seebeck_values.append(abs(seebeck))
     return np.array(compositions), np.array(seebeck_values)
 
-# Optimize for maximum and minimum absolute Seebeck coefficient
+# Optimize for maximum and minimum absolute Seebeck coefficient with caching
+@st.cache_data(hash_funcs={nn.Module: id, MinMaxScaler: id, SimpleImputer: id})
 def optimize_seebeck(elements, temperature, available_elements, scaler, vae, regressor, y_scaler, maximize=True):
     def objective(x):
         comp_dict = {elements[i]: x[i] for i in range(3)}
@@ -374,13 +377,25 @@ def optimize_seebeck(elements, temperature, available_elements, scaler, vae, reg
     signed_seebeck = predict_seebeck({elements[i]: optimal_comp[i] for i in range(3)}, temperature, available_elements, scaler, vae, regressor, y_scaler)
     return optimal_comp, abs(signed_seebeck) if signed_seebeck is not None else (float('-inf') if maximize else float('inf')), signed_seebeck
 
-def plot_ternary_diagram(compositions, seebeck_values, elements, user_composition, user_seebeck, min_comp, min_seebeck, max_comp, max_seebeck, color_scale, font_size, axes_line_width, point_size, axes_box_thickness):
+def plot_ternary_diagram(compositions, seebeck_values, elements, user_composition, user_seebeck, min_comp, min_seebeck, max_comp, max_seebeck, color_scale, font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing):
     fig = go.Figure()
     # Ternary scatter plot
     fig.add_trace(go.Scatterternary(
         a=compositions[:, 0], b=compositions[:, 1], c=compositions[:, 2],
         mode='markers',
-        marker=dict(size=point_size, color=seebeck_values, colorscale=color_scale, showscale=True, colorbar=dict(title='|Seebeck| (μV/K)', tickfont=dict(size=font_size))),
+        marker=dict(
+            size=point_size,
+            color=seebeck_values,
+            colorscale=color_scale,
+            showscale=True,
+            colorbar=dict(
+                title='|Seebeck| (μV/K)',
+                tickfont=dict(size=font_size),
+                x=1.0 + legend_spacing / 2,  # Move colorbar to the right
+                y=0.5,
+                len=0.75
+            )
+        ),
         text=[f"|Seebeck|: {s:.2f}" for s in seebeck_values],
         hoverinfo='text',
         name='Compositions'
@@ -425,7 +440,7 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
                 caxis=dict(title=dict(text=elements[2], font=dict(size=font_size)), tickfont=dict(size=font_size))
             ),
             showlegend=True,
-            legend=dict(x=1.05, y=1, font=dict(size=legend_font_size)),
+            legend=dict(x=1.1 + legend_spacing, y=1, font=dict(size=legend_font_size)),
             plot_bgcolor='white',
             paper_bgcolor='white',
             margin=dict(l=50, r=50, t=80, b=50)
@@ -528,7 +543,7 @@ if st.button("Generate Ternary Diagram"):
                     st.write(f"**Maximum Signed Seebeck Coefficient**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
                     # Plot ternary diagram
                     st.write("### Ternary Diagram")
-                    fig_ternary = plot_ternary_diagram(compositions_array, seebeck_values, elements, user_composition, user_seebeck, min_comp, min_seebeck_abs, max_comp, max_seebeck_abs, color_scale, font_size, axes_line_width, point_size, axes_box_thickness)
+                    fig_ternary = plot_ternary_diagram(compositions_array, seebeck_values, elements, user_composition, user_seebeck, min_comp, min_seebeck_abs, max_comp, max_seebeck_abs, color_scale, font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing)
                     if fig_ternary:
                         st.plotly_chart(fig_ternary, use_container_width=True)
                         try:
