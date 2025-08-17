@@ -64,6 +64,11 @@ Data imputting in csv file: [![machinelearningthermoelectricity](https://img.shi
 Robust Attentive Model
 [![machinelearningthermoelectricity](https://img.shields.io/badge/attentiveVAERseebeck-streamlit-red)](https://physics-informed-visualization-seebeckcoefficient.streamlit.app/) 
 
+Physics informed bias for sign accuracy of n-type and p-type thermoelectrics
+[![machinelearningthermoelectricity](https://img.shields.io/badge/physicsVAERseebeck-streamlit-red)](https://physicsinformed-vaepredictor.streamlit.app/) 
+
+
+
 # Basic Models
 
 # Web App (for Model 1 trained using TF):
