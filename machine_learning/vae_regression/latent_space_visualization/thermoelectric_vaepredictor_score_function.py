@@ -181,7 +181,7 @@ def plot_radar(data, labels, title, max_samples=10, alpha=0.3, linewidth=2, font
     plt.tight_layout()
     return fig
 
-def plot_training_history_matplotlib(history_df, title, filename, linewidth=2.5, fontsize=12, train_color='#1f77b4', val_color='#ff7f0e', tick_fontsize=10, axis_linewidth=1. restrained
+def plot_training_history_matplotlib(history_df, title, filename, linewidth=2.5, fontsize=12, train_color='#1f77b4', val_color='#ff7f0e', tick_fontsize=10, axis_linewidth=1.5):
     try:
         plt.style.use('seaborn-v0_8-whitegrid')
     except OSError:
@@ -388,7 +388,7 @@ all_elements = [
     'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi'
 ]
 
-# Color map for all elements
+# Enhanced color map for all elements
 base_color_list = (
     px.colors.qualitative.Plotly +           # 10 colors
     px.colors.qualitative.Pastel1 +         # 9 colors
@@ -443,7 +443,7 @@ def get_dominant_element(formula):
 st.title("Thermoelectric Material Analysis and Seebeck Coefficient Prediction")
 st.markdown("""
 This application visualizes thermoelectric material data and predicts Seebeck coefficients using a trained Variational Autoencoder (VAE) and Regressor. Upload a featurized CSV to convert to the required SQLite database, then explore latent space visualizations, training history, and predict Seebeck coefficients for new compositions. Hover over points in the scatter plots to see scores for all elements in the formula and the temperature.
-**Date and Time**: 08:58 AM CEST, Sunday, August 17, 2025
+**Date and Time**: 09:12 AM CEST, Sunday, August 17, 2025
 """)
 
 # CSV to SQLite converter
