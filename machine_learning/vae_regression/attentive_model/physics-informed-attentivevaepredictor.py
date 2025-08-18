@@ -20,7 +20,7 @@ from datetime import datetime
 from retrying import retry
 import re
 
-# Set up logging
+# Set up logging for debugging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -228,16 +228,29 @@ def plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, output_path='z_mean
         logger.error(f"Failed to save Matplotlib figure: {e}")
     return fig
 
-# Fetch arXiv abstracts with retries
+# Fetch arXiv abstracts with retries and enhanced thermoelectric keywords
 @st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
 @retry(stop_max_attempt_number=3, wait_fixed=2000)
 def fetch_arxiv_abstracts(elements, composition_dict):
+    """
+    Fetches recent arXiv abstracts (2020–2025) for a given composition, using an enhanced query
+    with thermoelectric-related terms and unit variations to ensure relevant results.
+    """
     try:
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
         formula = comp.reduced_formula
-        query = f"thermoelectric {formula} p-type n-type"
+        # Enhanced query with thermoelectric terms and unit variations
+        thermoelectric_terms = [
+            'thermoelectric', 'Seebeck coefficient', 'thermopower', 'power factor', 'zT', 'figure of merit',
+            'ZT', 'thermoelectric figure of merit', 'thermoelectric performance'
+        ]
+        unit_variants = [
+            'microvolt/K', 'μV/K', 'mV/K', 'V/K', 'microvolts per Kelvin', 'microvolts/Kelvin',
+            'microvolt per Kelvin', 'μV per Kelvin'
+        ]
+        query = f"{formula} p-type n-type ({' OR '.join(thermoelectric_terms)} OR {' OR '.join(unit_variants)})"
         logger.info(f"Querying arXiv with: {query}")
-        results = arxiv.Client().results(arxiv.Search(query=query, max_results=30))
+        results = arxiv.Client().results(arxiv.Search(query=query, max_results=50))
         abstracts = [{"title": r.title, "abstract": r.summary, "arxiv_id": r.entry_id, "published": r.published} for r in results]
         abstracts = [a for a in abstracts if a["published"].year >= 2020]
         logger.info(f"Retrieved {len(abstracts)} abstracts for {formula}: {[a['title'] for a in abstracts]}")
@@ -249,10 +262,21 @@ def fetch_arxiv_abstracts(elements, composition_dict):
 # Extract p-type or n-type from abstracts using SciBERT
 @st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
 def extract_material_type(elements, composition_dict):
+    """
+    Classifies the material as p-type, n-type, or Neutral using SciBERT to analyze arXiv abstracts.
+    - Loads SciBERT tokenizer for text processing.
+    - Generates formula variants (e.g., AgBiTe2, AgBiTe₂, AgBiTe, regex for Ag0.5Bi0.5Te).
+    - Fetches abstracts with thermoelectric keywords and checks for formula presence.
+    - Classifies based on 'p-type' or 'n-type' mentions in abstracts containing the formula.
+    - Uses majority voting across abstracts to determine the final classification.
+    - Returns a tuple: (material_type, summary_dict) for UI display.
+    """
     try:
+        # Initialize SciBERT tokenizer
         tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
         formula = comp.reduced_formula
+        # Create formula variants, including regex for flexible matching
         formula_variants = [
             formula,
             formula.replace('2', '₂'),
@@ -260,39 +284,59 @@ def extract_material_type(elements, composition_dict):
             re.compile(f"{elements[0]}[0-9.]*{elements[1]}[0-9.]*{elements[2]}[0-9.]*")
         ]
         logger.info(f"Formula variants: {[v for v in formula_variants if isinstance(v, str)]}")
+        # Fetch abstracts
         abstracts = fetch_arxiv_abstracts(elements, composition_dict)
+        total_abstracts = len(abstracts)
         if not abstracts:
             logger.warning(f"No abstracts found for {formula}, returning Neutral")
-            return "Neutral"
+            return "Neutral", {"total_abstracts": 0, "formula_matches": 0, "p_type_count": 0, "n_type_count": 0, "neutral_count": 0}
+        
+        # Process abstracts for classification
         classifications = []
+        formula_matches = 0
         for abstract_data in abstracts:
             abstract = abstract_data['abstract'].lower()
+            # Check if any formula variant appears in the abstract
             formula_present = any(variant.lower() in abstract for variant in formula_variants[:-1]) or formula_variants[-1].search(abstract)
             logger.info(f"Abstract: {abstract[:100]}..., Formula present: {formula_present}")
             if not formula_present:
                 continue
-            if 'p-type' in abstract and formula_present:
+            formula_matches += 1
+            # Tokenize and check for p-type or n-type mentions
+            if 'p-type' in abstract:
                 classifications.append('p-type')
-            elif 'n-type' in abstract and formula_present:
+            elif 'n-type' in abstract:
                 classifications.append('n-type')
             else:
                 classifications.append('Neutral')
             logger.info(f"Classification: {classifications[-1]}")
+        
+        # Summarize classification results
+        p_count = classifications.count('p-type')
+        n_count = classifications.count('n-type')
+        neutral_count = len(classifications) - p_count - n_count
+        summary_dict = {
+            "total_abstracts": total_abstracts,
+            "formula_matches": formula_matches,
+            "p_type_count": p_count,
+            "n_type_count": n_count,
+            "neutral_count": neutral_count
+        }
+        logger.info(f"Classifications for {formula}: p-type={p_count}, n-type={n_count}, Neutral={neutral_count}")
+        
+        # Apply majority voting
         if classifications:
-            p_count = classifications.count('p-type')
-            n_count = classifications.count('n-type')
-            logger.info(f"Classifications for {formula}: p-type={p_count}, n-type={n_count}, Neutral={len(classifications) - p_count - n_count}")
             if p_count > n_count and p_count > 0:
-                return 'p-type'
+                return 'p-type', summary_dict
             elif n_count > p_count and n_count > 0:
-                return 'n-type'
+                return 'n-type', summary_dict
             else:
-                return 'Neutral'
+                return 'Neutral', summary_dict
         logger.warning(f"No relevant classifications for {formula}, returning Neutral")
-        return 'Neutral'
+        return 'Neutral', summary_dict
     except Exception as e:
         logger.error(f"Failed to extract material type: {str(e)}")
-        return 'Neutral'
+        return 'Neutral', {"total_abstracts": 0, "formula_matches": 0, "p_type_count": 0, "n_type_count": 0, "neutral_count": 0}
 
 def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
     try:
@@ -399,11 +443,11 @@ st.title("Ternary Seebeck Coefficient Predictor with SciBERT Classification")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and the app will automatically classify the material as p-type, n-type, or Neutral using SciBERT and arXiv abstracts. The classification is used to bias the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart showing mean and SD for each dimension and uses a direction-specific bias vector to control the sign without amplifying same-sign magnitudes or reducing opposite-sign magnitudes. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
 
-**Informatics Classification**: Uses SciBERT to analyze arXiv abstracts (2020–2025) mentioning the composition (e.g., AgBiTe₂). Classifies as p-type or n-type based on explicit mentions, with majority voting across abstracts. Returns Neutral if no relevant abstracts or classifications are found.
+**Informatics Classification (Attentive Mode)**: Uses SciBERT to analyze arXiv abstracts (2020–2025) mentioning the composition (e.g., AgBiTe₂). Searches for thermoelectric terms (Seebeck coefficient, thermopower, power factor, zT, figure of merit) and unit variants (μV/K, mV/K, etc.). Classifies as p-type or n-type based on explicit mentions in abstracts containing the formula, using majority voting. Returns Neutral if no relevant abstracts or classifications are found.
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 04:56 AM CEST, Monday, August 18, 2025
+**Date and Time**: 05:06 AM CEST, Monday, August 18, 2025
 """)
 
 # Sidebar for figure customization
@@ -763,7 +807,8 @@ if st.button("Generate Ternary Diagram"):
             
             user_composition = [compositions.get(elements[i], 0) for i in range(3)]
             user_composition_dict = {elements[i]: user_composition[i] for i in range(3)}
-            material_type = extract_material_type(elements, user_composition_dict)
+            # Get material type and classification summary
+            material_type, summary_dict = extract_material_type(elements, user_composition_dict)
             sign_bias = material_type if material_type != "Neutral" else None
             user_seebeck, user_seebeck_unbiased = predict_seebeck(
                 user_composition_dict,
@@ -799,6 +844,13 @@ if st.button("Generate Ternary Diagram"):
             st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
             st.write(f"**Chemical Formula**: {Composition(user_composition_dict).reduced_formula}")
             st.write(f"**SciBERT Material Type (from arXiv)**: {material_type}")
+            # Display classification summary
+            st.write("**Classification Summary (Attentive Mode)**:")
+            st.write(f"- Total abstracts retrieved: {summary_dict['total_abstracts']}")
+            st.write(f"- Abstracts mentioning formula: {summary_dict['formula_matches']}")
+            st.write(f"- p-type classifications: {summary_dict['p_type_count']}")
+            st.write(f"- n-type classifications: {summary_dict['n_type_count']}")
+            st.write(f"- Neutral classifications: {summary_dict['neutral_count']}")
             st.write(f"**User |Seebeck Coefficient| (Biased)**: {abs(user_seebeck):.2f} μV/K")
             st.write(f"**User Signed Seebeck Coefficient (Biased)**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
             st.write(f"**User |Seebeck Coefficient| (Unbiased)**: {abs(user_seebeck_unbiased):.2f} μV/K")
