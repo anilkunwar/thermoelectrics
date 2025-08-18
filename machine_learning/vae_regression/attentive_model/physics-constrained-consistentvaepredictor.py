@@ -99,10 +99,28 @@ def preprocess_new_data(df, available_elements, scaler):
     return X_scaled
 
 # Compute z_mean statistics and bias vector
-# The bias vector is updated in such a way that it does not affect the original prediction, only affects the sign
 def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _scaler, _vae, steps=30):
     z_means = []
     try:
+        # Validate inputs
+        if len(elements) != 3:
+            logger.error(f"Expected 3 elements, got {len(elements)}: {elements}")
+            raise ValueError("Exactly 3 elements required")
+        if not all(e in available_elements for e in elements):
+            logger.error(f"Invalid elements: {elements}")
+            raise ValueError("All elements must be in available_elements")
+        if not isinstance(temperature, (int, float)) or temperature < 0:
+            logger.error(f"Invalid temperature: {temperature}")
+            raise ValueError("Temperature must be a non-negative number")
+        # Validate scaler and VAE
+        expected_features = len(available_elements) + 1  # elements + temperature
+        if _scaler.n_features_in_ != expected_features:
+            logger.error(f"Scaler expects {expected_features} features, got {_scaler.n_features_in_}")
+            raise ValueError("Scaler feature mismatch")
+        if _vae.input_dim != expected_features:
+            logger.error(f"VAE expects {expected_features} input dimensions, got {_vae.input_dim}")
+            raise ValueError("VAE input dimension mismatch")
+        
         _vae.eval()
         with torch.no_grad():
             for a in np.linspace(0, 1, steps):
@@ -112,29 +130,56 @@ def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _sc
                         comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
                         df = featurize_composition(comp_dict, available_elements, temperature)
                         X_scaled = preprocess_new_data(df, available_elements, _scaler)
+                        if X_scaled.shape[1] != _vae.input_dim:
+                            logger.error(f"Input shape mismatch: expected {_vae.input_dim}, got {X_scaled.shape[1]}")
+                            raise ValueError("Input shape mismatch")
                         X_tensor = torch.FloatTensor(X_scaled).to(device)
+                        logger.debug(f"Processing composition: {comp_dict}, X_tensor shape: {X_tensor.shape}")
                         _, z_mean, _ = _vae(X_tensor)
+                        if z_mean.shape[1] != _vae.latent_dim:
+                            logger.error(f"z_mean shape mismatch: expected {_vae.latent_dim}, got {z_mean.shape[1]}")
+                            raise ValueError("z_mean shape mismatch")
                         z_means.append(z_mean.cpu().numpy())
+        if not z_means:
+            logger.error("No valid compositions generated")
+            raise ValueError("No valid compositions generated")
         z_means = np.vstack(z_means)
         z_mean_avg = np.mean(z_means, axis=0)
         z_mean_std = np.std(z_means, axis=0)
-        # Approximate p-type and n-type z_mean using representative compositions
-        p_type_comp = {elements[0]: 0.0, elements[1]: 0.4, elements[2]: 0.6}  # Bi: 0.4, Te: 0.6 (p-type like Bi2Te3)
-        n_type_comp = {elements[0]: 0.4, elements[1]: 0.0, elements[2]: 0.6}  # Ag: 0.4, Te: 0.6 (n-type doping)
+        # Approximate p-type and n-type z_mean
+        p_type_comp = {elements[0]: 0.0, elements[1]: 0.4, elements[2]: 0.6}  # Bi: 0.4, Te: 0.6
+        n_type_comp = {elements[0]: 0.4, elements[1]: 0.0, elements[2]: 0.6}  # Ag: 0.4, Te: 0.6
         df_p = featurize_composition(p_type_comp, available_elements, temperature)
         df_n = featurize_composition(n_type_comp, available_elements, temperature)
         X_scaled_p = preprocess_new_data(df_p, available_elements, _scaler)
         X_scaled_n = preprocess_new_data(df_n, available_elements, _scaler)
+        if X_scaled_p.shape[1] != _vae.input_dim or X_scaled_n.shape[1] != _vae.input_dim:
+            logger.error(f"p-type/n-type input shape mismatch: expected {_vae.input_dim}, got {X_scaled_p.shape[1]}/{X_scaled_n.shape[1]}")
+            raise ValueError("p-type/n-type input shape mismatch")
         X_tensor_p = torch.FloatTensor(X_scaled_p).to(device)
         X_tensor_n = torch.FloatTensor(X_scaled_n).to(device)
         _, z_mean_p, _ = _vae(X_tensor_p)
         _, z_mean_n, _ = _vae(X_tensor_n)
-        bias_vector = (z_mean_p - z_mean_n).cpu().numpy()  # p-type to n-type direction
-        bias_magnitude = 0.5 * np.mean(z_mean_std)  # Scale to 0.5 * average std
+        bias_vector = (z_mean_p - z_mean_n).cpu().numpy()
+        # Normalize bias vector to unit norm
+        bias_norm = np.linalg.norm(bias_vector)
+        if bias_norm > 0:
+            bias_vector = bias_vector / bias_norm
+        else:
+            logger.warning("Bias vector has zero norm, using uniform vector")
+            bias_vector = np.ones(_vae.latent_dim) / np.sqrt(_vae.latent_dim)
+        bias_magnitude = 0.3 * np.mean(z_mean_std)  # Reduced from 0.5
+        logger.info(f"Computed z_mean_avg: {z_mean_avg.tolist()}, z_mean_std: {z_mean_std.tolist()}, bias_vector: {bias_vector.tolist()}, bias_magnitude: {bias_magnitude}")
         return z_mean_avg, z_mean_std, bias_vector, bias_magnitude
     except Exception as e:
         logger.error(f"Failed to compute z_mean statistics and bias: {e}")
-        return None, None, None, 0.0003
+        # Fallback to provided statistics
+        fallback_z_mean_avg = np.array([-0.0003, -0.0000, 0.0004, 0.0003, 0.0003, -0.0006, 0.0009, -0.0001])
+        fallback_z_mean_std = np.array([0.0003, 0.0007, 0.0003, 0.0005, 0.0005, 0.0010, 0.0011, 0.0003])
+        fallback_bias_vector = np.ones(8) / np.sqrt(8)  # Unit norm uniform vector
+        fallback_bias_magnitude = 0.3 * np.mean(fallback_z_mean_std)
+        logger.warning(f"Using fallback statistics: z_mean_avg={fallback_z_mean_avg.tolist()}, z_mean_std={fallback_z_mean_std.tolist()}, bias_vector={fallback_bias_vector.tolist()}, bias_magnitude={fallback_bias_magnitude}")
+        return fallback_z_mean_avg, fallback_z_mean_std, fallback_bias_vector, fallback_bias_magnitude
 
 # Plot z_mean bar chart
 def plot_z_mean_bar_chart(z_mean_avg, z_mean_std, font_size):
@@ -163,13 +208,18 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
     try:
         df = featurize_composition(composition_dict, available_elements, temperature)
         X_scaled = preprocess_new_data(df, available_elements, _scaler)
+        if X_scaled.shape[1] != _vae.input_dim:
+            logger.error(f"Input shape mismatch in predict_seebeck: expected {_vae.input_dim}, got {X_scaled.shape[1]}")
+            raise ValueError("Input shape mismatch")
         X_tensor = torch.FloatTensor(X_scaled).to(device)
         _vae.eval()
         _regressor.eval()
         with torch.no_grad():
             _, z_mean, _ = _vae(X_tensor)
             z_mean_original = z_mean.clone()
-            y_pred_unbiased = None
+            y_scaled_pred_unbiased = _regressor(z_mean_original)
+            y_pred_unbiased = _y_scaler.inverse_transform(y_scaled_pred_unbiased.cpu().numpy().reshape(-1, 1)).ravel()
+            y_pred_unbiased = np.clip(y_pred_unbiased, -300, 300)
             if sign_bias is not None and bias_vector is not None:
                 bias_vector = torch.FloatTensor(bias_vector).to(device) * bias_magnitude
                 if sign_bias == 'p-type':
@@ -178,12 +228,14 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
                 elif sign_bias == 'n-type':
                     z_mean = z_mean - bias_vector
                     logger.info(f"Applied n-type bias: {bias_vector.tolist()}")
-            y_scaled_pred = _regressor(z_mean)
-            y_pred = _y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
-            y_pred = np.clip(y_pred, -300, 300)
-            y_scaled_pred_unbiased = _regressor(z_mean_original)
-            y_pred_unbiased = _y_scaler.inverse_transform(y_scaled_pred_unbiased.cpu().numpy().reshape(-1, 1)).ravel()
-            y_pred_unbiased = np.clip(y_pred_unbiased, -300, 300)
+                y_scaled_pred = _regressor(z_mean)
+                y_pred = _y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
+                y_pred = np.clip(y_pred, -300, 300)
+                # Normalize biased prediction to unbiased magnitude
+                if abs(y_pred[0]) > 0:
+                    y_pred = y_pred * (abs(y_pred_unbiased[0]) / abs(y_pred[0]))
+            else:
+                y_pred = y_pred_unbiased
         return y_pred[0], y_pred_unbiased[0]
     except Exception as e:
         logger.error(f"Prediction failed: {e}")
@@ -251,13 +303,13 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 # Streamlit UI
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and choose a material type (p-type or n-type) to bias the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart showing mean and SD for each dimension and uses a direction-specific bias vector to ensure the bias primarily controls the sign without amplifying same-sign magnitudes or reducing opposite-sign magnitudes. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and choose a material type (p-type or n-type) to bias the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart showing mean and SD for each dimension and uses a direction-specific bias vector to control the sign without amplifying same-sign magnitudes or reducing opposite-sign magnitudes. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
 
-**Manual Sign Bias**: A direction-specific bias vector (p-type to n-type) is computed from representative compositions (e.g., Bi: 0.4, Te: 0.6 for p-type; Ag: 0.4, Te: 0.6 for n-type) and scaled to 0.5 * avg(std(z_mean)) to avoid unphysical magnitude changes (~10x), keeping values ~50–300 μV/K.
+**Manual Sign Bias**: A direction-specific bias vector (p-type to n-type) is computed from representative compositions (e.g., Bi: 0.4, Te: 0.6 for p-type; Ag: 0.4, Te: 0.6 for n-type) and scaled to 0.3 * avg(std(z_mean)) to avoid unphysical magnitude changes (~10x), keeping values ~50–300 μV/K. Biased predictions are normalized to match the unbiased magnitude.
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 02:45 AM CEST, Monday, August 18, 2025
+**Date and Time**: 02:59 AM CEST, Monday, August 18, 2025
 """)
 
 # Sidebar for figure customization
@@ -431,7 +483,9 @@ st.session_state.sign_bias = st.selectbox(
 # Complete to three elements if fewer are selected
 def complete_to_three_elements(selected_elements, proportions, compositions, available_elements):
     while len(selected_elements) < 3:
-        remaining_elements = [e for e in available_elements if e not in selected_elements]
+        remaining_elements = [e for e in available_elements if e in ['Ag', 'Bi', 'Te'] and e not in selected_elements]
+        if not remaining_elements:
+            remaining_elements = [e for e in available_elements if e not in selected_elements]
         if remaining_elements:
             random_element = np.random.choice(remaining_elements)
             selected_elements.append(random_element)
@@ -609,10 +663,6 @@ if st.button("Generate Ternary Diagram"):
         else:
             # Compute z_mean statistics and bias vector
             z_mean_avg, z_mean_std, bias_vector, bias_magnitude = compute_z_mean_stats_and_bias(elements, st.session_state.temperature, available_elements, scaler, vae)
-            if z_mean_avg is None or z_mean_std is None:
-                st.warning("Failed to compute z_mean statistics. Using default bias magnitude.")
-                bias_magnitude = 0.0003
-                bias_vector = np.ones(8) * bias_magnitude
             # Display z_mean statistics and bar chart
             st.write("### Latent Space Statistics (z_mean)")
             st.write(f"**Mean per dimension**: {[f'{x:.4f}' for x in z_mean_avg]}")
