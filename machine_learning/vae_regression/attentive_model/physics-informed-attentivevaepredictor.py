@@ -14,14 +14,18 @@ import joblib
 import colorsys
 from itertools import combinations
 import logging
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModel
 import arxiv
 from datetime import datetime
 from retrying import retry
 import re
+import spacy
+from spacy.matcher import Matcher
+from collections import Counter
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("arxiv").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Set random seed for reproducibility
@@ -228,55 +232,173 @@ def plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, output_path='z_mean
         logger.error(f"Failed to save Matplotlib figure: {e}")
     return fig
 
+# Load spaCy model
+try:
+    nlp = spacy.load("en_core_web_lg")
+except Exception as e:
+    logger.warning(f"Failed to load 'en_core_web_lg': {e}. Using 'en_core_web_sm'.")
+    try:
+        nlp = spacy.load("en_core_web_sm")
+    except Exception as e2:
+        logger.error(f"Failed to load spaCy: {e2}")
+        st.error(f"Failed to load spaCy: {e2}. Install: `python -m spacy download en_core_web_sm`")
+        st.stop()
+
+# Initialize spaCy matcher for p-type and n-type
+matcher = Matcher(nlp.vocab)
+material_patterns = [
+    [{"LOWER": "p-type"}, {"LOWER": {"IN": ["material", "semiconductor", "thermoelectric", "compound"]}, "OP": "?"}],
+    [{"LOWER": "n-type"}, {"LOWER": {"IN": ["material", "semiconductor", "thermoelectric", "compound"]}, "OP": "?"}]
+]
+matcher.add("P_TYPE", [material_patterns[0]])
+matcher.add("N_TYPE", [material_patterns[1]])
+
+# Synonym mapping for thermoelectric terms
+THERMOELECTRIC_SYNONYMS = {
+    "seebeck coefficient": ["thermopower", "seebeck", "thermoelectric voltage"],
+    "power factor": ["power factor", "thermoelectric power factor"],
+    "zt": ["figure of merit", "zt", "thermoelectric figure of merit", "dimensionless figure of merit"],
+    "thermoelectric": ["thermoelectric", "thermoelectric material", "thermoelectrics"],
+    "p-type": ["p-type", "p-type semiconductor", "p-type material"],
+    "n-type": ["n-type", "n-type semiconductor", "n-type material"]
+}
+
+# Weights for relevance scoring
+TERM_WEIGHTS = {
+    "seebeck coefficient": 2.5, "thermopower": 2.5, "seebeck": 2.0,
+    "power factor": 2.0, "zt": 2.5, "figure of merit": 2.5,
+    "thermoelectric": 1.5, "thermoelectric material": 1.5,
+    "p-type": 2.0, "n-type": 2.0, "p-type semiconductor": 2.0, "n-type semiconductor": 2.0
+}
+
+# Unit variations for query
+UNIT_VARIANTS = [
+    "microvolt/K", "μV/K", "mV/K", "V/K", "microvolts per Kelvin",
+    "microvolts/Kelvin", "microvolt per Kelvin", "μV per Kelvin"
+]
+
 # Fetch arXiv abstracts with retries and enhanced thermoelectric keywords
 @st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
 @retry(stop_max_attempt_number=3, wait_fixed=2000)
 def fetch_arxiv_abstracts(elements, composition_dict):
     """
     Fetches recent arXiv abstracts (2020–2025) for a given composition, using an enhanced query
-    with thermoelectric-related terms and unit variations to ensure relevant results.
+    with thermoelectric-related terms, synonyms, and unit variations to ensure relevant results.
     """
     try:
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
         formula = comp.reduced_formula
-        # Enhanced query with thermoelectric terms and unit variations
-        thermoelectric_terms = [
-            'thermoelectric', 'Seebeck coefficient', 'thermopower', 'power factor', 'zT', 'figure of merit',
-            'ZT', 'thermoelectric figure of merit', 'thermoelectric performance'
-        ]
-        unit_variants = [
-            'microvolt/K', 'μV/K', 'mV/K', 'V/K', 'microvolts per Kelvin', 'microvolts/Kelvin',
-            'microvolt per Kelvin', 'μV per Kelvin'
-        ]
-        query = f"{formula} p-type n-type ({' OR '.join(thermoelectric_terms)} OR {' OR '.join(unit_variants)})"
+        # Build query with formula, synonyms, and units
+        query_terms = [formula]
+        for key, synonyms in THERMOELECTRIC_SYNONYMS.items():
+            query_terms.extend(synonyms)
+        query_terms.extend(UNIT_VARIANTS)
+        query = f"{formula} ({' OR '.join(query_terms)})"
         logger.info(f"Querying arXiv with: {query}")
         results = arxiv.Client().results(arxiv.Search(query=query, max_results=50))
-        abstracts = [{"title": r.title, "abstract": r.summary, "arxiv_id": r.entry_id, "published": r.published} for r in results]
-        abstracts = [a for a in abstracts if a["published"].year >= 2020]
+        abstracts = [
+            {
+                "title": r.title,
+                "abstract": r.summary,
+                "arxiv_id": r.entry_id,
+                "published": r.published,
+                "authors": ", ".join([author.name for author in r.authors])
+            }
+            for r in results if r.published.year >= 2020
+        ]
         logger.info(f"Retrieved {len(abstracts)} abstracts for {formula}: {[a['title'] for a in abstracts]}")
         return abstracts
     except Exception as e:
         logger.error(f"Failed to fetch arXiv abstracts: {str(e)}")
         return []
 
-# Extract p-type or n-type from abstracts using SciBERT
+# Score abstracts using SciBERT attention
+@st.cache_data
+def score_abstract_with_scibert(abstract, formula):
+    """
+    Scores an abstract's relevance using SciBERT's attention mechanism, prioritizing
+    thermoelectric terms and proximity to the formula.
+    """
+    try:
+        inputs = scibert_tokenizer(abstract, return_tensors="pt", truncation=True, max_length=512, padding=True)
+        with torch.no_grad():
+            outputs = scibert_model(**inputs, output_attentions=True)
+        attentions = outputs.attentions[-1][0].mean(dim=0).numpy()
+        tokens = scibert_tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
+        
+        relevance_prob = 0.5  # Base score
+        keyword_indices = []
+        formula_indices = []
+        abstract_lower = abstract.lower()
+        formula_lower = formula.lower()
+        
+        # Identify tokens matching thermoelectric terms and formula
+        for i, token in enumerate(tokens):
+            token_lower = token.lower().replace("##", "")
+            for key, synonyms in THERMOELECTRIC_SYNONYMS.items():
+                for term in [key] + synonyms:
+                    if re.search(rf'\b{re.escape(term)}\b', token_lower):
+                        keyword_indices.append(i)
+            if re.search(rf'\b{re.escape(formula_lower)}\b', token_lower):
+                formula_indices.append(i)
+        
+        # Boost score based on attention for thermoelectric terms
+        if keyword_indices:
+            attn_scores = attentions[keyword_indices].sum()
+            avg_attn_score = attn_scores / len(keyword_indices)
+            relevance_prob = min(relevance_prob + 0.4 * len(keyword_indices) * avg_attn_score, 1.0)
+            logger.info(f"Attention boost: {len(keyword_indices)} thermoelectric tokens, avg attention: {avg_attn_score:.3f}")
+        
+        # Contextual boost for formula proximity
+        for term in ["seebeck coefficient", "power factor", "zt", "thermoelectric"] + UNIT_VARIANTS:
+            if term in abstract_lower:
+                term_pos = abstract_lower.find(term)
+                formula_pos = abstract_lower.find(formula_lower)
+                if formula_pos != -1 and abs(term_pos - formula_pos) < 100:
+                    relevance_prob = min(relevance_prob + 0.25, 1.0)
+                    logger.info(f"Contextual boost: {term} near {formula}")
+        
+        # Fallback scoring if SciBERT fails
+        if not keyword_indices:
+            word_counts = Counter(re.findall(r'\b\w+\b', abstract_lower))
+            total_words = sum(word_counts.values())
+            score = 0.0
+            matched_terms = []
+            for term, weight in TERM_WEIGHTS.items():
+                if term in word_counts:
+                    score += weight * word_counts[term] / (total_words + 1e-6)
+                    matched_terms.append(term)
+            max_possible_score = sum(TERM_WEIGHTS.values()) / 10
+            relevance_prob = min(score / max_possible_score, 1.0) if max_possible_score > 0 else 0.0
+            logger.info(f"Fallback scoring: {relevance_prob:.3f} (matched: {', '.join(matched_terms)})")
+        
+        return relevance_prob
+    except Exception as e:
+        logger.error(f"SciBERT scoring failed: {str(e)}")
+        return 0.5
+
+# Extract p-type or n-type with SciBERT and spaCy
 @st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
 def extract_material_type(elements, composition_dict):
     """
-    Classifies the material as p-type, n-type, or Neutral using SciBERT to analyze arXiv abstracts.
-    - Loads SciBERT tokenizer for text processing.
-    - Generates formula variants (e.g., AgBiTe2, AgBiTe₂, AgBiTe, regex for Ag0.5Bi0.5Te).
-    - Fetches abstracts with thermoelectric keywords and checks for formula presence.
-    - Classifies based on 'p-type' or 'n-type' mentions in abstracts containing the formula.
-    - Uses majority voting across abstracts to determine the final classification.
-    - Returns a tuple: (material_type, summary_dict) for UI display.
+    Classifies the material as p-type, n-type, or Neutral using SciBERT and spaCy NER.
+    - Uses SciBERT to score abstract relevance based on thermoelectric terms and formula proximity.
+    - Applies spaCy NER to detect p-type/n-type mentions in context.
+    - Extracts verbatim text snippets for transparency.
+    - Computes weighted scores for classifications based on relevance and term weights.
+    - Returns (material_type, summary_dict, verbatim_matches).
     """
     try:
-        # Initialize SciBERT tokenizer
-        tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
+        # Initialize SciBERT tokenizer and model
+        global scibert_tokenizer, scibert_model
+        if 'scibert_tokenizer' not in globals() or 'scibert_model' not in globals():
+            scibert_tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
+            scibert_model = AutoModel.from_pretrained('allenai/scibert_scivocab_uncased')
+            scibert_model.eval()
+            scibert_model.to(device)
+        
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
         formula = comp.reduced_formula
-        # Create formula variants, including regex for flexible matching
         formula_variants = [
             formula,
             formula.replace('2', '₂'),
@@ -284,59 +406,118 @@ def extract_material_type(elements, composition_dict):
             re.compile(f"{elements[0]}[0-9.]*{elements[1]}[0-9.]*{elements[2]}[0-9.]*")
         ]
         logger.info(f"Formula variants: {[v for v in formula_variants if isinstance(v, str)]}")
+        
         # Fetch abstracts
         abstracts = fetch_arxiv_abstracts(elements, composition_dict)
         total_abstracts = len(abstracts)
         if not abstracts:
-            logger.warning(f"No abstracts found for {formula}, returning Neutral")
-            return "Neutral", {"total_abstracts": 0, "formula_matches": 0, "p_type_count": 0, "n_type_count": 0, "neutral_count": 0}
+            logger.warning(f"No abstracts found for {formula}")
+            summary_dict = {
+                "total_abstracts": 0,
+                "formula_matches": 0,
+                "p_type_count": 0,
+                "n_type_count": 0,
+                "neutral_count": 0,
+                "relevance_scores": [],
+                "matched_terms": []
+            }
+            verbatim_matches = [{"arxiv_id": "", "title": "", "snippet": "No abstracts found.", "label": "Neutral", "score": 0.0}]
+            return "Neutral", summary_dict, verbatim_matches
         
-        # Process abstracts for classification
+        # Process abstracts
         classifications = []
+        verbatim_matches = []
         formula_matches = 0
+        relevance_scores = []
+        
         for abstract_data in abstracts:
             abstract = abstract_data['abstract'].lower()
-            # Check if any formula variant appears in the abstract
+            title = abstract_data['title']
+            arxiv_id = abstract_data['arxiv_id']
+            
+            # Check for formula presence
             formula_present = any(variant.lower() in abstract for variant in formula_variants[:-1]) or formula_variants[-1].search(abstract)
-            logger.info(f"Abstract: {abstract[:100]}..., Formula present: {formula_present}")
             if not formula_present:
                 continue
             formula_matches += 1
-            # Tokenize and check for p-type or n-type mentions
-            if 'p-type' in abstract:
-                classifications.append('p-type')
-            elif 'n-type' in abstract:
-                classifications.append('n-type')
-            else:
-                classifications.append('Neutral')
-            logger.info(f"Classification: {classifications[-1]}")
+            
+            # Score abstract relevance
+            relevance_score = score_abstract_with_scibert(abstract, formula)
+            if relevance_score < 0.3:
+                continue
+            relevance_scores.append(relevance_score)
+            
+            # Apply spaCy NER
+            doc = nlp(abstract_data['abstract'])
+            matches = matcher(doc)
+            for match_id, start, end in matches:
+                label = nlp.vocab.strings[match_id]  # P_TYPE or N_TYPE
+                span = doc[start:end]
+                context_start = max(0, start - 50)
+                context_end = min(len(doc), end + 50)
+                context_text = doc[context_start:context_end].text
+                # Verify formula proximity
+                formula_in_context = any(variant.lower() in context_text.lower() for variant in formula_variants[:-1]) or formula_variants[-1].search(context_text)
+                if not formula_in_context:
+                    continue
+                # Verify thermoelectric context
+                thermoelectric_context = any(term in context_text.lower() for term in sum(THERMOELECTRIC_SYNONYMS.values(), []) + UNIT_VARIANTS)
+                score = relevance_score * TERM_WEIGHTS.get(label.lower(), 2.0) * (1.2 if thermoelectric_context else 1.0)
+                classifications.append(label.lower())
+                verbatim_matches.append({
+                    "arxiv_id": arxiv_id,
+                    "title": title,
+                    "snippet": context_text,
+                    "label": label.lower(),
+                    "score": score
+                })
+                logger.info(f"Match: {label} in {arxiv_id}, snippet: {context_text}, score: {score:.3f}")
         
-        # Summarize classification results
+        # Summarize classifications
         p_count = classifications.count('p-type')
         n_count = classifications.count('n-type')
-        neutral_count = len(classifications) - p_count - n_count
+        neutral_count = formula_matches - p_count - n_count
         summary_dict = {
             "total_abstracts": total_abstracts,
             "formula_matches": formula_matches,
             "p_type_count": p_count,
             "n_type_count": n_count,
-            "neutral_count": neutral_count
+            "neutral_count": neutral_count,
+            "relevance_scores": relevance_scores,
+            "matched_terms": list(set(sum([[term for term in sum(THERMOELECTRIC_SYNONYMS.values(), []) + UNIT_VARIANTS if term in abstract.lower()] for abstract in [a['abstract'].lower() for a in abstracts]], [])))
         }
-        logger.info(f"Classifications for {formula}: p-type={p_count}, n-type={n_count}, Neutral={neutral_count}")
         
-        # Apply majority voting
+        # Determine material type
         if classifications:
-            if p_count > n_count and p_count > 0:
-                return 'p-type', summary_dict
-            elif n_count > p_count and n_count > 0:
-                return 'n-type', summary_dict
-            else:
-                return 'Neutral', summary_dict
-        logger.warning(f"No relevant classifications for {formula}, returning Neutral")
-        return 'Neutral', summary_dict
+            p_score = sum(vm['score'] for vm in verbatim_matches if vm['label'] == 'p-type')
+            n_score = sum(vm['score'] for vm in verbatim_matches if vm['label'] == 'n-type')
+            material_type = 'p-type' if p_score > n_score else 'n-type' if n_score > p_score else 'Neutral'
+        else:
+            material_type = 'Neutral'
+            if formula_matches > 0:
+                verbatim_matches.append({
+                    "arxiv_id": abstracts[0]['arxiv_id'],
+                    "title": abstracts[0]['title'],
+                    "snippet": f"Formula {formula} found but no p-type or n-type mentions.",
+                    "label": "Neutral",
+                    "score": 0.0
+                })
+        
+        logger.info(f"Classifications for {formula}: p-type={p_count}, n-type={n_count}, Neutral={neutral_count}, Selected: {material_type}")
+        return material_type, summary_dict, verbatim_matches
     except Exception as e:
         logger.error(f"Failed to extract material type: {str(e)}")
-        return 'Neutral', {"total_abstracts": 0, "formula_matches": 0, "p_type_count": 0, "n_type_count": 0, "neutral_count": 0}
+        summary_dict = {
+            "total_abstracts": 0,
+            "formula_matches": 0,
+            "p_type_count": 0,
+            "n_type_count": 0,
+            "neutral_count": 0,
+            "relevance_scores": [],
+            "matched_terms": []
+        }
+        verbatim_matches = [{"arxiv_id": "", "title": "", "snippet": f"Error: {str(e)}", "label": "Neutral", "score": 0.0}]
+        return "Neutral", summary_dict, verbatim_matches
 
 def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
     try:
@@ -439,15 +620,20 @@ default_color_list = base_color_list + additional_colors
 default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_elements)]))
 
 # Streamlit UI
-st.title("Ternary Seebeck Coefficient Predictor with SciBERT Classification")
+st.title("Ternary Seebeck Coefficient Predictor with Enhanced SciBERT Classification")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and the app will automatically classify the material as p-type, n-type, or Neutral using SciBERT and arXiv abstracts. The classification is used to bias the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart showing mean and SD for each dimension and uses a direction-specific bias vector to control the sign without amplifying same-sign magnitudes or reducing opposite-sign magnitudes. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and the app will automatically classify the material as p-type, n-type, or Neutral using SciBERT and spaCy NER on arXiv abstracts (2020–2025). The classification uses attention-based relevance scoring, prioritizing thermoelectric terms (Seebeck coefficient, thermopower, power factor, zT, figure of merit) and unit variants (μV/K, mV/K, etc.). Verbatim text snippets are provided for transparency. The classification biases the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics and identifies the composition with the maximum absolute Seebeck coefficient.
 
-**Informatics Classification (Attentive Mode)**: Uses SciBERT to analyze arXiv abstracts (2020–2025) mentioning the composition (e.g., AgBiTe₂). Searches for thermoelectric terms (Seebeck coefficient, thermopower, power factor, zT, figure of merit) and unit variants (μV/K, mV/K, etc.). Classifies as p-type or n-type based on explicit mentions in abstracts containing the formula, using majority voting. Returns Neutral if no relevant abstracts or classifications are found.
+**Enhanced Informatics Classification (Attentive Mode)**:
+- **SciBERT Scoring**: Uses attention mechanisms to score abstracts based on thermoelectric terms and formula proximity.
+- **spaCy NER**: Detects p-type/n-type mentions with context, ensuring relevance to the formula.
+- **Relevance Weights**: Assigns weights to terms (e.g., Seebeck coefficient: 2.5, thermoelectric: 1.5).
+- **Verbatim Output**: Shows text snippets containing p-type/n-type mentions or explains their absence.
+- **Decision Rule**: Selects p-type or n-type based on weighted scores; returns Neutral if no clear majority or no relevant abstracts.
 
-**Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
+**Maximum Seebeck Calculation**: Computes the maximum |S(x)| from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 05:06 AM CEST, Monday, August 18, 2025
+**Date and Time**: 05:29 AM CEST, Monday, August 18, 2025
 """)
 
 # Sidebar for figure customization
@@ -807,8 +993,8 @@ if st.button("Generate Ternary Diagram"):
             
             user_composition = [compositions.get(elements[i], 0) for i in range(3)]
             user_composition_dict = {elements[i]: user_composition[i] for i in range(3)}
-            # Get material type and classification summary
-            material_type, summary_dict = extract_material_type(elements, user_composition_dict)
+            # Get material type, summary, and verbatim matches
+            material_type, summary_dict, verbatim_matches = extract_material_type(elements, user_composition_dict)
             sign_bias = material_type if material_type != "Neutral" else None
             user_seebeck, user_seebeck_unbiased = predict_seebeck(
                 user_composition_dict,
@@ -844,13 +1030,17 @@ if st.button("Generate Ternary Diagram"):
             st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
             st.write(f"**Chemical Formula**: {Composition(user_composition_dict).reduced_formula}")
             st.write(f"**SciBERT Material Type (from arXiv)**: {material_type}")
-            # Display classification summary
             st.write("**Classification Summary (Attentive Mode)**:")
             st.write(f"- Total abstracts retrieved: {summary_dict['total_abstracts']}")
             st.write(f"- Abstracts mentioning formula: {summary_dict['formula_matches']}")
             st.write(f"- p-type classifications: {summary_dict['p_type_count']}")
             st.write(f"- n-type classifications: {summary_dict['n_type_count']}")
             st.write(f"- Neutral classifications: {summary_dict['neutral_count']}")
+            st.write(f"- Average relevance score: {np.mean(summary_dict['relevance_scores']):.3f}" if summary_dict['relevance_scores'] else "- Average relevance score: N/A")
+            st.write(f"- Matched thermoelectric terms: {', '.join(summary_dict['matched_terms']) if summary_dict['matched_terms'] else 'None'}")
+            st.write("**Verbatim Matches**:")
+            for vm in verbatim_matches:
+                st.write(f"- **{vm['label'].capitalize()}** (Score: {vm['score']:.3f}) in [{vm['arxiv_id']}]({vm['arxiv_id']}): *{vm['snippet']}*")
             st.write(f"**User |Seebeck Coefficient| (Biased)**: {abs(user_seebeck):.2f} μV/K")
             st.write(f"**User Signed Seebeck Coefficient (Biased)**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
             st.write(f"**User |Seebeck Coefficient| (Unbiased)**: {abs(user_seebeck_unbiased):.2f} μV/K")
