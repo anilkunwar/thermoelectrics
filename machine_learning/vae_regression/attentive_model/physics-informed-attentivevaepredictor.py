@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 import arxiv
 from datetime import datetime
 from retrying import retry
-from semanticscholar import SemanticScholar
+import re
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -228,7 +228,7 @@ def plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, output_path='z_mean
         logger.error(f"Failed to save Matplotlib figure: {e}")
     return fig
 
-# Fetch arXiv abstracts with retries and Semantic Scholar fallback
+# Fetch arXiv abstracts with retries
 @st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
 @retry(stop_max_attempt_number=3, wait_fixed=2000)
 def fetch_arxiv_abstracts(elements, composition_dict):
@@ -237,18 +237,13 @@ def fetch_arxiv_abstracts(elements, composition_dict):
         formula = comp.reduced_formula
         query = f"thermoelectric {formula} p-type n-type"
         logger.info(f"Querying arXiv with: {query}")
-        results = arxiv.Client().results(arxiv.Search(query=query, max_results=20))
+        results = arxiv.Client().results(arxiv.Search(query=query, max_results=30))
         abstracts = [{"title": r.title, "abstract": r.summary, "arxiv_id": r.entry_id, "published": r.published} for r in results]
         abstracts = [a for a in abstracts if a["published"].year >= 2020]
-        if not abstracts:
-            logger.info(f"No arXiv abstracts for {formula}, trying Semantic Scholar")
-            sch = SemanticScholar()
-            sch_results = sch.search_paper(query, year="2020-2025")
-            abstracts = [{"title": r['title'], "abstract": r.get('abstract', ''), "arxiv_id": r['paperId'], "published": datetime.strptime(str(r.get('year', 2020)), '%Y')} for r in sch_results]
         logger.info(f"Retrieved {len(abstracts)} abstracts for {formula}: {[a['title'] for a in abstracts]}")
         return abstracts
     except Exception as e:
-        logger.error(f"Failed to fetch abstracts: {str(e)}")
+        logger.error(f"Failed to fetch arXiv abstracts: {str(e)}")
         return []
 
 # Extract p-type or n-type from abstracts using SciBERT
@@ -258,8 +253,13 @@ def extract_material_type(elements, composition_dict):
         tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
         formula = comp.reduced_formula
-        formula_variants = [formula, formula.replace('2', '₂'), f"{elements[0]}{elements[1]}{elements[2]}"]
-        logger.info(f"Formula variants: {formula_variants}")
+        formula_variants = [
+            formula,
+            formula.replace('2', '₂'),
+            f"{elements[0]}{elements[1]}{elements[2]}",
+            re.compile(f"{elements[0]}[0-9.]*{elements[1]}[0-9.]*{elements[2]}[0-9.]*")
+        ]
+        logger.info(f"Formula variants: {[v for v in formula_variants if isinstance(v, str)]}")
         abstracts = fetch_arxiv_abstracts(elements, composition_dict)
         if not abstracts:
             logger.warning(f"No abstracts found for {formula}, returning Neutral")
@@ -267,7 +267,7 @@ def extract_material_type(elements, composition_dict):
         classifications = []
         for abstract_data in abstracts:
             abstract = abstract_data['abstract'].lower()
-            formula_present = any(variant.lower() in abstract for variant in formula_variants)
+            formula_present = any(variant.lower() in abstract for variant in formula_variants[:-1]) or formula_variants[-1].search(abstract)
             logger.info(f"Abstract: {abstract[:100]}..., Formula present: {formula_present}")
             if not formula_present:
                 continue
@@ -403,7 +403,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 04:45 AM CEST, Monday, August 18, 2025
+**Date and Time**: 04:56 AM CEST, Monday, August 18, 2025
 """)
 
 # Sidebar for figure customization
