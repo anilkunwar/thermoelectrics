@@ -29,4 +29,4 @@ torchaudio
 kaleido
 seaborn
 retrying
-rich==13.9.4
+rich>=10.14.0,<14  # Pinned to compatible version
