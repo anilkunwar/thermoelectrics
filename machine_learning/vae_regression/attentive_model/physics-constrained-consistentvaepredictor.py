@@ -99,6 +99,7 @@ def preprocess_new_data(df, available_elements, scaler):
     return X_scaled
 
 # Compute z_mean statistics and bias vector
+# The bias vector is updated in such a way that it does not affect the original prediction, only affects the sign
 def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _scaler, _vae, steps=30):
     z_means = []
     try:
