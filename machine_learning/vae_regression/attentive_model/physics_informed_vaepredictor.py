@@ -98,7 +98,31 @@ def preprocess_new_data(df, available_elements, scaler):
     X_scaled = scaler.transform(X_imputed)
     return X_scaled
 
-def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None):
+# Function to compute z_mean statistics
+def compute_z_mean_stats(elements, temperature, available_elements, _scaler, _vae, steps=30):
+    z_means = []
+    try:
+        _vae.eval()
+        with torch.no_grad():
+            for a in np.linspace(0, 1, steps):
+                for b in np.linspace(0, 1 - a, steps):
+                    c = 1 - a - b
+                    if c >= 0:
+                        comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
+                        df = featurize_composition(comp_dict, available_elements, temperature)
+                        X_scaled = preprocess_new_data(df, available_elements, _scaler)
+                        X_tensor = torch.FloatTensor(X_scaled).to(device)
+                        _, z_mean, _ = _vae(X_tensor)
+                        z_means.append(z_mean.cpu().numpy())
+        z_means = np.vstack(z_means)
+        z_mean_avg = np.mean(z_means, axis=0)
+        z_mean_std = np.std(z_means, axis=0)
+        return z_mean_avg, z_mean_std
+    except Exception as e:
+        logger.error(f"Failed to compute z_mean statistics: {e}")
+        return None, None
+
+def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_magnitude=0.05):
     try:
         df = featurize_composition(composition_dict, available_elements, temperature)
         X_scaled = preprocess_new_data(df, available_elements, _scaler)
@@ -107,23 +131,30 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
         _regressor.eval()
         with torch.no_grad():
             _, z_mean, _ = _vae(X_tensor)
+            z_mean_original = z_mean.clone()
             # Apply manual sign bias to the latent space
+            y_pred_unbiased = None
             if sign_bias is not None:
-                bias_magnitude = 0.5  # Adjustable magnitude, tuned to latent space scale
                 bias_vector = torch.ones(_vae.latent_dim).to(device) * bias_magnitude
                 if sign_bias == 'p-type':
-                    z_mean = z_mean + bias_vector  # Positive bias for p-type
+                    z_mean = z_mean + bias_vector
+                    logger.info(f"Applied p-type bias: {bias_vector.tolist()}")
                 elif sign_bias == 'n-type':
-                    z_mean = z_mean - bias_vector  # Negative bias for n-type
+                    z_mean = z_mean - bias_vector
+                    logger.info(f"Applied n-type bias: {bias_vector.tolist()}")
             y_scaled_pred = _regressor(z_mean)
             y_pred = _y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
-        return y_pred[0]
+            y_pred = np.clip(y_pred, -300, 300)
+            y_scaled_pred_unbiased = _regressor(z_mean_original)
+            y_pred_unbiased = _y_scaler.inverse_transform(y_scaled_pred_unbiased.cpu().numpy().reshape(-1, 1)).ravel()
+            y_pred_unbiased = np.clip(y_pred_unbiased, -300, 300)
+        return y_pred[0], y_pred_unbiased[0]
     except Exception as e:
         logger.error(f"Prediction failed: {e}")
         if sign_bias is not None:
             logger.warning(f"Retrying prediction without sign bias due to error with {sign_bias} bias.")
-            return predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None)
-        return None
+            return predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_magnitude=bias_magnitude)
+        return None, None
 
 # Load models and scalers
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -184,13 +215,13 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 # Streamlit UI
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements from the dropdown below, input their proportions, and choose a material type (p-type or n-type) to bias the Seebeck coefficient's sign. The app identifies the composition with the maximum absolute Seebeck coefficient from the computed ternary data and plots its variation with temperature.
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and choose a material type (p-type or n-type) to bias the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics to calibrate the bias, ensuring physically realistic predictions. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
 
-**Manual Sign Bias**: Users can select 'p-type' or 'n-type' to apply a bias to the VAE's latent space, influencing the Seebeck coefficient to be positive (p-type) or negative (n-type). The bias is applied during inference without modifying the pre-trained model, allowing control over the material's thermoelectric type.
+**Manual Sign Bias**: A bias is applied to the VAE's latent space (z_mean) to influence the Seebeck coefficient's sign (positive for p-type, negative for n-type). The bias magnitude is dynamically set to 0.5 * std(z_mean) to avoid unphysical magnitude increases (~10x), keeping values in the range ~50–300 μV/K.
 
-**Maximum Seebeck Calculation**: The maximum absolute Seebeck coefficient `|S(x)|` is determined from the ternary data (496 compositions at the specified temperature) by selecting the composition with the highest `|S(x)|`, where `x = [x₁, x₂, x₃]` satisfies `x₁ + x₂ + x₃ = 1` and `0 ≤ xᵢ ≤ 1`. The data is available for download as a CSV for further analysis.
+**Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 01:19 AM CEST, Monday, August 18, 2025
+**Date and Time**: 02:20 AM CEST, Monday, August 18, 2025
 """)
 
 # Sidebar for figure customization
@@ -377,7 +408,7 @@ def complete_to_three_elements(selected_elements, proportions, compositions, ava
 
 # Generate ternary diagram with caching
 @st.cache_resource
-def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, sign_bias, steps=30):
+def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, sign_bias, bias_magnitude, steps=30):
     compositions = []
     seebeck_values = []
     for a in np.linspace(0, 1, steps):
@@ -385,7 +416,7 @@ def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temper
             c = 1 - a - b
             if c >= 0:
                 comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
-                seebeck = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias)
+                seebeck, _ = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_magnitude=bias_magnitude)
                 if seebeck is not None:
                     compositions.append([a, b, c])
                     seebeck_values.append(abs(seebeck))
@@ -479,13 +510,13 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
         return None
     return fig
 
-def plot_temperature_variance(elements, user_composition, max_comp, temp_range, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias, font_size, axes_line_width, grid_width, user_point_color, max_point_color, point_size, axes_box_thickness):
+def plot_temperature_variance(elements, user_composition, max_comp, temp_range, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias, bias_magnitude, font_size, axes_line_width, grid_width, user_point_color, max_point_color, point_size, axes_box_thickness):
     temps = np.linspace(temp_range[0], temp_range[1], 20)
     user_seebeck = []
     max_seebeck = []
     for temp in temps:
-        user_val = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias)
-        max_val = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias)
+        user_val, _ = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_magnitude=bias_magnitude)
+        max_val, _ = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_magnitude=bias_magnitude)
         user_seebeck.append(abs(user_val) if user_val is not None else np.nan)
         max_seebeck.append(abs(max_val) if max_val is not None else np.nan)
     fig = go.Figure()
@@ -524,7 +555,7 @@ def plot_temperature_variance(elements, user_composition, max_comp, temp_range, 
         )
     except Exception as e:
         st.error(f"Error updating temperature variance plot layout: {e}")
-        return None
+        return None, None, None, None
     return fig, temps, user_seebeck, max_seebeck
 
 # Generate ternary diagram and temperature variance plot
@@ -540,12 +571,24 @@ if st.button("Generate Ternary Diagram"):
         if total == 0:
             st.error("Please provide non-zero proportions for at least one element.")
         else:
+            # Compute z_mean statistics
+            z_mean_avg, z_mean_std = compute_z_mean_stats(elements, st.session_state.temperature, available_elements, scaler, vae)
+            if z_mean_avg is None or z_mean_std is None:
+                st.warning("Failed to compute z_mean statistics. Using default bias magnitude.")
+                bias_magnitude = 0.05
+            else:
+                bias_magnitude = 0.5 * np.mean(z_mean_std)  # Scale bias to 0.5 * average std of z_mean
+                st.write("### Latent Space Statistics (z_mean)")
+                st.write(f"**Mean per dimension**: {[f'{x:.4f}' for x in z_mean_avg]}")
+                st.write(f"**Std per dimension**: {[f'{x:.4f}' for x in z_mean_std]}")
+                st.write(f"**Applied bias magnitude**: {bias_magnitude:.4f}")
+            
             # Normalize user composition
             user_composition = [compositions.get(elements[i], 0) for i in range(3)]
             user_composition_dict = {elements[i]: user_composition[i] for i in range(3)}
             # Predict Seebeck for user composition with sign bias
             sign_bias = st.session_state.sign_bias if st.session_state.sign_bias != 'Neutral' else None
-            user_seebeck = predict_seebeck(
+            user_seebeck, user_seebeck_unbiased = predict_seebeck(
                 user_composition_dict,
                 st.session_state.temperature,
                 available_elements,
@@ -553,11 +596,12 @@ if st.button("Generate Ternary Diagram"):
                 vae,
                 regressor,
                 y_scaler,
-                sign_bias=sign_bias
+                sign_bias=sign_bias,
+                bias_magnitude=bias_magnitude
             )
             if user_seebeck is None:
                 st.warning("Failed to predict Seebeck coefficient for user composition with sign bias, using unbiased prediction.")
-                user_seebeck = predict_seebeck(
+                user_seebeck, user_seebeck_unbiased = predict_seebeck(
                     user_composition_dict,
                     st.session_state.temperature,
                     available_elements,
@@ -565,15 +609,17 @@ if st.button("Generate Ternary Diagram"):
                     vae,
                     regressor,
                     y_scaler,
-                    sign_bias=None
+                    sign_bias=None,
+                    bias_magnitude=bias_magnitude
                 )
             if user_seebeck is None:
                 st.error("Failed to predict Seebeck coefficient even without bias. Please check inputs or model files.")
                 user_seebeck = 0.0
+                user_seebeck_unbiased = 0.0
             # Generate ternary data with error handling
             try:
                 compositions_array, seebeck_values = generate_ternary_data(
-                    vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements, sign_bias=sign_bias
+                    vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements, sign_bias=sign_bias, bias_magnitude=bias_magnitude
                 )
             except Exception as e:
                 st.error(f"Failed to generate ternary data due to computation error: {e}")
@@ -589,7 +635,7 @@ if st.button("Generate Ternary Diagram"):
                 max_comp = [max_row[elements[0]], max_row[elements[1]], max_row[elements[2]]]
                 max_seebeck_abs = max_row['|Seebeck| (μV/K)']
                 # Compute signed Seebeck for max composition
-                max_seebeck_signed = predict_seebeck(
+                max_seebeck_signed, _ = predict_seebeck(
                     {elements[i]: max_comp[i] for i in range(3)},
                     st.session_state.temperature,
                     available_elements,
@@ -597,10 +643,11 @@ if st.button("Generate Ternary Diagram"):
                     vae,
                     regressor,
                     y_scaler,
-                    sign_bias=sign_bias
+                    sign_bias=sign_bias,
+                    bias_magnitude=bias_magnitude
                 )
                 if max_seebeck_signed is None:
-                    max_seebeck_signed = predict_seebeck(
+                    max_seebeck_signed, _ = predict_seebeck(
                         {elements[i]: max_comp[i] for i in range(3)},
                         st.session_state.temperature,
                         available_elements,
@@ -608,7 +655,8 @@ if st.button("Generate Ternary Diagram"):
                         vae,
                         regressor,
                         y_scaler,
-                        sign_bias=None
+                        sign_bias=None,
+                        bias_magnitude=bias_magnitude
                     )
                     if max_seebeck_signed is None:
                         max_seebeck_signed = user_seebeck
@@ -617,8 +665,10 @@ if st.button("Generate Ternary Diagram"):
             # Display composition and Seebeck
             st.write("### Composition and Seebeck Coefficient")
             st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
-            st.write(f"**User |Seebeck Coefficient|**: {abs(user_seebeck):.2f} μV/K")
-            st.write(f"**User Signed Seebeck Coefficient**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
+            st.write(f"**User |Seebeck Coefficient| (Biased)**: {abs(user_seebeck):.2f} μV/K")
+            st.write(f"**User Signed Seebeck Coefficient (Biased)**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
+            st.write(f"**User |Seebeck Coefficient| (Unbiased)**: {abs(user_seebeck_unbiased):.2f} μV/K")
+            st.write(f"**User Signed Seebeck Coefficient (Unbiased)**: {user_seebeck_unbiased:.2f} μV/K ({'p-type' if user_seebeck_unbiased > 0 else 'n-type' if user_seebeck_unbiased < 0 else 'neutral'})")
             st.write(f"**Maximum |Seebeck| Composition**: {elements[0]}: {max_comp[0]:.2f}, {elements[1]}: {max_comp[1]:.2f}, {elements[2]}: {max_comp[2]:.2f}")
             st.write(f"**Maximum |Seebeck Coefficient|**: {max_seebeck_abs:.2f} μV/K")
             st.write(f"**Maximum Signed Seebeck Coefficient**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
@@ -650,7 +700,7 @@ if st.button("Generate Ternary Diagram"):
             st.write("### |Seebeck Coefficient| vs Temperature")
             fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(
                 elements, user_composition, max_comp, [100, 1000], available_elements,
-                scaler, vae, regressor, y_scaler, sign_bias, font_size, axes_line_width, grid_width,
+                scaler, vae, regressor, y_scaler, sign_bias, bias_magnitude, font_size, axes_line_width, grid_width,
                 user_point_color, max_point_color, point_size, axes_box_thickness
             )
             if fig_temp:
