@@ -7,6 +7,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.impute import SimpleImputer
 import plotly.express as px
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 from pymatgen.core.composition import Composition
 import os
 import joblib
@@ -112,8 +113,7 @@ def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _sc
         if not isinstance(temperature, (int, float)) or temperature < 0:
             logger.error(f"Invalid temperature: {temperature}")
             raise ValueError("Temperature must be a non-negative number")
-        # Validate scaler and VAE
-        expected_features = len(available_elements) + 1  # elements + temperature
+        expected_features = len(available_elements) + 1
         if _scaler.n_features_in_ != expected_features:
             logger.error(f"Scaler expects {expected_features} features, got {_scaler.n_features_in_}")
             raise ValueError("Scaler feature mismatch")
@@ -148,7 +148,7 @@ def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _sc
         z_mean_std = np.std(z_means, axis=0)
         # Approximate p-type and n-type z_mean
         p_type_comp = {elements[0]: 0.0, elements[1]: 0.4, elements[2]: 0.6}  # Bi: 0.4, Te: 0.6
-        n_type_comp = {elements[0]: 0.4, elements[1]: 0.0, elements[2]: 0.6}  # Ag: 0.4, Te: 0.6
+        n_type_comp = {elements[0]: 0.33, elements[1]: 0.33, elements[2]: 0.34}  # Ag: 0.33, Bi: 0.33, Te: 0.34
         df_p = featurize_composition(p_type_comp, available_elements, temperature)
         df_n = featurize_composition(n_type_comp, available_elements, temperature)
         X_scaled_p = preprocess_new_data(df_p, available_elements, _scaler)
@@ -161,27 +161,25 @@ def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _sc
         _, z_mean_p, _ = _vae(X_tensor_p)
         _, z_mean_n, _ = _vae(X_tensor_n)
         bias_vector = (z_mean_p - z_mean_n).cpu().numpy()
-        # Normalize bias vector to unit norm
         bias_norm = np.linalg.norm(bias_vector)
         if bias_norm > 0:
             bias_vector = bias_vector / bias_norm
         else:
             logger.warning("Bias vector has zero norm, using uniform vector")
             bias_vector = np.ones(_vae.latent_dim) / np.sqrt(_vae.latent_dim)
-        bias_magnitude = 0.3 * np.mean(z_mean_std)  # Reduced from 0.5
+        bias_magnitude = 0.5 * np.mean(z_mean_std)  # Increased to 0.5 from 0.3
         logger.info(f"Computed z_mean_avg: {z_mean_avg.tolist()}, z_mean_std: {z_mean_std.tolist()}, bias_vector: {bias_vector.tolist()}, bias_magnitude: {bias_magnitude}")
         return z_mean_avg, z_mean_std, bias_vector, bias_magnitude
     except Exception as e:
         logger.error(f"Failed to compute z_mean statistics and bias: {e}")
-        # Fallback to provided statistics
         fallback_z_mean_avg = np.array([-0.0003, -0.0000, 0.0004, 0.0003, 0.0003, -0.0006, 0.0009, -0.0001])
         fallback_z_mean_std = np.array([0.0003, 0.0007, 0.0003, 0.0005, 0.0005, 0.0010, 0.0011, 0.0003])
-        fallback_bias_vector = np.ones(8) / np.sqrt(8)  # Unit norm uniform vector
-        fallback_bias_magnitude = 0.3 * np.mean(fallback_z_mean_std)
+        fallback_bias_vector = np.ones(8) / np.sqrt(8)
+        fallback_bias_magnitude = 0.5 * np.mean(fallback_z_mean_std)
         logger.warning(f"Using fallback statistics: z_mean_avg={fallback_z_mean_avg.tolist()}, z_mean_std={fallback_z_mean_std.tolist()}, bias_vector={fallback_bias_vector.tolist()}, bias_magnitude={fallback_bias_magnitude}")
         return fallback_z_mean_avg, fallback_z_mean_std, fallback_bias_vector, fallback_bias_magnitude
 
-# Plot z_mean bar chart
+# Plot z_mean bar chart (Plotly)
 def plot_z_mean_bar_chart(z_mean_avg, z_mean_std, font_size):
     dimensions = [f"Dim {i+1}" for i in range(len(z_mean_avg))]
     fig = go.Figure()
@@ -204,6 +202,41 @@ def plot_z_mean_bar_chart(z_mean_avg, z_mean_std, font_size):
     )
     return fig
 
+# Plot z_mean bar chart (Matplotlib)
+def plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, output_path='z_mean_bar_chart.pdf'):
+    # Configuration for publication quality
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize=(8, 6), dpi=300)
+    
+    # Data
+    dimensions = [f'Dim {i+1}' for i in range(len(z_mean_avg))]
+    x = np.arange(len(z_mean_avg))
+    
+    # Plot bars with error bars
+    ax.bar(x, z_mean_avg, yerr=z_mean_std, capsize=5, color='#1f77b4', edgecolor='black', alpha=0.7, label='z_mean')
+    
+    # Customize plot
+    ax.set_xlabel('Latent Dimension', fontsize=14, fontfamily='Arial')
+    ax.set_ylabel('z_mean Value', fontsize=14, fontfamily='Arial')
+    ax.set_title('Latent Space z_mean: Mean with SD Error Bars', fontsize=16, fontfamily='Arial', pad=15)
+    ax.set_xticks(x)
+    ax.set_xticklabels(dimensions, fontsize=12, fontfamily='Arial')
+    ax.tick_params(axis='both', which='major', labelsize=12)
+    ax.grid(True, which='major', axis='y', linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
+    
+    # Adjust layout to prevent clipping
+    plt.tight_layout()
+    
+    # Save as PDF
+    try:
+        plt.savefig(output_path, format='pdf', bbox_inches='tight')
+        logger.info(f"Saved Matplotlib figure to {output_path}")
+    except Exception as e:
+        logger.error(f"Failed to save Matplotlib figure: {e}")
+    
+    return fig
+
 def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
     try:
         df = featurize_composition(composition_dict, available_elements, temperature)
@@ -220,6 +253,7 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
             y_scaled_pred_unbiased = _regressor(z_mean_original)
             y_pred_unbiased = _y_scaler.inverse_transform(y_scaled_pred_unbiased.cpu().numpy().reshape(-1, 1)).ravel()
             y_pred_unbiased = np.clip(y_pred_unbiased, -300, 300)
+            logger.debug(f"Unbiased z_mean: {z_mean_original.cpu().numpy().tolist()}, y_pred_unbiased: {y_pred_unbiased.tolist()}")
             if sign_bias is not None and bias_vector is not None:
                 bias_vector = torch.FloatTensor(bias_vector).to(device) * bias_magnitude
                 if sign_bias == 'p-type':
@@ -231,9 +265,14 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
                 y_scaled_pred = _regressor(z_mean)
                 y_pred = _y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
                 y_pred = np.clip(y_pred, -300, 300)
+                # Enforce n-type sign
+                if sign_bias == 'n-type' and y_pred[0] > 0:
+                    y_pred = -y_pred
+                    logger.warning(f"N-type bias produced positive Seebeck {y_pred[0]:.2f}, enforced negative sign")
                 # Normalize biased prediction to unbiased magnitude
                 if abs(y_pred[0]) > 0:
                     y_pred = y_pred * (abs(y_pred_unbiased[0]) / abs(y_pred[0]))
+                logger.debug(f"Biased z_mean: {z_mean.cpu().numpy().tolist()}, y_pred: {y_pred.tolist()}")
             else:
                 y_pred = y_pred_unbiased
         return y_pred[0], y_pred_unbiased[0]
@@ -305,11 +344,11 @@ st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and choose a material type (p-type or n-type) to bias the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart showing mean and SD for each dimension and uses a direction-specific bias vector to control the sign without amplifying same-sign magnitudes or reducing opposite-sign magnitudes. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
 
-**Manual Sign Bias**: A direction-specific bias vector (p-type to n-type) is computed from representative compositions (e.g., Bi: 0.4, Te: 0.6 for p-type; Ag: 0.4, Te: 0.6 for n-type) and scaled to 0.3 * avg(std(z_mean)) to avoid unphysical magnitude changes (~10x), keeping values ~50–300 μV/K. Biased predictions are normalized to match the unbiased magnitude.
+**Manual Sign Bias**: A direction-specific bias vector (p-type to n-type) is computed from representative compositions (e.g., Bi: 0.4, Te: 0.6 for p-type; Ag: 0.33, Bi: 0.33, Te: 0.34 for n-type) and scaled to 0.5 * avg(std(z_mean)) to ensure sign flipping while keeping values ~50–300 μV/K. Biased predictions are normalized to match the unbiased magnitude, with n-type enforced to be negative.
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 02:59 AM CEST, Monday, August 18, 2025
+**Date and Time**: 03:27 AM CEST, Monday, August 18, 2025
 """)
 
 # Sidebar for figure customization
@@ -663,14 +702,24 @@ if st.button("Generate Ternary Diagram"):
         else:
             # Compute z_mean statistics and bias vector
             z_mean_avg, z_mean_std, bias_vector, bias_magnitude = compute_z_mean_stats_and_bias(elements, st.session_state.temperature, available_elements, scaler, vae)
-            # Display z_mean statistics and bar chart
+            # Display z_mean statistics and bar charts
             st.write("### Latent Space Statistics (z_mean)")
             st.write(f"**Mean per dimension**: {[f'{x:.4f}' for x in z_mean_avg]}")
             st.write(f"**Std per dimension**: {[f'{x:.4f}' for x in z_mean_std]}")
             st.write(f"**Bias vector (p-type to n-type)**: {[f'{x:.4f}' for x in bias_vector]}")
             st.write(f"**Applied bias magnitude**: {bias_magnitude:.4f}")
+            # Plotly bar chart
             fig_z_mean = plot_z_mean_bar_chart(z_mean_avg, z_mean_std, font_size)
             st.plotly_chart(fig_z_mean, use_container_width=True)
+            # Matplotlib bar chart
+            fig_z_mean_matplotlib = plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, os.path.join(script_dir, 'z_mean_bar_chart.pdf'))
+            st.pyplot(fig_z_mean_matplotlib)
+            st.download_button(
+                label="Download z_mean Bar Chart as PDF",
+                data=open(os.path.join(script_dir, 'z_mean_bar_chart.pdf'), 'rb').read(),
+                file_name="z_mean_bar_chart.pdf",
+                mime="application/pdf"
+            )
             
             # Normalize user composition
             user_composition = [compositions.get(elements[i], 0) for i in range(3)]
