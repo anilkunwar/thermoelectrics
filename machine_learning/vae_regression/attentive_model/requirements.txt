@@ -28,4 +28,5 @@ torchvision
 torchaudio
 kaleido
 seaborn
+retrying
 rich==13.9.4
