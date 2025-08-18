@@ -14,9 +14,11 @@ import joblib
 import colorsys
 from itertools import combinations
 import logging
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer
 import arxiv
 from datetime import datetime
+from retrying import retry
+from semanticscholar import SemanticScholar
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -106,7 +108,6 @@ def preprocess_new_data(df, available_elements, scaler):
 def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _scaler, _vae, steps=30):
     z_means = []
     try:
-        # Validate inputs
         if len(elements) != 3:
             logger.error(f"Expected 3 elements, got {len(elements)}: {elements}")
             raise ValueError("Exactly 3 elements required")
@@ -149,9 +150,8 @@ def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _sc
         z_means = np.vstack(z_means)
         z_mean_avg = np.mean(z_means, axis=0)
         z_mean_std = np.std(z_means, axis=0)
-        # Approximate p-type and n-type z_mean
-        p_type_comp = {elements[0]: 0.0, elements[1]: 0.4, elements[2]: 0.6}  # Bi: 0.4, Te: 0.6
-        n_type_comp = {elements[0]: 0.33, elements[1]: 0.33, elements[2]: 0.34}  # Ag: 0.33, Bi: 0.33, Te: 0.34
+        p_type_comp = {elements[0]: 0.0, elements[1]: 0.4, elements[2]: 0.6}
+        n_type_comp = {elements[0]: 0.33, elements[1]: 0.33, elements[2]: 0.34}
         df_p = featurize_composition(p_type_comp, available_elements, temperature)
         df_n = featurize_composition(n_type_comp, available_elements, temperature)
         X_scaled_p = preprocess_new_data(df_p, available_elements, _scaler)
@@ -228,68 +228,56 @@ def plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, output_path='z_mean
         logger.error(f"Failed to save Matplotlib figure: {e}")
     return fig
 
-# Fetch arXiv abstracts
+# Fetch arXiv abstracts with retries and Semantic Scholar fallback
+@st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
+@retry(stop_max_attempt_number=3, wait_fixed=2000)
 def fetch_arxiv_abstracts(elements, composition_dict):
     try:
-        # Generate chemical formula from composition
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
-        formula = comp.reduced_formula  # e.g., AgBiTe2
-        search_query = f"thermoelectric {formula} p-type n-type"
-        logger.info(f"Querying arXiv with: {search_query}")
-        search = arxiv.Search(
-            query=search_query,
-            max_results=10,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending
-        )
-        abstracts = []
-        for result in search.results():
-            # Check if paper is from 2020 or later
-            if result.published.year >= 2020:
-                abstract = result.summary
-                abstracts.append({
-                    'title': result.title,
-                    'abstract': abstract,
-                    'arxiv_id': result.entry_id.split('/')[-1],
-                    'published': result.published
-                })
-        logger.info(f"Retrieved {len(abstracts)} abstracts for {formula}")
+        formula = comp.reduced_formula
+        query = f"thermoelectric {formula} p-type n-type"
+        logger.info(f"Querying arXiv with: {query}")
+        results = arxiv.Client().results(arxiv.Search(query=query, max_results=20))
+        abstracts = [{"title": r.title, "abstract": r.summary, "arxiv_id": r.entry_id, "published": r.published} for r in results]
+        abstracts = [a for a in abstracts if a["published"].year >= 2020]
+        if not abstracts:
+            logger.info(f"No arXiv abstracts for {formula}, trying Semantic Scholar")
+            sch = SemanticScholar()
+            sch_results = sch.search_paper(query, year="2020-2025")
+            abstracts = [{"title": r['title'], "abstract": r.get('abstract', ''), "arxiv_id": r['paperId'], "published": datetime.strptime(str(r.get('year', 2020)), '%Y')} for r in sch_results]
+        logger.info(f"Retrieved {len(abstracts)} abstracts for {formula}: {[a['title'] for a in abstracts]}")
         return abstracts
     except Exception as e:
-        logger.error(f"Failed to fetch arXiv abstracts: {e}")
+        logger.error(f"Failed to fetch abstracts: {str(e)}")
         return []
 
 # Extract p-type or n-type from abstracts using SciBERT
+@st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
 def extract_material_type(elements, composition_dict):
     try:
-        # Load SciBERT tokenizer
         tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
-        # Generate chemical formula
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
-        formula = comp.reduced_formula  # e.g., AgBiTe2
-        # Alternative notations
+        formula = comp.reduced_formula
         formula_variants = [formula, formula.replace('2', '₂'), f"{elements[0]}{elements[1]}{elements[2]}"]
+        logger.info(f"Formula variants: {formula_variants}")
         abstracts = fetch_arxiv_abstracts(elements, composition_dict)
         if not abstracts:
             logger.warning(f"No abstracts found for {formula}, returning Neutral")
             return "Neutral"
-        
         classifications = []
         for abstract_data in abstracts:
             abstract = abstract_data['abstract'].lower()
-            # Check for formula variants in abstract
             formula_present = any(variant.lower() in abstract for variant in formula_variants)
+            logger.info(f"Abstract: {abstract[:100]}..., Formula present: {formula_present}")
             if not formula_present:
                 continue
-            # Rule-based classification based on p-type/n-type mentions
             if 'p-type' in abstract and formula_present:
                 classifications.append('p-type')
             elif 'n-type' in abstract and formula_present:
                 classifications.append('n-type')
             else:
                 classifications.append('Neutral')
-        
-        # Majority voting
+            logger.info(f"Classification: {classifications[-1]}")
         if classifications:
             p_count = classifications.count('p-type')
             n_count = classifications.count('n-type')
@@ -300,11 +288,10 @@ def extract_material_type(elements, composition_dict):
                 return 'n-type'
             else:
                 return 'Neutral'
-        else:
-            logger.warning(f"No relevant classifications for {formula}, returning Neutral")
-            return 'Neutral'
+        logger.warning(f"No relevant classifications for {formula}, returning Neutral")
+        return 'Neutral'
     except Exception as e:
-        logger.error(f"Failed to extract material type: {e}")
+        logger.error(f"Failed to extract material type: {str(e)}")
         return 'Neutral'
 
 def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
@@ -410,15 +397,13 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 # Streamlit UI
 st.title("Ternary Seebeck Coefficient Predictor with SciBERT Classification")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and choose a material type (p-type or n-type) to bias the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart showing mean and SD for each dimension and uses a direction-specific bias vector to control the sign without amplifying same-sign magnitudes or reducing opposite-sign magnitudes. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature. Additionally, it extracts the p-type or n-type classification of the selected composition from arXiv abstracts using SciBERT, prioritizing explicit mentions of p-type or n-type, and returns Neutral if not found.
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and the app will automatically classify the material as p-type, n-type, or Neutral using SciBERT and arXiv abstracts. The classification is used to bias the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart showing mean and SD for each dimension and uses a direction-specific bias vector to control the sign without amplifying same-sign magnitudes or reducing opposite-sign magnitudes. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
 
-**Manual Sign Bias**: A direction-specific bias vector (p-type to n-type) is computed from representative compositions (e.g., Bi: 0.4, Te: 0.6 for p-type; Ag: 0.33, Bi: 0.33, Te: 0.34 for n-type) and scaled to 0.5 * avg(std(z_mean)) to ensure sign flipping while keeping values ~50–300 μV/K. Biased predictions are normalized to match the unbiased magnitude, with n-type enforced to be negative.
-
-**SciBERT Classification**: Uses SciBERT to analyze arXiv abstracts (2020–2025) mentioning the composition (e.g., AgBiTe₂). Classifies as p-type or n-type based on explicit mentions, with majority voting across abstracts. Returns Neutral if no relevant abstracts or classifications are found.
+**Informatics Classification**: Uses SciBERT to analyze arXiv abstracts (2020–2025) mentioning the composition (e.g., AgBiTe₂). Classifies as p-type or n-type based on explicit mentions, with majority voting across abstracts. Returns Neutral if no relevant abstracts or classifications are found.
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 03:45 AM CEST, Monday, August 18, 2025
+**Date and Time**: 04:45 AM CEST, Monday, August 18, 2025
 """)
 
 # Sidebar for figure customization
@@ -444,7 +429,7 @@ point_size = st.sidebar.slider("Point Size (Ternary/Temperature)", 5, 20, 10)
 axes_box_thickness = st.sidebar.slider("Axes Box Thickness", 1, 5, 2)
 legend_spacing = st.sidebar.slider("Legend Spacing (Point Legend to Ternary)", 0.0, 0.5, 0.3, step=0.05)
 
-# Initialize session state with fallback
+# Initialize session state
 try:
     if 'selected_elements' not in st.session_state:
         st.session_state.selected_elements = []
@@ -454,15 +439,12 @@ try:
         st.session_state.compositions = {}
     if 'temperature' not in st.session_state:
         st.session_state.temperature = 800
-    if 'sign_bias' not in st.session_state:
-        st.session_state.sign_bias = 'Neutral'
 except Exception as e:
     st.warning(f"Session state initialization failed: {e}. Resetting to defaults.")
     st.session_state.selected_elements = []
     st.session_state.proportions = {}
     st.session_state.compositions = {}
     st.session_state.temperature = 800
-    st.session_state.sign_bias = 'Neutral'
 
 # Periodic Table for Reference
 st.header("Periodic Table Reference")
@@ -580,14 +562,6 @@ else:
 
 # Temperature input
 st.session_state.temperature = st.number_input("Enter Temperature (K):", min_value=0, max_value=5000, value=st.session_state.temperature, step=10)
-
-# Sign bias input
-st.session_state.sign_bias = st.selectbox(
-    "Select Material Type (Sign Bias)",
-    options=['Neutral', 'p-type', 'n-type'],
-    index=['Neutral', 'p-type', 'n-type'].index(st.session_state.sign_bias),
-    key='sign_bias_selector'
-)
 
 # Complete to three elements if fewer are selected
 def complete_to_three_elements(selected_elements, proportions, compositions, available_elements):
@@ -770,18 +744,14 @@ if st.button("Generate Ternary Diagram"):
         if total == 0:
             st.error("Please provide non-zero proportions for at least one element.")
         else:
-            # Compute z_mean statistics and bias vector
             z_mean_avg, z_mean_std, bias_vector, bias_magnitude = compute_z_mean_stats_and_bias(elements, st.session_state.temperature, available_elements, scaler, vae)
-            # Display z_mean statistics and bar charts
             st.write("### Latent Space Statistics (z_mean)")
             st.write(f"**Mean per dimension**: {[f'{x:.4f}' for x in z_mean_avg]}")
             st.write(f"**Std per dimension**: {[f'{x:.4f}' for x in z_mean_std]}")
             st.write(f"**Bias vector (p-type to n-type)**: {[f'{x:.4f}' for x in bias_vector]}")
             st.write(f"**Applied bias magnitude**: {bias_magnitude:.4f}")
-            # Plotly bar chart
             fig_z_mean = plot_z_mean_bar_chart(z_mean_avg, z_mean_std, font_size)
             st.plotly_chart(fig_z_mean, use_container_width=True)
-            # Matplotlib bar chart
             fig_z_mean_matplotlib = plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, os.path.join(script_dir, 'z_mean_bar_chart.pdf'))
             st.pyplot(fig_z_mean_matplotlib)
             st.download_button(
@@ -791,11 +761,10 @@ if st.button("Generate Ternary Diagram"):
                 mime="application/pdf"
             )
             
-            # Normalize user composition
             user_composition = [compositions.get(elements[i], 0) for i in range(3)]
             user_composition_dict = {elements[i]: user_composition[i] for i in range(3)}
-            # Predict Seebeck for user composition with sign bias
-            sign_bias = st.session_state.sign_bias if st.session_state.sign_bias != 'Neutral' else None
+            material_type = extract_material_type(elements, user_composition_dict)
+            sign_bias = material_type if material_type != "Neutral" else None
             user_seebeck, user_seebeck_unbiased = predict_seebeck(
                 user_composition_dict,
                 st.session_state.temperature,
@@ -826,9 +795,14 @@ if st.button("Generate Ternary Diagram"):
                 st.error("Failed to predict Seebeck coefficient even without bias. Please check inputs or model files.")
                 user_seebeck = 0.0
                 user_seebeck_unbiased = 0.0
-            # Extract material type using SciBERT
-            material_type = extract_material_type(elements, user_composition_dict)
-            # Generate ternary data with error handling
+            st.write("### Composition, Seebeck Coefficient, and Material Type")
+            st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
+            st.write(f"**Chemical Formula**: {Composition(user_composition_dict).reduced_formula}")
+            st.write(f"**SciBERT Material Type (from arXiv)**: {material_type}")
+            st.write(f"**User |Seebeck Coefficient| (Biased)**: {abs(user_seebeck):.2f} μV/K")
+            st.write(f"**User Signed Seebeck Coefficient (Biased)**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
+            st.write(f"**User |Seebeck Coefficient| (Unbiased)**: {abs(user_seebeck_unbiased):.2f} μV/K")
+            st.write(f"**User Signed Seebeck Coefficient (Unbiased)**: {user_seebeck_unbiased:.2f} μV/K ({'p-type' if user_seebeck_unbiased > 0 else 'n-type' if user_seebeck_unbiased < 0 else 'neutral'})")
             try:
                 compositions_array, seebeck_values = generate_ternary_data(
                     vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude
@@ -840,13 +814,11 @@ if st.button("Generate Ternary Diagram"):
                 st.error("No valid ternary data generated. Using user composition as fallback.")
                 max_comp, max_seebeck_abs, max_seebeck_signed = user_composition, abs(user_seebeck), user_seebeck
             else:
-                # Find maximum Seebeck from ternary data
                 ternary_df = pd.DataFrame(compositions_array, columns=[elements[0], elements[1], elements[2]])
                 ternary_df['|Seebeck| (μV/K)'] = seebeck_values
                 max_row = ternary_df.loc[ternary_df['|Seebeck| (μV/K)'].idxmax()]
                 max_comp = [max_row[elements[0]], max_row[elements[1]], max_row[elements[2]]]
                 max_seebeck_abs = max_row['|Seebeck| (μV/K)']
-                # Compute signed Seebeck for max composition
                 max_seebeck_signed, _ = predict_seebeck(
                     {elements[i]: max_comp[i] for i in range(3)},
                     st.session_state.temperature,
@@ -876,19 +848,9 @@ if st.button("Generate Ternary Diagram"):
                         max_seebeck_signed = user_seebeck
                         max_comp = user_composition
                         max_seebeck_abs = abs(user_seebeck)
-            # Display composition, Seebeck, and material type
-            st.write("### Composition, Seebeck Coefficient, and Material Type")
-            st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
-            st.write(f"**Chemical Formula**: {Composition(user_composition_dict).reduced_formula}")
-            st.write(f"**SciBERT Material Type (from arXiv)**: {material_type}")
-            st.write(f"**User |Seebeck Coefficient| (Biased)**: {abs(user_seebeck):.2f} μV/K")
-            st.write(f"**User Signed Seebeck Coefficient (Biased)**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
-            st.write(f"**User |Seebeck Coefficient| (Unbiased)**: {abs(user_seebeck_unbiased):.2f} μV/K")
-            st.write(f"**User Signed Seebeck Coefficient (Unbiased)**: {user_seebeck_unbiased:.2f} μV/K ({'p-type' if user_seebeck_unbiased > 0 else 'n-type' if user_seebeck_unbiased < 0 else 'neutral'})")
             st.write(f"**Maximum |Seebeck| Composition**: {elements[0]}: {max_comp[0]:.2f}, {elements[1]}: {max_comp[1]:.2f}, {elements[2]}: {max_comp[2]:.2f}")
             st.write(f"**Maximum |Seebeck Coefficient|**: {max_seebeck_abs:.2f} μV/K")
             st.write(f"**Maximum Signed Seebeck Coefficient**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
-            # Plot ternary diagram
             st.write("### Ternary Diagram")
             fig_ternary = plot_ternary_diagram(
                 compositions_array, seebeck_values, elements, user_composition, user_seebeck,
@@ -902,7 +864,6 @@ if st.button("Generate Ternary Diagram"):
                     fig_ternary.write_html(os.path.join(script_dir, 'ternary_diagram.html'))
                 except Exception as e:
                     st.warning(f"Failed to save ternary diagram: {e}")
-                # Prepare ternary data for download
                 ternary_df = pd.DataFrame(compositions_array, columns=[elements[0], elements[1], elements[2]])
                 ternary_df['|Seebeck| (μV/K)'] = seebeck_values
                 csv = ternary_df.to_csv(index=False).encode('utf-8')
@@ -912,7 +873,6 @@ if st.button("Generate Ternary Diagram"):
                     file_name="ternary_data.csv",
                     mime="text/csv"
                 )
-            # Plot temperature variance
             st.write("### |Seebeck Coefficient| vs Temperature")
             fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(
                 elements, user_composition, max_comp, [100, 1000], available_elements,
@@ -925,7 +885,6 @@ if st.button("Generate Ternary Diagram"):
                     fig_temp.write_html(os.path.join(script_dir, 'temperature_variance.html'))
                 except Exception as e:
                     st.warning(f"Failed to save temperature variance plot: {e}")
-                # Prepare temperature variance data for download
                 temp_df = pd.DataFrame({
                     'Temperature (K)': temps,
                     'User |Seebeck| (μV/K)': user_seebeck_vals,
