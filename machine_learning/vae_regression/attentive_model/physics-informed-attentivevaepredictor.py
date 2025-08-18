@@ -403,7 +403,7 @@ def extract_material_type(elements, composition_dict):
             formula,
             formula.replace('2', '₂'),
             f"{elements[0]}{elements[1]}{elements[2]}",
-            re.compile(f"{elements[0]}[0-9.]*{elements[1]}[0-9.]*{elements[2]}[0-9.]*")
+            re.compile(f"{re.escape(elements[0])}[0-9.]*{re.escape(elements[1])}[0-9.]*{re.escape(elements[2])}[0-9.]*")
         ]
         logger.info(f"Formula variants: {[v for v in formula_variants if isinstance(v, str)]}")
         
@@ -622,7 +622,7 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 # Streamlit UI
 st.title("Ternary Seebeck Coefficient Predictor with Enhanced SciBERT Classification")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and the app will automatically classify the material as p-type, n-type, or Neutral using SciBERT and spaCy NER on arXiv abstracts (2020–2025). The classification uses attention-based relevance scoring, prioritizing thermoelectric terms (Seebeck coefficient, thermopower, power factor, zT, figure of merit) and unit variants (μV/K, mV/K, etc.). Verbatim text snippets are provided for transparency. The classification biases the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics and identifies the composition with the maximum absolute Seebeck coefficient.
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and the app will automatically classify the material as p-type, n-type, or Neutral using SciBERT and spaCy NER on arXiv abstracts (2020-2025). The classification uses attention-based relevance scoring, prioritizing thermoelectric terms (Seebeck coefficient, thermopower, power factor, zT, figure of merit) and unit variants (μV/K, mV/K, etc.). Verbatim text snippets are provided for transparency. The classification biases the Seebeck coefficient's sign. The app quantifies the VAE's latent space (z_mean) statistics and identifies the composition with the maximum absolute Seebeck coefficient.
 
 **Enhanced Informatics Classification (Attentive Mode)**:
 - **SciBERT Scoring**: Uses attention mechanisms to score abstracts based on thermoelectric terms and formula proximity.
@@ -633,7 +633,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 
 **Maximum Seebeck Calculation**: Computes the maximum |S(x)| from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 05:29 AM CEST, Monday, August 18, 2025
+**Date and Time**: 05:39 AM CEST, Monday, August 18, 2025
 """)
 
 # Sidebar for figure customization
