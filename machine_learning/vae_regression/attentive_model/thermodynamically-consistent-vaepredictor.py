@@ -14,6 +14,9 @@ import joblib
 import colorsys
 from itertools import combinations
 import logging
+import sqlite3
+from io import BytesIO
+from collections import Counter
 from physics_attention import extract_material_type, plot_material_type_histogram, plot_material_probabilities, plot_relevance_box_plot, plot_pmi_network
 
 # Set page config as the first Streamlit command
@@ -233,6 +236,34 @@ def plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, output_path='z_mean
         logger.error(f"Failed to save Matplotlib figure: {e}")
     return fig
 
+# Plot formula histogram
+def plot_formula_histogram(verbatim_matches, font_size):
+    formulas = [match['matched_formula'] for match in verbatim_matches if 'matched_formula' in match]
+    formula_counts = Counter(formulas)
+    if not formula_counts:
+        return None
+    df = pd.DataFrame.from_dict(formula_counts, orient='index').reset_index()
+    df.columns = ['Formula', 'Count']
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df['Formula'],
+        y=df['Count'],
+        marker=dict(color='teal', opacity=0.7),
+        name='Formula Frequency'
+    ))
+    fig.update_layout(
+        title=dict(text='Histogram of Matched Chemical Formulas', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+        xaxis_title='Chemical Formula',
+        yaxis_title='Frequency',
+        xaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size)), tickangle=45),
+        yaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50),
+        template='seaborn'
+    )
+    return fig
+
 def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
     try:
         df = featurize_composition(composition_dict, available_elements, temperature)
@@ -343,7 +374,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 **Optimization Mode**: Choose 'Manual' to specify composition ratios or 'Informatics-Attention Optimize' for automatic composition optimization.
 **Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is suggested by a SciBERT model analyzing arXiv abstracts with customizable keywords and year range.
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1.
-**Date and Time**: 08:08 PM CEST, Tuesday, August 19, 2025
+**Date and Time**: 08:34 PM CEST, Tuesday, August 19, 2025
 """)
 
 # Sidebar for figure customization
@@ -394,6 +425,10 @@ try:
         st.session_state.use_manual_material_type = False
     if 'optimization_mode' not in st.session_state:
         st.session_state.optimization_mode = 'Informatics-Attention Optimize'
+    if 'summary_dict' not in st.session_state:
+        st.session_state.summary_dict = {}
+    if 'verbatim_matches' not in st.session_state:
+        st.session_state.verbatim_matches = []
 except Exception as e:
     st.warning(f"Session state initialization failed: {e}. Resetting to defaults.")
     st.session_state.selected_elements = []
@@ -403,6 +438,8 @@ except Exception as e:
     st.session_state.sign_bias = 'Neutral'
     st.session_state.use_manual_material_type = False
     st.session_state.optimization_mode = 'Informatics-Attention Optimize'
+    st.session_state.summary_dict = {}
+    st.session_state.verbatim_matches = []
 
 # Periodic Table for Reference
 st.header("Periodic Table Reference")
@@ -448,11 +485,11 @@ def plot_periodic_table(available_elements, selected_elements, element_color_map
     title_text = 'Periodic Table: Available Elements' if not show_all_elements else 'Periodic Table: Full (Unavailable in Gray)'
     fig.update_layout(
         title=dict(text=f"{title_text} (Selected Elements with Bold Outline)", x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
-        xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        yaxis=dict(range=[-10, -1], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        xaxis=dict(range=[0, 20], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        yaxis=dict(range=[-11, 0], showgrid=False, zeroline=False, showticklabels=False, title=''),
         plot_bgcolor='white', paper_bgcolor='white',
-        autosize=True,  # Enable responsive sizing
-        margin=dict(l=20, r=20, t=50, b=20),
+        autosize=True,
+        margin=dict(l=40, r=40, t=60, b=40),
         template='seaborn'
     )
     return fig
@@ -469,7 +506,6 @@ st.plotly_chart(fig_present, use_container_width=True)
 # Optimization mode selection
 st.header("Optimization Mode")
 optimization_mode = st.selectbox("Select Optimization Mode", ["Informatics-Attention Optimize", "Manual"], index=0, key='optimization_mode')
-# Update session state if changed
 if optimization_mode != st.session_state.optimization_mode:
     st.session_state.optimization_mode = optimization_mode
 
@@ -537,7 +573,7 @@ else:
 # Temperature input
 st.session_state.temperature = st.number_input("Enter Temperature (K):", min_value=0, max_value=5000, value=st.session_state.temperature, step=10)
 
-# Material type selection
+# Material type selection and SciBERT processing
 st.header("Material Type Selection")
 st.session_state.use_manual_material_type = st.checkbox("Manually Select Material Type", value=st.session_state.use_manual_material_type)
 if st.session_state.use_manual_material_type:
@@ -547,12 +583,16 @@ if st.session_state.use_manual_material_type:
         index=['Neutral', 'p-type', 'n-type'].index(st.session_state.sign_bias),
         key='sign_bias_selector'
     )
+    st.session_state.summary_dict = {}
+    st.session_state.verbatim_matches = []
 else:
     st.write("Using SciBERT-based material type suggestion from arXiv abstracts.")
     if st.session_state.selected_elements and sum(st.session_state.compositions.values()) > 0:
         try:
             material_type, summary_dict, verbatim_matches = extract_material_type(st.session_state.selected_elements, st.session_state.compositions, custom_keywords, year_range, pmi_threshold)
             st.session_state.sign_bias = material_type
+            st.session_state.summary_dict = summary_dict
+            st.session_state.verbatim_matches = verbatim_matches
             st.write(f"**Suggested Material Type**: {material_type}")
             st.write(f"**p-type Probability**: {summary_dict['p_type_prob']:.3f}")
             st.write(f"**n-type Probability**: {summary_dict['n_type_prob']:.3f}")
@@ -569,14 +609,50 @@ else:
                 st.write(f"**Snippet**: {match['snippet']}")
                 st.write(f"**Label**: {match['label']}")
                 st.write(f"**Score**: {match['score']:.3f}")
+                st.write(f"**Matched Formula**: {match.get('matched_formula', 'N/A')}")
                 st.markdown("---")
+            # Download abstracts as CSV
+            if verbatim_matches:
+                abstracts_df = pd.DataFrame(verbatim_matches)
+                csv = abstracts_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Abstracts as CSV",
+                    data=csv,
+                    file_name="abstracts.csv",
+                    mime="text/csv"
+                )
+                # Download abstracts as SQLite
+                output = BytesIO()
+                with sqlite3.connect(':memory:') as conn:
+                    abstracts_df.to_sql('abstracts', conn, index=False, if_exists='replace')
+                    conn.commit()
+                    with output:
+                        output.write(conn.backup(conn).read())
+                        sqlite_data = output.getvalue()
+                st.download_button(
+                    label="Download Abstracts as SQLite DB",
+                    data=sqlite_data,
+                    file_name="abstracts.db",
+                    mime="application/x-sqlite3"
+                )
+            # Plot formula histogram
+            st.subheader("Matched Formula Histogram")
+            fig_formula = plot_formula_histogram(verbatim_matches, font_size)
+            if fig_formula:
+                st.plotly_chart(fig_formula, use_container_width=True)
+            else:
+                st.write("No matched formulas available for histogram.")
         except Exception as e:
             st.error(f"Failed to get SciBERT suggestion: {e}. Defaulting to Neutral.")
             logger.error(f"SciBERT material type error: {e}")
             st.session_state.sign_bias = 'Neutral'
+            st.session_state.summary_dict = {}
+            st.session_state.verbatim_matches = []
     else:
         st.warning("Please select elements and normalize proportions to get a SciBERT suggestion.")
         st.session_state.sign_bias = 'Neutral'
+        st.session_state.summary_dict = {}
+        st.session_state.verbatim_matches = []
 
 # Complete to three elements if fewer are selected
 def complete_to_three_elements(selected_elements, proportions, compositions, available_elements):
@@ -926,14 +1002,14 @@ if st.button("Generate Ternary Diagram"):
                     mime="text/csv"
                 )
             # Plot physics attention visualizations
-            if not st.session_state.use_manual_material_type:
+            if not st.session_state.use_manual_material_type and st.session_state.summary_dict:
                 st.write("### Physics Attention Visualizations")
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.plotly_chart(plot_material_type_histogram(summary_dict, font_size), use_container_width=True)
-                    st.plotly_chart(plot_relevance_box_plot(summary_dict, font_size), use_container_width=True)
+                    st.plotly_chart(plot_material_type_histogram(st.session_state.summary_dict, font_size), use_container_width=True)
+                    st.plotly_chart(plot_relevance_box_plot(st.session_state.summary_dict, font_size), use_container_width=True)
                 with col2:
-                    st.plotly_chart(plot_material_probabilities(summary_dict, font_size), use_container_width=True)
-                    st.plotly_chart(plot_pmi_network(summary_dict, font_size), use_container_width=True)
+                    st.plotly_chart(plot_material_probabilities(st.session_state.summary_dict, font_size), use_container_width=True)
+                    st.plotly_chart(plot_pmi_network(st.session_state.summary_dict, font_size), use_container_width=True)
     else:
         st.error("Please select at least one element.")
