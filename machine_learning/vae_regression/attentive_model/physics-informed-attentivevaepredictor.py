@@ -5,24 +5,16 @@ import torch
 import torch.nn as nn
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.impute import SimpleImputer
-from sklearn.ensemble import IsolationForest
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-import umap
-import joblib
-import matplotlib
-matplotlib.use('Agg')  # Set non-interactive backend for Streamlit
-import matplotlib.pyplot as plt
-import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
 from pymatgen.core.composition import Composition
-import sqlite3
-import re
 import os
+import joblib
 import colorsys
+from itertools import combinations
 import logging
-import time
+import sqlite3
+import networkx as nx
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -35,15 +27,6 @@ np.random.seed(42)
 # Check for GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 st.write(f"Using device: {device}")
-
-# Set matplotlib font for publication quality
-plt.rcParams['font.family'] = 'Arial'
-plt.rcParams['font.size'] = 12
-plt.rcParams['axes.linewidth'] = 1.5
-plt.rcParams['xtick.major.width'] = 1.5
-plt.rcParams['ytick.major.width'] = 1.5
-plt.rcParams['xtick.major.size'] = 6
-plt.rcParams['ytick.major.size'] = 6
 
 # Electronegativity and thermoelectric weights
 electronegativity = {
@@ -60,33 +43,10 @@ thermoelectric_weights = {
     'Bi': 2.0, 'Te': 2.0, 'Sb': 1.8, 'Pb': 1.8, 'Se': 1.5, 'Sn': 1.5, 'Ge': 1.3, 'Si': 1.3, 'Mg': 1.2
 }
 
-# Self-Attention Layer (retained for potential retraining)
-class SelfAttention(nn.Module):
-    def __init__(self, input_dim, num_heads=1):
-        super(SelfAttention, self).__init__()
-        self.num_heads = num_heads
-        self.attention_dim = input_dim // num_heads
-        self.query = nn.Linear(input_dim, input_dim)
-        self.key = nn.Linear(input_dim, input_dim)
-        self.value = nn.Linear(input_dim, input_dim)
-        self.softmax = nn.Softmax(dim=-1)
-        self.out = nn.Linear(input_dim, input_dim)
-
-    def forward(self, x):
-        batch_size = x.size(0)
-        Q = self.query(x).view(batch_size, -1, self.num_heads, self.attention_dim).transpose(1, 2)
-        K = self.key(x).view(batch_size, -1, self.num_heads, self.attention_dim).transpose(1, 2)
-        V = self.value(x).view(batch_size, -1, self.num_heads, self.attention_dim).transpose(1, 2)
-        attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / np.sqrt(self.attention_dim)
-        attention_probs = self.softmax(attention_scores)
-        attention_output = torch.matmul(attention_probs, V).transpose(1, 2).contiguous().view(batch_size, -1)
-        output = self.out(attention_output)
-        return output + x  # Residual connection
-
-# Attentive VAE Model (reverted to original architecture without SelfAttention)
-class AttentiveVAE(nn.Module):
+# VAE Model
+class VAE(nn.Module):
     def __init__(self, input_dim=66, latent_dim=8):
-        super(AttentiveVAE, self).__init__()
+        super(VAE, self).__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.encoder = nn.Sequential(
@@ -107,13 +67,11 @@ class AttentiveVAE(nn.Module):
         return mu + eps * std
 
     def forward(self, x):
-        start_time = time.time()
         h = self.encoder(x)
         mu = self.z_mean(h)
         log_var = self.z_log_var(h)
         z = self.reparameterize(mu, log_var)
         x_recon = self.decoder(z)
-        logger.info(f"AttentiveVAE forward pass took {time.time() - start_time:.4f} seconds")
         return x_recon, mu, log_var
 
 # Regressor Model
@@ -129,201 +87,185 @@ class Regressor(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+# Attention-Based Classifier for Material Type
+class AttentionClassifier(nn.Module):
+    def __init__(self, input_dim=8, num_heads=1):
+        super(AttentionClassifier, self).__init__()
+        self.num_heads = num_heads
+        self.attention_dim = input_dim // num_heads
+        self.query = nn.Linear(input_dim, input_dim)
+        self.key = nn.Linear(input_dim, input_dim)
+        self.value = nn.Linear(input_dim, input_dim)
+        self.softmax = nn.Softmax(dim=-1)
+        self.out = nn.Linear(input_dim, input_dim)
+        self.classifier = nn.Sequential(
+            nn.Linear(input_dim, 16), nn.ReLU(),
+            nn.Linear(16, 3), nn.Softmax(dim=-1)  # Outputs probabilities for p-type, n-type, neutral
+        )
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        Q = self.query(x).view(batch_size, -1, self.num_heads, self.attention_dim).transpose(1, 2)
+        K = self.key(x).view(batch_size, -1, self.num_heads, self.attention_dim).transpose(1, 2)
+        V = self.value(x).view(batch_size, -1, self.num_heads, self.attention_dim).transpose(1, 2)
+        attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / np.sqrt(self.attention_dim)
+        attention_probs = self.softmax(attention_scores)
+        attention_output = torch.matmul(attention_probs, V).transpose(1, 2).contiguous().view(batch_size, -1)
+        output = self.out(attention_output) + x  # Residual connection
+        probs = self.classifier(output)
+        return probs
+
 # Preprocessing functions
-def preprocess_data(df, scaler, y_scaler, available_elements):
-    input_features = df[available_elements + ['temperature(K)']]
-    output_feature = df['seebeck_coefficient(μV/K)']
-    imputer_input = SimpleImputer(strategy='mean')
-    input_features_imputed = imputer_input.fit_transform(input_features)
-    imputer_output = SimpleImputer(strategy='mean')
-    output_feature_imputed = imputer_output.fit_transform(output_feature.values.reshape(-1, 1)).ravel()
-    iso_forest = IsolationForest(contamination=0.1)
-    outliers = iso_forest.fit_predict(input_features_imputed) == -1
-    input_features_cleaned = input_features_imputed[~outliers]
-    output_feature_cleaned = output_feature_imputed[~outliers]
-    valid_indices = np.where(~outliers)[0]
-    mask = (output_feature_cleaned >= -1174.0) & (output_feature_cleaned <= 1052.0)
-    input_features_cleaned = input_features_cleaned[mask]
-    output_feature_cleaned = output_feature_cleaned[mask]
-    valid_indices = valid_indices[mask]
-    X_scaled = scaler.transform(input_features_cleaned)
-    y_scaled = y_scaler.transform(output_feature_cleaned.reshape(-1, 1)).ravel()
-    return X_scaled, y_scaled, output_feature_cleaned, valid_indices
-
-def parse_formula(formula):
-    pattern = r'([A-Z][a-z]*)(\d*\.?\d*)?'
-    elements = re.findall(pattern, formula)
-    return list(set([element[0] for element, coeff in elements if float(coeff or 1) > 0]))
-
-def extract_multiplier_and_replace(input_formula):
-    pattern = r'\)(\d*\.?\d*)?'
-    match = re.search(pattern, input_formula)
-    if match:
-        multiplier = float(match.group(1)) if match.group(1) else 1.0
-        parts = re.split(pattern, input_formula)
-        formula_without_multiplier = parts[0]
-        content_within_parentheses = formula_without_multiplier.split('(')[-1]
-        elements_within_parentheses = re.findall(r'([A-Za-z]+)(\d*\.?\d*)', content_within_parentheses)
-        modified_elements = [(element, str(float(stoichiometry) * multiplier) if stoichiometry else '0.0') for element, stoichiometry in elements_within_parentheses]
-        modified_formula = formula_without_multiplier.split('(')[0] + ''.join(element + stoichiometry for element, stoichiometry in modified_elements)
-        return modified_formula
-    return input_formula
-
-def featurize_materials(df, available_elements):
-    features = []
-    for _, row in df.iterrows():
-        modified_formula = extract_multiplier_and_replace(row['Formula'])
-        composition = Composition(modified_formula)
-        composition_dict = composition.fractional_composition.as_dict()
-        feature_vector = {element: composition_dict.get(element, 0) for element in available_elements}
-        feature_vector['temperature(K)'] = row['temperature(K)']
-        features.append(feature_vector)
-    return pd.DataFrame(features)
+def featurize_composition(composition_dict, available_elements, temperature):
+    feature_vector = {element: composition_dict.get(element, 0) for element in available_elements}
+    feature_vector['temperature(K)'] = temperature
+    return pd.DataFrame([feature_vector])
 
 def preprocess_new_data(df, available_elements, scaler):
-    features_df = featurize_materials(df, available_elements)
+    features_df = df
     imputer = SimpleImputer(strategy='mean')
     X_imputed = imputer.fit_transform(features_df)
     X_scaled = scaler.transform(X_imputed)
     return X_scaled
 
-# Plotting functions
-def plot_radar(data, labels, title, max_samples=10, alpha=0.3, linewidth=2, fontsize=16, legend_pos='upper right', axis_linewidth=1.5):
-    num_vars = data.shape[1]
-    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
-    angles += angles[:1]
-    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
-    colors = plt.cm.tab10(np.linspace(0, 1, min(max_samples, len(data))))
-    for i in range(min(max_samples, len(data))):
-        values = data[i].tolist()
-        values += values[:1]
-        ax.fill(angles, values, color=colors[i], alpha=alpha, label=labels[i])
-        ax.plot(angles, values, color=colors[i], linewidth=linewidth)
-    ax.set_theta_offset(np.pi / 2)
-    ax.set_theta_direction(-1)
-    ax.set_thetagrids(np.degrees(angles[:-1]), [f'Latent Dim {i+1}' for i in range(num_vars)],
-                      fontsize=fontsize, weight='bold')
-    ax.set_title(title, fontsize=fontsize + 2, pad=20, weight='bold')
-    ax.legend(loc=legend_pos, bbox_to_anchor=(1.2, 1.1), fontsize=fontsize - 2, frameon=True)
-    ax.grid(True, linestyle='--', alpha=0.5)
-    ax.spines['polar'].set_visible(True)
-    ax.spines['polar'].set_linewidth(axis_linewidth)
-    plt.tight_layout()
-    return fig
+def featurize_materials(df, available_elements):
+    features = []
+    for _, row in df.iterrows():
+        try:
+            composition = Composition(row['Formula'])
+            composition_dict = composition.fractional_composition.as_dict()
+            feature_vector = {element: composition_dict.get(element, 0) for element in available_elements}
+            feature_vector['temperature(K)'] = row['temperature(K)']
+            features.append(feature_vector)
+        except Exception as e:
+            logger.warning(f"Failed to parse formula {row['Formula']}: {e}")
+            continue
+    return pd.DataFrame(features)
 
-def plot_training_history_matplotlib(history_df, title, filename, linewidth=2.5, fontsize=12, train_color='#1f77b4', val_color='#ff7f0e', tick_fontsize=10, axis_linewidth=1.5):
+# Compute z_mean statistics and bias vector
+def compute_z_mean_stats_and_bias(elements, temperature, available_elements, scaler, vae, steps=30):
+    z_means = []
     try:
-        plt.style.use('seaborn-v0_8-whitegrid')
-    except OSError:
-        plt.style.use('ggplot')
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 6))
-    ax1.plot(history_df['loss'], label='Training Loss', linewidth=linewidth, color=train_color)
-    ax1.plot(history_df['val_loss'], label='Validation Loss', linewidth=linewidth, color=val_color)
-    ax1.set_xlabel('Epoch', fontsize=fontsize, weight='bold')
-    ax1.set_ylabel('Loss', fontsize=fontsize, weight='bold')
-    ax1.set_title(f'{title} Loss', fontsize=fontsize + 2, weight='bold')
-    ax1.legend(fontsize=fontsize - 2, frameon=True, edgecolor='black')
-    ax1.grid(True, linestyle='--', alpha=0.5)
-    ax1.spines['top'].set_visible(False)
-    ax1.spines['right'].set_visible(False)
-    ax1.spines['left'].set_linewidth(axis_linewidth)
-    ax1.spines['bottom'].set_linewidth(axis_linewidth)
-    ax1.tick_params(axis='both', which='major', labelsize=tick_fontsize, width=axis_linewidth, length=6)
-    ax2.plot(history_df['mse'], label='Training MSE', linewidth=linewidth, color=train_color)
-    ax2.plot(history_df['val_mse'], label='Validation MSE', linewidth=linewidth, color=val_color)
-    ax2.set_xlabel('Epoch', fontsize=fontsize, weight='bold')
-    ax2.set_ylabel('MSE', fontsize=fontsize, weight='bold')
-    ax2.set_title(f'{title} MSE', fontsize=fontsize + 2, weight='bold')
-    ax2.legend(fontsize=fontsize - 2, frameon=True, edgecolor='black')
-    ax2.grid(True, linestyle='--', alpha=0.5)
-    ax2.spines['top'].set_visible(False)
-    ax2.spines['right'].set_visible(False)
-    ax2.spines['left'].set_linewidth(axis_linewidth)
-    ax2.spines['bottom'].set_linewidth(axis_linewidth)
-    ax2.tick_params(axis='both', which='major', labelsize=tick_fontsize, width=axis_linewidth, length=6)
-    plt.tight_layout()
-    return fig
+        if len(elements) != 3:
+            raise ValueError("Exactly 3 elements required")
+        if not all(e in available_elements for e in elements):
+            raise ValueError("All elements must be in available_elements")
+        if not isinstance(temperature, (int, float)) or temperature < 0:
+            raise ValueError("Temperature must be a non-negative number")
+        vae.eval()
+        with torch.no_grad():
+            for a in np.linspace(0, 1, steps):
+                for b in np.linspace(0, 1 - a, steps):
+                    c = 1 - a - b
+                    if c >= 0:
+                        comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
+                        df = featurize_composition(comp_dict, available_elements, temperature)
+                        X_scaled = preprocess_new_data(df, available_elements, scaler)
+                        X_tensor = torch.FloatTensor(X_scaled).to(device)
+                        _, z_mean, _ = vae(X_tensor)
+                        z_means.append(z_mean.cpu().numpy())
+        if not z_means:
+            raise ValueError("No valid compositions generated")
+        z_means = np.vstack(z_means)
+        z_mean_avg = np.mean(z_means, axis=0)
+        z_mean_std = np.std(z_means, axis=0)
+        p_type_comp = {elements[0]: 0.0, elements[1]: 0.4, elements[2]: 0.6}
+        n_type_comp = {elements[0]: 0.33, elements[1]: 0.33, elements[2]: 0.34}
+        df_p = featurize_composition(p_type_comp, available_elements, temperature)
+        df_n = featurize_composition(n_type_comp, available_elements, temperature)
+        X_scaled_p = preprocess_new_data(df_p, available_elements, scaler)
+        X_scaled_n = preprocess_new_data(df_n, available_elements, scaler)
+        X_tensor_p = torch.FloatTensor(X_scaled_p).to(device)
+        X_tensor_n = torch.FloatTensor(X_scaled_n).to(device)
+        _, z_mean_p, _ = vae(X_tensor_p)
+        _, z_mean_n, _ = vae(X_tensor_n)
+        bias_vector = (z_mean_p - z_mean_n).cpu().numpy()
+        bias_norm = np.linalg.norm(bias_vector)
+        if bias_norm > 0:
+            bias_vector = bias_vector / bias_norm
+        else:
+            bias_vector = np.ones(vae.latent_dim) / np.sqrt(vae.latent_dim)
+        bias_magnitude = 0.5 * np.mean(z_mean_std)
+        return z_mean_avg, z_mean_std, bias_vector, bias_magnitude
+    except Exception as e:
+        logger.warning(f"Using fallback statistics due to error: {e}")
+        fallback_z_mean_avg = np.array([-0.0003, -0.0000, 0.0004, 0.0003, 0.0003, -0.0006, 0.0009, -0.0001])
+        fallback_z_mean_std = np.array([0.0003, 0.0007, 0.0003, 0.0005, 0.0005, 0.0010, 0.0011, 0.0003])
+        fallback_bias_vector = np.ones(8) / np.sqrt(8)
+        fallback_bias_magnitude = 0.5 * np.mean(fallback_z_mean_std)
+        return fallback_z_mean_avg, fallback_z_mean_std, fallback_bias_vector, fallback_bias_magnitude
 
-def plot_training_history_plotly(history_df, title, train_color='#1f77b4', val_color='#ff7f0e', linewidth=3, label_fontsize=12, tick_fontsize=10, axis_linewidth=2):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['loss'], name='Training Loss', line=dict(width=linewidth, color=train_color), mode='lines+markers', marker=dict(size=6)))
-    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['val_loss'], name='Validation Loss', line=dict(width=linewidth, color=val_color), mode='lines+markers', marker=dict(size=6)))
-    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['mse'], name='Training MSE', line=dict(width=linewidth, dash='dash', color=train_color), mode='lines+markers', marker=dict(size=6)))
-    fig.add_trace(go.Scatter(x=history_df.index, y=history_df['val_mse'], name='Validation MSE', line=dict(width=linewidth, dash='dash', color=val_color), mode='lines+markers', marker=dict(size=6)))
-    fig.update_layout(
-        title=dict(text=f'{title} Training Metrics', x=0.5, xanchor='center', font=dict(size=label_fontsize + 4, family='Arial')),
-        xaxis_title='Epoch', yaxis_title='Value',
-        xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=axis_linewidth, linecolor='black', tickfont=dict(size=tick_fontsize)),
-        yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=axis_linewidth, linecolor='black', tickfont=dict(size=tick_fontsize)),
-        plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=label_fontsize),
-        legend=dict(x=1.05, y=1, font=dict(size=label_fontsize - 2), bordercolor='black', borderwidth=1),
-        margin=dict(l=50, r=50, t=80, b=50)
-    )
-    return fig
+# Predict material type probabilities
+@st.cache_resource
+def predict_material_type_probs(_vae, _classifier, _scaler, elements, temperature, available_elements, steps=30):
+    p_type_counts = 0
+    n_type_counts = 0
+    probs_list = []
+    try:
+        _vae.eval()
+        _classifier.eval()
+        with torch.no_grad():
+            for a in np.linspace(0, 1, steps):
+                for b in np.linspace(0, 1 - a, steps):
+                    c = 1 - a - b
+                    if c >= 0:
+                        comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
+                        df = featurize_composition(comp_dict, available_elements, temperature)
+                        X_scaled = preprocess_new_data(df, available_elements, _scaler)
+                        X_tensor = torch.FloatTensor(X_scaled).to(device)
+                        _, z_mean, _ = _vae(X_tensor)
+                        probs = _classifier(z_mean)
+                        probs = probs.cpu().numpy()[0]  # [p-type, n-type, neutral]
+                        probs_list.append(probs)
+                        seebeck, _ = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, regressor, y_scaler)
+                        if seebeck is not None:
+                            if seebeck > 10:
+                                p_type_counts += 1
+                            elif seebeck < -10:
+                                n_type_counts += 1
+        probs_array = np.array(probs_list)
+        avg_probs = np.mean(probs_array, axis=0) if probs_array.size > 0 else np.array([0.33, 0.33, 0.34])
+        return p_type_counts, n_type_counts, avg_probs
+    except Exception as e:
+        logger.warning(f"Material type prediction failed: {e}")
+        return 0, 0, np.array([0.33, 0.33, 0.34])
 
-def plot_latent_box(z_train, box_linewidth=1, label_fontsize=12, axis_linewidth=2):
-    fig = go.Figure()
-    for i in range(z_train.shape[1]):
-        fig.add_trace(go.Box(y=z_train[:, i], name=f'Latent Dim {i+1}', boxmean=True, line=dict(width=box_linewidth), marker=dict(size=6)))
-    fig.update_layout(
-        title=dict(text='Distribution of Latent Dimensions', x=0.5, xanchor='center', font=dict(size=label_fontsize + 4, family='Arial')),
-        xaxis_title='Latent Dimensions', yaxis_title='Value',
-        xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=axis_linewidth, linecolor='black', tickfont=dict(size=label_fontsize)),
-        yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=axis_linewidth, linecolor='black', tickfont=dict(size=label_fontsize)),
-        plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=label_fontsize),
-        margin=dict(l=50, r=50, t=80, b=50)
-    )
-    return fig
+# Predict Seebeck coefficient
+def predict_seebeck(composition_dict, temperature, available_elements, scaler, vae, regressor, y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
+    try:
+        df = featurize_composition(composition_dict, available_elements, temperature)
+        X_scaled = preprocess_new_data(df, available_elements, scaler)
+        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        vae.eval()
+        regressor.eval()
+        with torch.no_grad():
+            _, z_mean, _ = vae(X_tensor)
+            z_mean_original = z_mean.clone()
+            y_scaled_pred_unbiased = regressor(z_mean_original)
+            y_pred_unbiased = y_scaler.inverse_transform(y_scaled_pred_unbiased.cpu().numpy().reshape(-1, 1)).ravel()
+            y_pred_unbiased = np.clip(y_pred_unbiased, -300, 300)
+            if sign_bias is not None and bias_vector is not None:
+                bias_vector = torch.FloatTensor(bias_vector).to(device) * bias_magnitude
+                if sign_bias == 'p-type':
+                    z_mean = z_mean + bias_vector
+                elif sign_bias == 'n-type':
+                    z_mean = z_mean - bias_vector
+                y_scaled_pred = regressor(z_mean)
+                y_pred = y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
+                y_pred = np.clip(y_pred, -300, 300)
+                if sign_bias == 'n-type' and y_pred[0] > 0:
+                    y_pred = -y_pred
+                if abs(y_pred[0]) > 0:
+                    y_pred = y_pred * (abs(y_pred_unbiased[0]) / abs(y_pred[0]))
+            else:
+                y_pred = y_pred_unbiased
+            return y_pred[0], y_pred_unbiased[0], z_mean.cpu().numpy()
+    except Exception as e:
+        logger.error(f"Prediction failed: {e}")
+        return None, None, None
 
-def plot_periodic_table(available_elements, element_color_map, fontsize=12):
-    periodic_table_positions = {
-        'Li': (3, 1), 'Na': (4, 1), 'K': (5, 1), 'Rb': (6, 1), 'Cs': (7, 1),
-        'Be': (3, 2), 'Mg': (4, 2), 'Ca': (5, 2), 'Sr': (6, 2), 'Ba': (7, 2),
-        'Sc': (5, 3), 'Y': (6, 3),
-        'Ti': (5, 4), 'Zr': (6, 4), 'Hf': (7, 4),
-        'V': (5, 5), 'Nb': (6, 5), 'Ta': (7, 5),
-        'Cr': (5, 6), 'Mo': (6, 6),
-        'Mn': (5, 7),
-        'Fe': (5, 8), 'Co': (5, 9), 'Ni': (5, 10), 'Cu': (5, 11), 'Zn': (5, 12),
-        'B': (3, 13), 'Al': (4, 13), 'Ga': (5, 13), 'In': (6, 13), 'Tl': (7, 13),
-        'C': (3, 14), 'Si': (4, 14), 'Ge': (5, 14), 'Sn': (6, 14), 'Pb': (7, 14),
-        'N': (3, 15), 'P': (4, 15), 'As': (5, 15), 'Sb': (6, 15), 'Bi': (7, 15),
-        'O': (3, 16), 'S': (4, 16), 'Se': (5, 16), 'Te': (6, 16),
-        'F': (3, 17), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17),
-        'Au': (7, 11), 'Ag': (6, 11), 'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8),
-        'La': (8, 3), 'Ce': (8, 4), 'Pr': (8, 5), 'Nd': (8, 6), 'Sm': (8, 7), 'Eu': (8, 8),
-        'Gd': (8, 9), 'Tb': (8, 10), 'Dy': (8, 11), 'Ho': (8, 12), 'Er': (8, 13), 'Tm': (8, 14), 'Yb': (8, 15), 'Lu': (8, 16)
-    }
-    fig = go.Figure()
-    for element in available_elements:
-        if element in periodic_table_positions:
-            row, col = periodic_table_positions[element]
-            en = electronegativity.get(element, 1.0)
-            tw = thermoelectric_weights.get(element, 1.0)
-            fig.add_trace(go.Scatter(
-                x=[col], y=[-row],
-                mode='markers+text',
-                text=[element],
-                textposition='middle center',
-                textfont=dict(size=fontsize + 2, family='Arial'),
-                marker=dict(size=40, color=element_color_map.get(element, '#D3D3D3'), line=dict(width=2, color='black')),
-                hoverinfo='text',
-                hovertext=[f"Element: {element}<br>Electronegativity: {en:.2f}<br>Thermoelectric Weight: {tw:.2f}"],
-                customdata=[element],
-                name=element,
-                showlegend=False
-            ))
-    fig.update_layout(
-        title=dict(text='Periodic Table Legend (Present Elements)', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
-        xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        yaxis=dict(range=[-9, -2], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        plot_bgcolor='white', paper_bgcolor='white',
-        width=900, height=450,
-        margin=dict(l=20, r=20, t=50, b=20)
-    )
-    return fig
-
-def plot_full_periodic_table(all_elements, available_elements, element_color_map, selected_element=None, fontsize=12):
+# Plot periodic table
+def plot_periodic_table(available_elements, selected_elements, element_color_map, fontsize=14):
     periodic_table_positions = {
         'H': (1, 1), 'He': (1, 18),
         'Li': (2, 1), 'Be': (2, 2), 'B': (2, 13), 'C': (2, 14), 'N': (2, 15), 'O': (2, 16), 'F': (2, 17), 'Ne': (2, 18),
@@ -343,25 +285,23 @@ def plot_full_periodic_table(all_elements, available_elements, element_color_map
     for element in all_elements:
         if element in periodic_table_positions:
             row, col = periodic_table_positions[element]
-            en = electronegativity.get(element, 1.0)
-            tw = thermoelectric_weights.get(element, 1.0)
             color = element_color_map.get(element, '#D3D3D3') if element in available_elements else '#D3D3D3'
-            line_width = 4 if element == selected_element else 2
+            opacity = 1.0 if element in selected_elements else (0.7 if element in available_elements else 0.3)
+            line_width = 4 if element in selected_elements else 2
             fig.add_trace(go.Scatter(
                 x=[col], y=[-row],
                 mode='markers+text',
                 text=[element],
                 textposition='middle center',
-                textfont=dict(size=fontsize + 2, family='Arial'),
-                marker=dict(size=40, color=color, line=dict(width=line_width, color='black')),
+                textfont=dict(size=fontsize, family='Arial'),
+                marker=dict(size=40, color=color, opacity=opacity, line=dict(width=line_width, color='black')),
                 hoverinfo='text',
-                hovertext=[f"Element: {element}<br>Electronegativity: {en:.2f}<br>Thermoelectric Weight: {tw:.2f}"],
-                customdata=[element],
+                hovertext=[f"Element: {element}<br>Electronegativity: {electronegativity.get(element, 1.0):.2f}<br>Thermoelectric Weight: {thermoelectric_weights.get(element, 1.0):.2f}"],
                 name=element,
                 showlegend=False
             ))
     fig.update_layout(
-        title=dict(text='Periodic Table Legend (All Elements)', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
+        title=dict(text="Periodic Table: Full (Unavailable in Gray, Selected with Bold Outline)", x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
         xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
         yaxis=dict(range=[-8, 0], showgrid=False, zeroline=False, showticklabels=False, title=''),
         plot_bgcolor='white', paper_bgcolor='white',
@@ -370,27 +310,122 @@ def plot_full_periodic_table(all_elements, available_elements, element_color_map
     )
     return fig
 
-def csv_to_sqlite(csv_path, db_path):
+# Plot material type histogram
+def plot_material_type_histogram(p_type_counts, n_type_counts, font_size):
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=['p-type', 'n-type'],
+        y=[p_type_counts, n_type_counts],
+        marker=dict(color=['#1f77b4', '#ff7f0e']),
+        text=[p_type_counts, n_type_counts],
+        textposition='auto'
+    ))
+    fig.update_layout(
+        title=dict(text='Material Type Distribution', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+        xaxis_title='Material Type',
+        yaxis_title='Count',
+        xaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        yaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    return fig
+
+# Plot probability distribution
+def plot_probability_distribution(probs, font_size):
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=['p-type', 'n-type', 'neutral'],
+        y=probs,
+        marker=dict(color=['#1f77b4', '#ff7f0e', '#2ca02c']),
+        text=[f'{p:.2%}' for p in probs],
+        textposition='auto'
+    ))
+    fig.update_layout(
+        title=dict(text='Attention-Based Material Type Probabilities', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+        xaxis_title='Material Type',
+        yaxis_title='Probability',
+        xaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        yaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size)), range=[0, 1]),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    return fig
+
+# Plot element correlation network
+def plot_element_correlation_network(elements, available_elements, scaler, vae, font_size):
+    G = nx.Graph()
+    for element in elements:
+        G.add_node(element)
+    correlation_matrix = np.zeros((len(elements), len(elements)))
     try:
-        df = pd.read_csv(csv_path)
-        conn = sqlite3.connect(db_path)
-        df.to_sql('thermoelectric_materials', conn, if_exists='replace', index=False)
-        history_df = pd.DataFrame({
-            'loss': [0.1, 0.09, 0.08], 'val_loss': [0.12, 0.11, 0.10],
-            'mse': [0.05, 0.04, 0.03], 'val_mse': [0.06, 0.05, 0.04]
-        })
-        history_df.to_sql('vae_training_history', conn, if_exists='replace', index=False)
-        history_df.to_sql('regressor_training_history', conn, if_exists='replace', index=False)
-        conn.close()
-        st.success(f"Successfully converted {csv_path} to {db_path}")
+        compositions = []
+        for a in np.linspace(0, 1, 10):
+            for b in np.linspace(0, 1 - a, 10):
+                c = 1 - a - b
+                if c >= 0:
+                    comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
+                    compositions.append(comp_dict)
+        feature_vectors = []
+        for comp_dict in compositions:
+            df = featurize_composition(comp_dict, available_elements, 300)  # Fixed temperature for consistency
+            X_scaled = preprocess_new_data(df, available_elements, scaler)
+            feature_vectors.append(X_scaled[0, :-1])  # Exclude temperature
+        feature_matrix = np.array(feature_vectors)
+        for i, j in combinations(range(len(elements)), 2):
+            corr = np.corrcoef(feature_matrix[:, elements.index(elements[i])], feature_matrix[:, elements.index(elements[j])])[0, 1]
+            correlation_matrix[i, j] = correlation_matrix[j, i] = corr
+            if abs(corr) > 0.5:  # Threshold for visualization
+                G.add_edge(elements[i], elements[j], weight=abs(corr))
+        pos = nx.spring_layout(G)
+        edge_x = []
+        edge_y = []
+        for edge in G.edges():
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=2, color='gray'),
+            hoverinfo='none',
+            mode='lines'
+        )
+        node_x = [pos[node][0] for node in G.nodes()]
+        node_y = [pos[node][1] for node in G.nodes()]
+        node_trace = go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers+text',
+            text=list(G.nodes()),
+            textposition='top center',
+            textfont=dict(size=font_size, family='Arial'),
+            marker=dict(size=20, color=[default_element_color_map[node] for node in G.nodes()], line=dict(width=2, color='black')),
+            hoverinfo='text',
+            hovertext=[f"Element: {node}<br>Degree: {G.degree[node]}" for node in G.nodes()]
+        )
+        fig = go.Figure(data=[edge_trace, node_trace])
+        fig.update_layout(
+            title=dict(text='Element Correlation Network', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+            showlegend=False,
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=50, r=50, t=80, b=50)
+        )
+        return fig, correlation_matrix
     except Exception as e:
-        st.error(f"Error converting CSV to SQLite: {e}")
+        logger.warning(f"Failed to compute correlation network: {e}")
+        return None, correlation_matrix
 
 # Load models and scalers
 script_dir = os.path.dirname(os.path.abspath(__file__))
 try:
-    vae = AttentiveVAE().to(device)
+    vae = VAE().to(device)
     regressor = Regressor().to(device)
+    classifier = AttentionClassifier().to(device)  # New attention-based classifier
     vae.load_state_dict(torch.load(os.path.join(script_dir, 'vae_model.pt'), map_location=device))
     regressor.load_state_dict(torch.load(os.path.join(script_dir, 'regressor_model.pt'), map_location=device))
     scaler = joblib.load(os.path.join(script_dir, 'scaler.pkl'))
@@ -402,8 +437,8 @@ except RuntimeError as e:
     st.error(f"Error loading model: {e}")
     st.stop()
 
-# Warning about missing attention mechanism
-st.warning("The loaded VAE model does not include the self-attention mechanism due to a mismatch with the saved weights. For full functionality, retrain the model with the updated architecture.")
+# Note: Classifier is initialized with random weights
+st.warning("The attention-based classifier is initialized with random weights. For accurate material type predictions, train the classifier with labeled data.")
 
 # Available elements
 available_elements = [
@@ -439,49 +474,27 @@ for i in range(num_additional_colors):
 default_color_list = base_color_list + additional_colors
 default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_elements)]))
 
-# Color map options
-color_map_options = [
-    'viridis', 'plasma', 'inferno', 'magma', 'cividis', 'turbo', 'jet', 'rainbow',
-    'bluered', 'electric', 'hot', 'cool', 'spring', 'summer', 'autumn', 'winter',
-    'greys', 'greens', 'blues', 'reds', 'purples', 'oranges',
-    'ylorrd', 'ylorbr', 'ylgnbu', 'ylgn', 'rdpu', 'purd', 'pubugn', 'pubu',
-    'orrd', 'gnbu', 'bupu', 'bugn', 'pinkyl', 'coolwarm', 'spectral',
-    'rdylbu', 'rdylgn', 'rdbu', 'piyg', 'prgn', 'brbg', 'puor', 'rdgy',
-    'viridis_r', 'plasma_r', 'inferno_r', 'magma_r', 'cividis_r', 'turbo_r',
-    'jet_r', 'rainbow_r', 'greys_r', 'blues_r', 'reds_r'
-]
-
-def get_dominant_element(formula):
-    try:
-        comp = Composition(formula)
-        if not comp.valid:
-            return 'Unknown', {'Unknown': 0.0}
-        comp_dict = comp.get_el_amt_dict()
-        scores = {
-            el: comp_dict[el] * electronegativity.get(el, 1.0) * thermoelectric_weights.get(el, 1.0)
-            for el in comp_dict
-        }
-        dominant = max(scores, key=scores.get) if scores else 'Unknown'
-        return dominant, scores
-    except:
-        return 'Unknown', {'Unknown': 0.0}
-
 # Streamlit UI
-st.title("Thermoelectric Material Analysis and Seebeck Coefficient Prediction")
+st.title("Thermoelectric Material Type and Seebeck Coefficient Predictor")
 st.markdown("""
-This application visualizes thermoelectric material data and predicts Seebeck coefficients using a trained Variational Autoencoder (VAE) and Regressor. Upload a featurized CSV to convert to the required SQLite database, then explore latent space visualizations, training history, and predict Seebeck coefficients for new compositions. Hover over points in the scatter plots to see scores for all elements in the formula and the temperature.
-**Date and Time**: 06:33 AM CEST, Tuesday, August 19, 2025
+This application predicts the Seebeck coefficient and material type (p-type, n-type, neutral) for a ternary composition using a Variational Autoencoder (VAE) and an attention-based classifier. Select up to three elements, input their proportions, and view statistical probabilities for material types based on an attention model. Confirm or adjust the material type before predicting the Seebeck coefficient.
+
+**Date and Time**: 06:47 AM CEST, Tuesday, August 19, 2025
 """)
 
-# CSV to SQLite converter
-st.header("Convert Featurized CSV to SQLite")
-csv_file = st.file_uploader("Upload featurized CSV (e.g., featurized_thermoelectric_data_updated.csv)", type=["csv"])
-if csv_file:
-    csv_path = os.path.join(script_dir, 'featurized_thermoelectric_data_updated.csv')
-    with open(csv_path, 'wb') as f:
-        f.write(csv_file.read())
-    db_path = os.path.join(script_dir, 'thermoelectric_data.db')
-    csv_to_sqlite(csv_path, db_path)
+# Sidebar for periodic table customization
+st.sidebar.header("Periodic Table Customization")
+font_size = st.sidebar.slider("Font Size (Periodic Table)", 8, 20, 14)
+
+# Periodic Table Visualization
+st.header("Periodic Table Reference")
+st.write("The periodic table shows all elements, with unavailable elements in gray and selected elements with bold outlines.")
+fig_periodic = plot_periodic_table(available_elements, st.session_state.get('selected_elements', []), default_element_color_map, fontsize=font_size)
+st.plotly_chart(fig_periodic, use_container_width=True)
+try:
+    fig_periodic.write_html(os.path.join(script_dir, 'periodic_table.html'))
+except Exception as e:
+    st.warning(f"Failed to save periodic table: {e}")
 
 # Database connection
 db_path = os.path.join(script_dir, 'thermoelectric_data.db')
@@ -491,392 +504,173 @@ except sqlite3.Error as e:
     st.error(f"Error connecting to database: {e}")
     st.stop()
 
-# Tabs
-tab1, tab2 = st.tabs(["Visualizations", "Seebeck Prediction"])
+# Load data for histogram
+try:
+    df = pd.read_sql("SELECT * FROM thermoelectric_materials;", conn)
+except Exception as e:
+    st.error(f"Error loading data from database: {e}")
+    conn.close()
+    st.stop()
 
-with tab1:
-    st.header("Data Visualizations")
+# Element selection
+st.header("Select Elements")
+st.session_state.selected_elements = st.multiselect(
+    "Select up to three elements",
+    options=available_elements,
+    default=st.session_state.get('selected_elements', []),
+    max_selections=3,
+    key='element_selector'
+)
+
+# Update proportions and compositions
+st.session_state.proportions = st.session_state.get('proportions', {})
+st.session_state.compositions = st.session_state.get('compositions', {})
+for element in st.session_state.selected_elements:
+    if element not in st.session_state.proportions:
+        st.session_state.proportions[element] = 0.0
+    if element not in st.session_state.compositions:
+        st.session_state.compositions[element] = 0.0
+st.session_state.proportions = {k: v for k, v in st.session_state.proportions.items() if k in st.session_state.selected_elements}
+st.session_state.compositions = {k: v for k, v in st.session_state.compositions.items() if k in st.session_state.selected_elements}
+
+# Proportion and composition input
+st.header("Input Proportions and View Normalized Compositions")
+if st.session_state.selected_elements:
+    st.write(f"Selected Elements: {', '.join(st.session_state.selected_elements)}")
+    st.subheader("Proportions")
+    cols = st.columns(len(st.session_state.selected_elements))
+    for idx, element in enumerate(st.session_state.selected_elements):
+        with cols[idx]:
+            st.session_state.proportions[element] = st.number_input(
+                f"Proportion for {element}", min_value=0.0, value=st.session_state.proportions.get(element, 0.0), step=0.1, key=f"prop_{element}"
+            )
     
-    # Load data
-    try:
-        df = pd.read_sql("SELECT * FROM thermoelectric_materials;", conn)
-        vae_history_df = pd.read_sql("SELECT * FROM vae_training_history;", conn)
-        regressor_history_df = pd.read_sql("SELECT * FROM regressor_training_history;", conn)
-    except Exception as e:
-        st.error(f"Error loading data from database: {e}")
-        conn.close()
-        st.stop()
-
-    # Validate columns
-    required_columns = ['Formula', 'seebeck_coefficient(μV/K)'] + available_elements + ['temperature(K)']
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    if missing_columns:
-        st.error(f"Missing required columns in database: {missing_columns}")
-        conn.close()
-        st.stop()
-
-    # Sidebar settings
-    st.sidebar.header("Visualization Settings")
-    marker_size = st.sidebar.slider("Scatter Marker Size", 5, 100, 50, 5)
-    marker_alpha = st.sidebar.slider("Scatter Marker Transparency", 0.1, 1.0, 0.6, 0.1)
-    color_scale = st.sidebar.selectbox("Color Scale for Seebeck Plot", color_map_options, index=0)
-    scatter_label_fontsize = st.sidebar.slider("Scatter Label Font Size", 8, 16, 12, 1)
-    scatter_axis_linewidth = st.sidebar.slider("Scatter Axis Line Width", 0.5, 5.0, 2.0, 0.5)
-    history_linewidth = st.sidebar.slider("Training History Line Width", 1.0, 5.0, 2.5, 0.5)
-    history_label_fontsize = st.sidebar.slider("Training History Label Font Size", 8, 16, 12, 1)
-    history_tick_fontsize = st.sidebar.slider("Training History Tick Font Size", 6, 14, 10, 1)
-    history_axis_linewidth = st.sidebar.slider("Training History Axis Line Width", 0.5, 5.0, 1.5, 0.5)
-    color_options = [
-        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2',
-        '#7f7f7f', '#bcbd22', '#17becf', '#000000', '#FFD700', '#00FF00', '#FF1493',
-        '#00CED1', '#FF4500', '#6A5ACD'
-    ]
-    train_color = st.sidebar.selectbox("Training Line Color", color_options, index=0)
-    val_color = st.sidebar.selectbox("Validation Line Color", color_options, index=1)
-    max_samples = st.sidebar.slider("Number of Samples in Radar Plot", 1, 10, 5, 1)
-    radar_alpha = st.sidebar.slider("Radar Fill Transparency", 0.1, 0.5, 0.3, 0.05)
-    radar_linewidth = st.sidebar.slider("Radar Line Width", 1.0, 5.0, 2.0, 0.5)
-    radar_fontsize = st.sidebar.slider("Radar Font Size", 8, 16, 12, 1)
-    periodic_table_fontsize = st.sidebar.slider("Periodic Table Font Size", 8, 100, 14, 1)
-    radar_legend_pos = st.sidebar.selectbox("Radar Legend Position", ['upper right', 'upper left', 'lower right', 'lower left'], index=0)
-    radar_axis_linewidth = st.sidebar.slider("Radar Axis Line Width", 0.5, 5.0, 1.5, 0.5)
-    box_linewidth = st.sidebar.slider("Box Plot Line Width", 0.5, 5.0, 1.0, 0.5)
-    box_label_fontsize = st.sidebar.slider("Box Plot Label Font Size", 8, 16, 12, 1)
-    box_axis_linewidth = st.sidebar.slider("Box Plot Axis Line Width", 0.5, 5.0, 2.0, 0.5)
-    parallel_color_scale = st.sidebar.selectbox("Color Scale for Parallel Coordinates", color_map_options, index=0)
-    parallel_label_fontsize = st.sidebar.slider("Parallel Coordinates Label Font Size", 8, 16, 12, 1)
-
-    # Latent Space Visualizations
-    if not df.empty:
-        st.subheader("Latent Space Visualizations")
-        X_scaled, y_scaled, output_feature_cleaned, valid_indices = preprocess_data(df, scaler, y_scaler, available_elements)
-        X_tensor = torch.FloatTensor(X_scaled).to(device)
-        vae.eval()
-        with torch.no_grad():
-            _, z_mean, _ = vae(X_tensor)
-        z_train = z_mean.cpu().numpy()
-        z_scaler = MinMaxScaler()
-        z_normalized = z_scaler.fit_transform(z_train)
-        pca = PCA(n_components=2)
-        z_2d_pca = pca.fit_transform(z_train)
-        tsne = TSNE(n_components=2, perplexity=30, learning_rate='auto', init='pca', random_state=42)
-        z_2d_tsne = tsne.fit_transform(z_train)
-        umap_reducer = umap.UMAP(n_components=2, random_state=42)
-        z_2d_umap = umap_reducer.fit_transform(z_train)
-
-        # Compute dominant elements
-        dominant_elements = []
-        element_scores = []
-        temperatures = df['temperature(K)'].iloc[valid_indices].values
-        for formula in df['Formula']:
-            dom, scores = get_dominant_element(formula)
-            dominant_elements.append(dom)
-            scores_str = '<br>'.join([f"{el}: {score:.2f}" for el, score in scores.items()])
-            element_scores.append(scores_str)
-        dominant_elements = np.array(dominant_elements)
-        element_scores = np.array(element_scores)
-        dominant_elements_filtered = dominant_elements[valid_indices]
-        element_scores_filtered = element_scores[valid_indices]
-        formulas_filtered = df['Formula'].iloc[valid_indices].values
-        temperatures_filtered = temperatures
-
-        st.sidebar.header("Filter by Dominant Element")
-        unique_elements = np.unique(dominant_elements_filtered)
-        selected_element = st.sidebar.selectbox("Select Dominant Element", ['All'] + list(unique_elements))
-        if selected_element != 'All':
-            mask = dominant_elements_filtered == selected_element
-            z_2d_pca_filtered = z_2d_pca[mask]
-            z_2d_tsne_filtered = z_2d_tsne[mask]
-            z_2d_umap_filtered = z_2d_umap[mask]
-            output_feature_cleaned_filtered = output_feature_cleaned[mask]
-            dominant_elements_filtered_filtered = dominant_elements_filtered[mask]
-            element_scores_filtered_filtered = element_scores_filtered[mask]
-            formulas_filtered_filtered = formulas_filtered[mask]
-            temperatures_filtered_filtered = temperatures_filtered[mask]
+    if st.button("Normalize Proportions"):
+        total = sum(st.session_state.proportions.values())
+        if total > 0:
+            for element in st.session_state.proportions:
+                st.session_state.compositions[element] = st.session_state.proportions[element] / total
+            st.rerun()
         else:
-            z_2d_pca_filtered = z_2d_pca
-            z_2d_tsne_filtered = z_2d_tsne
-            z_2d_umap_filtered = z_2d_umap
-            output_feature_cleaned_filtered = output_feature_cleaned
-            dominant_elements_filtered_filtered = dominant_elements_filtered
-            element_scores_filtered_filtered = element_scores_filtered
-            formulas_filtered_filtered = formulas_filtered
-            temperatures_filtered_filtered = temperatures_filtered
-
-        st.write("#### Periodic Table Legend (Present Elements)")
-        st.write("Click an element or use the dropdown to filter scatter plots.")
-        fig_periodic = plot_periodic_table(available_elements, default_element_color_map, fontsize=periodic_table_fontsize)
-        st.plotly_chart(fig_periodic, use_container_width=True)
-        fig_periodic.write_html(os.path.join(script_dir, 'periodic_table_present.html'))
-
-        st.write("#### Periodic Table Legend (All Elements)")
-        st.write("Elements not in the database are shown in gray. Selected elements have bold outlines.")
-        fig_full_periodic = plot_full_periodic_table(all_elements, available_elements, default_element_color_map, selected_element=selected_element, fontsize=periodic_table_fontsize)
-        st.plotly_chart(fig_full_periodic, use_container_width=True)
-        fig_full_periodic.write_html(os.path.join(script_dir, 'periodic_table_all.html'))
-
-        st.write("#### Dominant Element Distribution")
-        element_counts = pd.Series(dominant_elements_filtered).value_counts()
-        fig_bar = px.bar(x=element_counts.index, y=element_counts.values, labels={'x': 'Dominant Element', 'y': 'Count'},
-                         title='Distribution of Dominant Elements')
-        fig_bar.update_traces(marker_color=[default_element_color_map.get(elem, '#D3D3D3') for elem in element_counts.index])
-        fig_bar.update_layout(
-            title=dict(text='Distribution of Dominant Elements', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
-            xaxis=dict(tickfont=dict(size=scatter_label_fontsize), showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black'),
-            yaxis=dict(tickfont=dict(size=scatter_label_fontsize), showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black'),
-            plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize)
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
-        fig_bar.write_html(os.path.join(script_dir, 'dominant_element_distribution.html'))
-
-        st.write("#### Latent Dimensions Box Plot")
-        fig_box = plot_latent_box(z_train, box_linewidth=box_linewidth, label_fontsize=box_label_fontsize, axis_linewidth=box_axis_linewidth)
-        st.plotly_chart(fig_box, use_container_width=True)
-        fig_box.write_html(os.path.join(script_dir, 'latent_box_plotly.html'))
-
-        st.write("#### PCA Latent Space: Seebeck Coefficient")
-        fig_pca_seebeck = px.scatter(
-            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,
-            labels={'x': 'PC1', 'y': 'PC2', 'color': 'Seebeck Coefficient (μV/K)'},
-            title=f'PCA Latent Space: Seebeck Coefficient ({selected_element})',
-            hover_data={
-                'Formula': formulas_filtered_filtered,
-                'Dominant Element': dominant_elements_filtered_filtered,
-                'Seebeck (μV/K)': output_feature_cleaned_filtered,
-                'Element Scores': element_scores_filtered_filtered,
-                'Temperature (K)': temperatures_filtered_filtered
-            }
-        )
-        fig_pca_seebeck.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
-        fig_pca_seebeck.update_layout(
-            title=dict(text=f'PCA Latent Space: Seebeck Coefficient ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
-            xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        st.plotly_chart(fig_pca_seebeck, use_container_width=True)
-        fig_pca_seebeck.write_html(os.path.join(script_dir, 'latent_pca_seebeck_plotly.html'))
-
-        st.write("#### PCA Latent Space: Dominant Element")
-        fig_pca_elements = px.scatter(
-            x=z_2d_pca_filtered[:, 0], y=z_2d_pca_filtered[:, 1], color=dominant_elements_filtered_filtered,
-            color_discrete_map=default_element_color_map,
-            labels={'x': 'PC1', 'y': 'PC2', 'color': 'Dominant Element'},
-            title=f'PCA Latent Space: Dominant Element ({selected_element})',
-            hover_data={
-                'Formula': formulas_filtered_filtered,
-                'Seebeck (μV/K)': output_feature_cleaned_filtered,
-                'Element Scores': element_scores_filtered_filtered,
-                'Temperature (K)': temperatures_filtered_filtered
-            }
-        )
-        fig_pca_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
-        fig_pca_elements.update_layout(
-            title=dict(text=f'PCA Latent Space: Dominant Element ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
-            xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
-            legend=dict(x=1.05, y=1, font=dict(size=scatter_label_fontsize - 2), bordercolor='black', borderwidth=1),
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        st.plotly_chart(fig_pca_elements, use_container_width=True)
-        fig_pca_elements.write_html(os.path.join(script_dir, 'latent_pca_elements_plotly.html'))
-
-        st.write("#### t-SNE Latent Space: Seebeck Coefficient")
-        fig_tsne_seebeck = px.scatter(
-            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,
-            labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Seebeck Coefficient (μV/K)'},
-            title=f't-SNE Latent Space: Seebeck Coefficient ({selected_element})',
-            hover_data={
-                'Formula': formulas_filtered_filtered,
-                'Dominant Element': dominant_elements_filtered_filtered,
-                'Seebeck (μV/K)': output_feature_cleaned_filtered,
-                'Element Scores': element_scores_filtered_filtered,
-                'Temperature (K)': temperatures_filtered_filtered
-            }
-        )
-        fig_tsne_seebeck.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
-        fig_tsne_seebeck.update_layout(
-            title=dict(text=f't-SNE Latent Space: Seebeck Coefficient ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
-            xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        st.plotly_chart(fig_tsne_seebeck, use_container_width=True)
-        fig_tsne_seebeck.write_html(os.path.join(script_dir, 'latent_tsne_seebeck_plotly.html'))
-
-        st.write("#### t-SNE Latent Space: Dominant Element")
-        fig_tsne_elements = px.scatter(
-            x=z_2d_tsne_filtered[:, 0], y=z_2d_tsne_filtered[:, 1], color=dominant_elements_filtered_filtered,
-            color_discrete_map=default_element_color_map,
-            labels={'x': 't-SNE 1', 'y': 't-SNE 2', 'color': 'Dominant Element'},
-            title=f't-SNE Latent Space: Dominant Element ({selected_element})',
-            hover_data={
-                'Formula': formulas_filtered_filtered,
-                'Seebeck (μV/K)': output_feature_cleaned_filtered,
-                'Element Scores': element_scores_filtered_filtered,
-                'Temperature (K)': temperatures_filtered_filtered
-            }
-        )
-        fig_tsne_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
-        fig_tsne_elements.update_layout(
-            title=dict(text=f't-SNE Latent Space: Dominant Element ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
-            xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
-            legend=dict(x=1.05, y=1, font=dict(size=scatter_label_fontsize - 2), bordercolor='black', borderwidth=1),
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        st.plotly_chart(fig_tsne_elements, use_container_width=True)
-        fig_tsne_elements.write_html(os.path.join(script_dir, 'latent_tsne_elements_plotly.html'))
-
-        st.write("#### UMAP Latent Space: Seebeck Coefficient")
-        fig_umap_seebeck = px.scatter(
-            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=output_feature_cleaned_filtered, color_continuous_scale=color_scale,
-            labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Seebeck Coefficient (μV/K)'},
-            title=f'UMAP Latent Space: Seebeck Coefficient ({selected_element})',
-            hover_data={
-                'Formula': formulas_filtered_filtered,
-                'Dominant Element': dominant_elements_filtered_filtered,
-                'Seebeck (μV/K)': output_feature_cleaned_filtered,
-                'Element Scores': element_scores_filtered_filtered,
-                'Temperature (K)': temperatures_filtered_filtered
-            }
-        )
-        fig_umap_seebeck.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
-        fig_umap_seebeck.update_layout(
-            title=dict(text=f'UMAP Latent Space: Seebeck Coefficient ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
-            xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        st.plotly_chart(fig_umap_seebeck, use_container_width=True)
-        fig_umap_seebeck.write_html(os.path.join(script_dir, 'latent_umap_seebeck_plotly.html'))
-
-        st.write("#### UMAP Latent Space: Dominant Element")
-        fig_umap_elements = px.scatter(
-            x=z_2d_umap_filtered[:, 0], y=z_2d_umap_filtered[:, 1], color=dominant_elements_filtered_filtered,
-            color_discrete_map=default_element_color_map,
-            labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'color': 'Dominant Element'},
-            title=f'UMAP Latent Space: Dominant Element ({selected_element})',
-            hover_data={
-                'Formula': formulas_filtered_filtered,
-                'Seebeck (μV/K)': output_feature_cleaned_filtered,
-                'Element Scores': element_scores_filtered_filtered,
-                'Temperature (K)': temperatures_filtered_filtered
-            }
-        )
-        fig_umap_elements.update_traces(marker=dict(size=marker_size, opacity=marker_alpha))
-        fig_umap_elements.update_layout(
-            title=dict(text=f'UMAP Latent Space: Dominant Element ({selected_element})', x=0.5, xanchor='center', font=dict(size=scatter_label_fontsize + 4, family='Arial')),
-            xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)', zeroline=False, showline=True, linewidth=scatter_axis_linewidth, linecolor='black', tickfont=dict(size=scatter_label_fontsize)),
-            plot_bgcolor='white', paper_bgcolor='white', font=dict(family='Arial', size=scatter_label_fontsize),
-            legend=dict(x=1.05, y=1, font=dict(size=scatter_label_fontsize - 2), bordercolor='black', borderwidth=1),
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        st.plotly_chart(fig_umap_elements, use_container_width=True)
-        fig_umap_elements.write_html(os.path.join(script_dir, 'latent_umap_elements_plotly.html'))
-
-        st.write("#### 8D Latent Space Radar Plot")
-        sample_indices = np.random.choice(len(z_normalized), size=max_samples, replace=False)
-        radar_data = z_normalized[sample_indices]
-        radar_labels = [f"Sample {i+1} (Seebeck: {output_feature_cleaned[i]:.1f})" for i in sample_indices]
-        fig_radar = plot_radar(radar_data, radar_labels, "8D Latent Space Radar Plot", max_samples=max_samples,
-                               alpha=radar_alpha, linewidth=radar_linewidth, fontsize=radar_fontsize,
-                               legend_pos=radar_legend_pos, axis_linewidth=radar_axis_linewidth)
-        st.pyplot(fig_radar)
-        try:
-            plt.savefig(os.path.join(script_dir, 'latent_radar.pdf'), dpi=300, bbox_inches='tight', format='pdf')
-        except Exception as e:
-            st.warning(f"Error saving radar plot: {e}")
-        plt.close(fig_radar)
-
-        st.write("#### 8D Latent Space Parallel Coordinates")
-        parallel_df = pd.DataFrame(z_normalized, columns=[f'Latent Dim {i+1}' for i in range(8)])
-        parallel_df['Seebeck'] = output_feature_cleaned
-        fig_parallel = px.parallel_coordinates(
-            parallel_df, color='Seebeck', color_continuous_scale=parallel_color_scale,
-            labels={f'Latent Dim {i+1}': f'Latent Dim {i+1}' for i in range(8)},
-            title='8D Latent Space Parallel Coordinates'
-        )
-        fig_parallel.update_layout(
-            title=dict(text='8D Latent Space Parallel Coordinates', x=0.5, xanchor='center', font=dict(size=parallel_label_fontsize + 4, family='Arial')),
-            font=dict(family='Arial', size=parallel_label_fontsize),
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        st.plotly_chart(fig_parallel, use_container_width=True)
-        fig_parallel.write_html(os.path.join(script_dir, 'latent_parallel_plotly.html'))
-
-    # Training History Visualizations
-    st.subheader("Training History Visualizations")
-    if not vae_history_df.empty:
-        st.write("#### VAE Training History")
-        fig_vae = plot_training_history_matplotlib(vae_history_df, "VAE", os.path.join(script_dir, 'vae_history_matplotlib.pdf'),
-                                                  linewidth=history_linewidth, fontsize=history_label_fontsize,
-                                                  train_color=train_color, val_color=val_color,
-                                                  tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
-        st.pyplot(fig_vae)
-        try:
-            plt.savefig(os.path.join(script_dir, 'vae_history_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
-        except Exception as e:
-            st.warning(f"Error saving VAE history plot: {e}")
-        plt.close(fig_vae)
-        fig_vae_plotly = plot_training_history_plotly(vae_history_df, "VAE", train_color=train_color, val_color=val_color,
-                                                     linewidth=history_linewidth, label_fontsize=history_label_fontsize,
-                                                     tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
-        st.plotly_chart(fig_vae_plotly, use_container_width=True)
-        fig_vae_plotly.write_html(os.path.join(script_dir, 'vae_history_plotly.html'))
-
-    if not regressor_history_df.empty:
-        st.write("#### Regressor Training History")
-        fig_regressor = plot_training_history_matplotlib(regressor_history_df, "Regressor", os.path.join(script_dir, 'regressor_history_matplotlib.pdf'),
-                                                        linewidth=history_linewidth, fontsize=history_label_fontsize,
-                                                        train_color=train_color, val_color=val_color,
-                                                        tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
-        st.pyplot(fig_regressor)
-        try:
-            plt.savefig(os.path.join(script_dir, 'regressor_history_matplotlib.pdf'), dpi=300, bbox_inches='tight', format='pdf')
-        except Exception as e:
-            st.warning(f"Error saving regressor history plot: {e}")
-        plt.close(fig_regressor)
-        fig_regressor_plotly = plot_training_history_plotly(regressor_history_df, "Regressor", train_color=train_color, val_color=val_color,
-                                                           linewidth=history_linewidth, label_fontsize=history_label_fontsize,
-                                                           tick_fontsize=history_tick_fontsize, axis_linewidth=history_axis_linewidth)
-        st.plotly_chart(fig_regressor_plotly, use_container_width=True)
-        fig_regressor_plotly.write_html(os.path.join(script_dir, 'regressor_history_plotly.html'))
-
-    if not df.empty or not vae_history_df.empty or not regressor_history_df.empty:
-        st.success("Visualizations generated successfully!")
-    else:
-        st.warning("No data available in the database.")
-
-with tab2:
-    st.header("Seebeck Coefficient Prediction")
-    formula_input = st.text_input("Enter the chemical formula (e.g., Ni0.0Au1.0 or Mg2Si):")
-    temperature_input = st.number_input("Enter the temperature (K):", min_value=0, max_value=5000, value=300)
+            st.error("Please provide non-zero proportions for at least one element.")
     
-    if st.button("Predict Seebeck Coefficient"):
-        if formula_input:
+    st.subheader("Normalized Compositions")
+    cols = st.columns(len(st.session_state.selected_elements))
+    for idx, element in enumerate(st.session_state.selected_elements):
+        with cols[idx]:
+            st.number_input(
+                f"Composition for {element}", min_value=0.0, max_value=1.0,
+                value=st.session_state.compositions.get(element, 0.0), step=0.1, key=f"comp_{element}", disabled=True
+            )
+else:
+    st.write("Please select up to three elements from the dropdown.")
+
+# Temperature input
+st.session_state.temperature = st.number_input("Enter Temperature (K):", min_value=0, max_value=5000, value=st.session_state.get('temperature', 300), step=10)
+
+# Material type and Seebeck prediction
+st.header("Material Type and Seebeck Coefficient Prediction")
+if st.button("Analyze Material Type"):
+    if len(st.session_state.selected_elements) > 0:
+        elements, proportions, compositions = st.session_state.selected_elements.copy(), st.session_state.proportions.copy(), st.session_state.compositions.copy()
+        total = sum(proportions.values())
+        if total == 0:
+            st.error("Please provide non-zero proportions for at least one element.")
+        else:
+            # Complete to three elements
+            while len(elements) < 3:
+                remaining_elements = [e for e in available_elements if e in ['Ag', 'Bi', 'Te'] and e not in elements]
+                if not remaining_elements:
+                    remaining_elements = [e for e in available_elements if e not in elements]
+                if remaining_elements:
+                    random_element = np.random.choice(remaining_elements)
+                    elements.append(random_element)
+                    proportions[random_element] = 0.0
+                    compositions[random_element] = 0.0
+                else:
+                    st.error("Not enough available elements to complete the ternary composition.")
+                    st.stop()
+            
+            # Compute z_mean statistics and bias vector
+            z_mean_avg, z_mean_std, bias_vector, bias_magnitude = compute_z_mean_stats_and_bias(elements, st.session_state.temperature, available_elements, scaler, vae)
+            
+            # Predict material type probabilities
+            p_type_counts, n_type_counts, avg_probs = predict_material_type_probs(vae, classifier, scaler, elements, st.session_state.temperature, available_elements)
+            
+            # Plot material type histogram
+            st.subheader("Material Type Distribution")
+            fig_histogram = plot_material_type_histogram(p_type_counts, n_type_counts, font_size)
+            st.plotly_chart(fig_histogram, use_container_width=True)
             try:
-                new_data = pd.DataFrame({'Formula': [formula_input], 'temperature(K)': [temperature_input]})
-                X_scaled = preprocess_new_data(new_data, available_elements, scaler)
-                X_tensor = torch.FloatTensor(X_scaled).to(device)
-                vae.eval()
-                regressor.eval()
-                with torch.no_grad():
-                    _, z_mean, _ = vae(X_tensor)
-                    y_scaled_pred = regressor(z_mean)
-                    y_pred = y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
-                st.write(f"Predicted Seebeck Coefficient (Scaled): {y_scaled_pred[0].item():.2f}")
-                st.write(f"Predicted Seebeck Coefficient (Absolute): {y_pred[0]:.2f} μV/K")
+                fig_histogram.write_html(os.path.join(script_dir, 'material_type_histogram.html'))
             except Exception as e:
-                st.error(f"Error during prediction: {e}")
-        else:
-            st.error("Please enter a valid chemical formula.")
+                st.warning(f"Failed to save histogram: {e}")
+            
+            # Plot probability distribution
+            st.subheader("Attention-Based Material Type Probabilities")
+            st.write(f"p-type: {avg_probs[0]:.2%}, n-type: {avg_probs[1]:.2%}, neutral: {avg_probs[2]:.2%}")
+            fig_probs = plot_probability_distribution(avg_probs, font_size)
+            st.plotly_chart(fig_probs, use_container_width=True)
+            try:
+                fig_probs.write_html(os.path.join(script_dir, 'material_type_probs.html'))
+            except Exception as e:
+                st.warning(f"Failed to save probability plot: {e}")
+            
+            # Plot element correlation network
+            st.subheader("Element Correlation Network")
+            fig_network, correlation_matrix = plot_element_correlation_network(elements, available_elements, scaler, vae, font_size)
+            if fig_network:
+                st.plotly_chart(fig_network, use_container_width=True)
+                try:
+                    fig_network.write_html(os.path.join(script_dir, 'element_correlation_network.html'))
+                except Exception as e:
+                    st.warning(f"Failed to save network plot: {e}")
+            st.write("Correlation Matrix:")
+            st.write(pd.DataFrame(correlation_matrix, index=elements, columns=elements).round(2))
+            
+            # User composition
+            user_composition = [compositions.get(elements[i], 0) for i in range(3)]
+            user_composition_dict = {elements[i]: user_composition[i] for i in range(3)}
+            
+            # Predict material type for user composition
+            df = featurize_composition(user_composition_dict, available_elements, st.session_state.temperature)
+            X_scaled = preprocess_new_data(df, available_elements, scaler)
+            X_tensor = torch.FloatTensor(X_scaled).to(device)
+            vae.eval()
+            classifier.eval()
+            with torch.no_grad():
+                _, z_mean, _ = vae(X_tensor)
+                user_probs = classifier(z_mean).cpu().numpy()[0]
+            st.subheader("User Composition Material Type Probabilities")
+            st.write(f"p-type: {user_probs[0]:.2%}, n-type: {user_probs[1]:.2%}, neutral: {user_probs[2]:.2%}")
+            suggested_type = ['p-type', 'n-type', 'neutral'][np.argmax(user_probs)]
+            st.write(f"Suggested Material Type: {suggested_type}")
+            
+            # Material type selection
+            st.session_state.sign_bias = st.selectbox(
+                "Confirm or Select Material Type",
+                options=['p-type', 'n-type', 'neutral'],
+                index=['p-type', 'n-type', 'neutral'].index(suggested_type),
+                key='sign_bias_selector'
+            )
+            
+            # Predict Seebeck coefficient
+            if st.button("Predict Seebeck Coefficient"):
+                sign_bias = st.session_state.sign_bias if st.session_state.sign_bias != 'neutral' else None
+                seebeck, seebeck_unbiased, z_mean = predict_seebeck(
+                    user_composition_dict, st.session_state.temperature, available_elements, scaler, vae, regressor, y_scaler,
+                    sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude
+                )
+                if seebeck is None:
+                    st.error("Failed to predict Seebeck coefficient. Please check inputs or model files.")
+                else:
+                    st.subheader("Seebeck Coefficient Prediction")
+                    st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
+                    st.write(f"**Temperature**: {st.session_state.temperature} K")
+                    st.write(f"**Signed Seebeck Coefficient (Biased)**: {seebeck:.2f} μV/K ({'p-type' if seebeck > 0 else 'n-type' if seebeck < 0 else 'neutral'})")
+                    st.write(f"**Signed Seebeck Coefficient (Unbiased)**: {seebeck_unbiased:.2f} μV/K ({'p-type' if seebeck_unbiased > 0 else 'n-type' if seebeck_unbiased < 0 else 'neutral'})")
+    else:
+        st.error("Please select at least one element.")
 
 # Close database connection
 conn.close()
