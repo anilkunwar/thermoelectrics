@@ -22,6 +22,7 @@ import re
 import os
 import colorsys
 import logging
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -59,7 +60,7 @@ thermoelectric_weights = {
     'Bi': 2.0, 'Te': 2.0, 'Sb': 1.8, 'Pb': 1.8, 'Se': 1.5, 'Sn': 1.5, 'Ge': 1.3, 'Si': 1.3, 'Mg': 1.2
 }
 
-# Self-Attention Layer
+# Self-Attention Layer (retained for potential retraining)
 class SelfAttention(nn.Module):
     def __init__(self, input_dim, num_heads=1):
         super(SelfAttention, self).__init__()
@@ -82,7 +83,7 @@ class SelfAttention(nn.Module):
         output = self.out(attention_output)
         return output + x  # Residual connection
 
-# Attentive VAE Model
+# Attentive VAE Model (reverted to original architecture without SelfAttention)
 class AttentiveVAE(nn.Module):
     def __init__(self, input_dim=66, latent_dim=8):
         super(AttentiveVAE, self).__init__()
@@ -90,7 +91,6 @@ class AttentiveVAE(nn.Module):
         self.latent_dim = latent_dim
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, 128), nn.ReLU(), nn.BatchNorm1d(128, momentum=0.05), nn.Dropout(0.4),
-            SelfAttention(128),
             nn.Linear(128, 64), nn.ReLU(), nn.BatchNorm1d(64, momentum=0.05), nn.Dropout(0.4),
         )
         self.z_mean = nn.Linear(64, latent_dim)
@@ -402,6 +402,9 @@ except RuntimeError as e:
     st.error(f"Error loading model: {e}")
     st.stop()
 
+# Warning about missing attention mechanism
+st.warning("The loaded VAE model does not include the self-attention mechanism due to a mismatch with the saved weights. For full functionality, retrain the model with the updated architecture.")
+
 # Available elements
 available_elements = [
     'Mg', 'Cs', 'Co', 'Zr', 'Se', 'Dy', 'Pb', 'Ga', 'O', 'Sn', 'Yb', 'B', 'La', 'Si', 'V', 'Fe', 'S', 'Sc', 'Tl', 'Zn',
@@ -466,8 +469,8 @@ def get_dominant_element(formula):
 # Streamlit UI
 st.title("Thermoelectric Material Analysis and Seebeck Coefficient Prediction")
 st.markdown("""
-This application visualizes thermoelectric material data and predicts Seebeck coefficients using a trained Attentive Variational Autoencoder (VAE) and Regressor. Upload a featurized CSV to convert to the required SQLite database, then explore latent space visualizations, training history, and predict Seebeck coefficients for new compositions. Hover over points in the scatter plots to see scores for all elements in the formula and the temperature.
-**Date and Time**: 06:18 AM CEST, Tuesday, August 19, 2025
+This application visualizes thermoelectric material data and predicts Seebeck coefficients using a trained Variational Autoencoder (VAE) and Regressor. Upload a featurized CSV to convert to the required SQLite database, then explore latent space visualizations, training history, and predict Seebeck coefficients for new compositions. Hover over points in the scatter plots to see scores for all elements in the formula and the temperature.
+**Date and Time**: 06:33 AM CEST, Tuesday, August 19, 2025
 """)
 
 # CSV to SQLite converter
