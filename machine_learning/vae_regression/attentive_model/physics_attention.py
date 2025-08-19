@@ -41,26 +41,31 @@ UNIT_VARIANTS = [
     "microvolts/Kelvin", "microvolt per Kelvin", "μV per Kelvin"
 ]
 
-# Load spaCy model
+# Load spaCy model with error handling
 try:
     nlp = spacy.load("en_core_web_lg")
 except Exception as e:
-    logger.warning(f"Failed to load 'en_core_web_lg': {e}. Using 'en_core_web_sm'.")
+    logger.warning(f"Failed to load 'en_core_web_lg': {e}. Attempting 'en_core_web_sm'.")
     try:
         nlp = spacy.load("en_core_web_sm")
     except Exception as e2:
-        logger.error(f"Failed to load spaCy: {e2}")
-        st.error(f"Failed to load spaCy: {e2}. Install: `python -m spacy download en_core_web_sm`")
+        st.error(f"Failed to load spaCy model: {e2}. Please install with: `python -m spacy download en_core_web_sm`")
+        logger.error(f"spaCy loading error: {e2}")
         st.stop()
 
 # Initialize spaCy matcher
-matcher = Matcher(nlp.vocab)
-material_patterns = [
-    [{"LOWER": "p-type"}, {"LOWER": {"IN": ["material", "semiconductor", "thermoelectric", "compound"]}, "OP": "?"}],
-    [{"LOWER": "n-type"}, {"LOWER": {"IN": ["material", "semiconductor", "thermoelectric", "compound"]}, "OP": "?"}]
-]
-matcher.add("P_TYPE", [material_patterns[0]])
-matcher.add("N_TYPE", [material_patterns[1]])
+try:
+    matcher = Matcher(nlp.vocab)
+    material_patterns = [
+        [{"LOWER": "p-type"}, {"LOWER": {"IN": ["material", "semiconductor", "thermoelectric", "compound"]}, "OP": "?"}],
+        [{"LOWER": "n-type"}, {"LOWER": {"IN": ["material", "semiconductor", "thermoelectric", "compound"]}, "OP": "?"}]
+    ]
+    matcher.add("P_TYPE", [material_patterns[0]])
+    matcher.add("N_TYPE", [material_patterns[1]])
+except Exception as e:
+    st.error(f"Failed to initialize spaCy matcher: {str(e)}")
+    logger.error(f"spaCy matcher error: {str(e)}")
+    st.stop()
 
 # Fetch arXiv abstracts
 @st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
@@ -89,7 +94,8 @@ def fetch_arxiv_abstracts(elements, composition_dict):
         logger.info(f"Retrieved {len(abstracts)} abstracts for {formula}")
         return abstracts
     except Exception as e:
-        logger.error(f"Failed to fetch arXiv abstracts: {str(e)}")
+        st.error(f"Failed to fetch arXiv abstracts: {str(e)}")
+        logger.error(f"arXiv fetch error: {str(e)}")
         return []
 
 # Score abstracts with SciBERT
@@ -151,7 +157,8 @@ def score_abstract_with_scibert(abstract, formula):
         
         return relevance_prob
     except Exception as e:
-        logger.error(f"SciBERT scoring failed: {str(e)}")
+        st.error(f"SciBERT scoring failed: {str(e)}")
+        logger.error(f"SciBERT error: {str(e)}")
         return 0.5
 
 # Extract material type and compute probabilities
@@ -266,7 +273,8 @@ def extract_material_type(elements, composition_dict):
         logger.info(f"Material type: {material_type}, p-type prob: {p_type_prob:.3f}, n-type prob: {n_type_prob:.3f}")
         return material_type, summary_dict, verbatim_matches
     except Exception as e:
-        logger.error(f"Failed to extract material type: {str(e)}")
+        st.error(f"Failed to extract material type: {str(e)}")
+        logger.error(f"Material type extraction error: {str(e)}")
         summary_dict = {
             "total_abstracts": 0,
             "formula_matches": 0,
@@ -283,112 +291,127 @@ def extract_material_type(elements, composition_dict):
 
 # Plot material type histogram
 def plot_material_type_histogram(summary_dict, font_size):
-    labels = ['p-type', 'n-type', 'Neutral']
-    counts = [
-        summary_dict['p_type_count'],
-        summary_dict['n_type_count'],
-        summary_dict['neutral_count']
-    ]
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=labels,
-        y=counts,
-        marker=dict(color=['#FF9999', '#66B2FF', '#99FF99'], opacity=0.7),
-        text=counts,
-        textposition='auto',
-        textfont=dict(size=font_size - 2, family='Arial')
-    ))
-    fig.update_layout(
-        title=dict(
-            text='Material Type Distribution in Retrieved Abstracts',
-            x=0.5,
-            xanchor='center',
-            font=dict(size=font_size + 4, family='Arial')
-        ),
-        xaxis_title='Material Type',
-        yaxis_title='Count',
-        xaxis=dict(
-            titlefont=dict(size=font_size, family='Arial'),
-            tickfont=dict(size=font_size - 2, family='Arial')
-        ),
-        yaxis=dict(
-            titlefont=dict(size=font_size, family='Arial'),
-            tickfont=dict(size=font_size - 2, family='Arial')
-        ),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(l=50, r=50, t=80, b=50)
-    )
-    return fig
+    try:
+        labels = ['p-type', 'n-type', 'Neutral']
+        counts = [
+            summary_dict['p_type_count'],
+            summary_dict['n_type_count'],
+            summary_dict['neutral_count']
+        ]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=labels,
+            y=counts,
+            marker=dict(color=['#FF9999', '#66B2FF', '#99FF99'], opacity=0.7),
+            text=counts,
+            textposition='auto',
+            textfont=dict(size=font_size - 2, family='Arial')
+        ))
+        fig.update_layout(
+            title=dict(
+                text='Material Type Distribution in Retrieved Abstracts',
+                x=0.5,
+                xanchor='center',
+                font=dict(size=font_size + 4, family='Arial')
+            ),
+            xaxis_title='Material Type',
+            yaxis_title='Count',
+            xaxis=dict(
+                titlefont=dict(size=font_size, family='Arial'),
+                tickfont=dict(size=font_size - 2, family='Arial')
+            ),
+            yaxis=dict(
+                titlefont=dict(size=font_size, family='Arial'),
+                tickfont=dict(size=font_size - 2, family='Arial')
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=50, r=50, t=80, b=50)
+        )
+        return fig
+    except Exception as e:
+        st.error(f"Failed to plot material type histogram: {str(e)}")
+        logger.error(f"Histogram plot error: {str(e)}")
+        return go.Figure()
 
 # Plot material type probabilities
 def plot_material_probabilities(summary_dict, font_size):
-    labels = ['p-type', 'n-type']
-    probs = [summary_dict['p_type_prob'], summary_dict['n_type_prob']]
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=labels,
-        y=probs,
-        marker=dict(color=['#FF9999', '#66B2FF'], opacity=0.7),
-        text=[f'{p:.3f}' for p in probs],
-        textposition='auto',
-        textfont=dict(size=font_size - 2, family='Arial')
-    ))
-    fig.update_layout(
-        title=dict(
-            text='Probability of Material Type',
-            x=0.5,
-            xanchor='center',
-            font=dict(size=font_size + 4, family='Arial')
-        ),
-        xaxis_title='Material Type',
-        yaxis_title='Probability',
-        xaxis=dict(
-            titlefont=dict(size=font_size, family='Arial'),
-            tickfont=dict(size=font_size - 2, family='Arial')
-        ),
-        yaxis=dict(
-            titlefont=dict(size=font_size, family='Arial'),
-            tickfont=dict(size=font_size - 2, family='Arial'),
-            range=[0, 1]
-        ),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(l=50, r=50, t=80, b=50)
-    )
-    return fig
+    try:
+        labels = ['p-type', 'n-type']
+        probs = [summary_dict['p_type_prob'], summary_dict['n_type_prob']]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=labels,
+            y=probs,
+            marker=dict(color=['#FF9999', '#66B2FF'], opacity=0.7),
+            text=[f'{p:.3f}' for p in probs],
+            textposition='auto',
+            textfont=dict(size=font_size - 2, family='Arial')
+        ))
+        fig.update_layout(
+            title=dict(
+                text='Probability of Material Type',
+                x=0.5,
+                xanchor='center',
+                font=dict(size=font_size + 4, family='Arial')
+            ),
+            xaxis_title='Material Type',
+            yaxis_title='Probability',
+            xaxis=dict(
+                titlefont=dict(size=font_size, family='Arial'),
+                tickfont=dict(size=font_size - 2, family='Arial')
+            ),
+            yaxis=dict(
+                titlefont=dict(size=font_size, family='Arial'),
+                tickfont=dict(size=font_size - 2, family='Arial'),
+                range=[0, 1]
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=50, r=50, t=80, b=50)
+        )
+        return fig
+    except Exception as e:
+        st.error(f"Failed to plot material probabilities: {str(e)}")
+        logger.error(f"Probability plot error: {str(e)}")
+        return go.Figure()
 
 # Plot relevance score box plot
 def plot_relevance_box_plot(summary_dict, font_size):
-    fig = go.Figure()
-    fig.add_trace(go.Box(
-        y=summary_dict['relevance_scores'],
-        name='Relevance Scores',
-        marker_color='#FFCC00',
-        boxpoints='all',
-        jitter=0.3,
-        pointpos=-1.8
-    ))
-    fig.update_layout(
-        title=dict(
-            text='Relevance Scores of Abstracts',
-            x=0.5,
-            xanchor='center',
-            font=dict(size=font_size + 4, family='Arial')
-        ),
-        yaxis_title='Relevance Score',
-        yaxis=dict(
-            titlefont=dict(size=font_size, family='Arial'),
-            tickfont=dict(size=font_size - 2, family='Arial')
-        ),
-        xaxis=dict(
-            showticklabels=False
-        ),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(l=50, r=50, t=80, b=50)
-    )
-    return fig
+    try:
+        fig = go.Figure()
+        fig.add_trace(go.Box(
+            y=summary_dict['relevance_scores'],
+            name='Relevance Scores',
+            marker_color='#FFCC00',
+            boxpoints='all',
+            jitter=0.3,
+            pointpos=-1.8
+        ))
+        fig.update_layout(
+            title=dict(
+                text='Relevance Scores of Abstracts',
+                x=0.5,
+                xanchor='center',
+                font=dict(size=font_size + 4, family='Arial')
+            ),
+            yaxis_title='Relevance Score',
+            yaxis=dict(
+                titlefont=dict(size=font_size, family='Arial'),
+                tickfont=dict(size=font_size - 2, family='Arial')
+            ),
+            xaxis=dict(
+                showticklabels=False
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=50, r=50, t=80, b=50)
+        )
+        return fig
+    except Exception as e:
+        st.error(f"Failed to plot relevance box plot: {str(e)}")
+        logger.error(f"Box plot error: {str(e)}")
+        return go.Figure()
 
 # Plot term co-occurrence network
 def plot_term_cooccurrence_network(abstracts, font_size):
@@ -465,5 +488,6 @@ def plot_term_cooccurrence_network(abstracts, font_size):
         )
         return fig
     except Exception as e:
-        logger.error(f"Failed to plot term co-occurrence network: {str(e)}")
+        st.error(f"Failed to plot term co-occurrence network: {str(e)}")
+        logger.error(f"Network plot error: {str(e)}")
         return go.Figure()
