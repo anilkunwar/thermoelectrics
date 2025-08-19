@@ -485,7 +485,7 @@ fig_full = plot_full_periodic_table(available_elements, st.session_state.selecte
 st.plotly_chart(fig_full, use_container_width=True)
 
 st.subheader("Available Elements Only")
-fig_present = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=False)
+fig_present = plot_periodic_table(all_elements, available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=False)
 st.plotly_chart(fig_present, use_container_width=True)
 
 # Element selection via dropdown
