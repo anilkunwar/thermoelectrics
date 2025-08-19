@@ -69,6 +69,7 @@ Physics informed bias for sign accuracy of n-type and p-type thermoelectrics (ch
 
 Physics constrained bias for sign accuracy of n-type and p-type thermoelectrics (changes in the magnitude of the predicted output negligible)
 [![machinelearningthermoelectricity](https://img.shields.io/badge/physicsconstrainedVAERseebeck-streamlit-red)](https://physics-constrained-consistentvaepredictor.streamlit.app/)
+with periodic table rendering fixed: [![machinelearningthermoelectricity](https://img.shields.io/badge/physicsconstrainedVAERseebeckr1-streamlit-red)]( https://thermodynamically-consistent-vaepredictor.streamlit.app/)
 
 Materials informatics and transformers enforcing physics based bias to VAE-Regressor  (Attentive Model)
 [![machinelearningthermoelectricity](https://img.shields.io/badge/physicsinformedattentiveVAERseebeck-streamlit-red)](https://physics-informed-attentivevaepredictor.streamlit.app/)
