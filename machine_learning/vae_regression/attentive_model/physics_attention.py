@@ -13,6 +13,7 @@ import re
 import spacy
 from spacy.matcher import Matcher
 from collections import Counter
+from math import log2
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -67,20 +68,41 @@ except Exception as e:
     logger.error(f"spaCy matcher error: {str(e)}")
     st.stop()
 
-# Fetch arXiv abstracts
+# PMI calculation
+def calculate_pmi(abstracts, term1, term2, min_count=1):
+    try:
+        total_abstracts = len(abstracts)
+        if total_abstracts == 0:
+            return 0.0
+        count_term1 = sum(1 for a in abstracts if term1.lower() in a['abstract'].lower())
+        count_term2 = sum(1 for a in abstracts if term2.lower() in a['abstract'].lower())
+        count_both = sum(1 for a in abstracts if term1.lower() in a['abstract'].lower() and term2.lower() in a['abstract'].lower())
+        if count_term1 < min_count or count_term2 < min_count or count_both == 0:
+            return 0.0
+        p_term1 = count_term1 / total_abstracts
+        p_term2 = count_term2 / total_abstracts
+        p_both = count_both / total_abstracts
+        pmi = log2(p_both / (p_term1 * p_term2 + 1e-6))
+        return max(pmi, 0.0)  # Ensure non-negative PMI
+    except Exception as e:
+        logger.error(f"PMI calculation error: {str(e)}")
+        return 0.0
+
+# Fetch arXiv abstracts with customizable keywords and year range
 @st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
 @retry(stop_max_attempt_number=3, wait_fixed=2000)
-def fetch_arxiv_abstracts(elements, composition_dict):
+def fetch_arxiv_abstracts(elements, composition_dict, custom_keywords, year_range):
     try:
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
         formula = comp.reduced_formula
-        query_terms = [formula]
+        query_terms = [formula] + custom_keywords + UNIT_VARIANTS
         for key, synonyms in THERMOELECTRIC_SYNONYMS.items():
             query_terms.extend(synonyms)
-        query_terms.extend(UNIT_VARIANTS)
         query = f"{formula} ({' OR '.join(query_terms)})"
         logger.info(f"Querying arXiv with: {query}")
-        results = arxiv.Client().results(arxiv.Search(query=query, max_results=50))
+        client = arxiv.Client()
+        search = arxiv.Search(query=query, max_results=50, sort_by=arxiv.SortCriterion.Relevance)
+        results = client.results(search)
         abstracts = [
             {
                 "title": r.title,
@@ -89,7 +111,7 @@ def fetch_arxiv_abstracts(elements, composition_dict):
                 "published": r.published,
                 "authors": ", ".join([author.name for author in r.authors])
             }
-            for r in results if r.published.year >= 2020
+            for r in results if year_range[0] <= r.published.year <= year_range[1]
         ]
         logger.info(f"Retrieved {len(abstracts)} abstracts for {formula}")
         return abstracts
@@ -100,7 +122,7 @@ def fetch_arxiv_abstracts(elements, composition_dict):
 
 # Score abstracts with SciBERT
 @st.cache_data
-def score_abstract_with_scibert(abstract, formula):
+def score_abstract_with_scibert(abstract, formula, custom_keywords):
     try:
         global scibert_tokenizer, scibert_model
         if 'scibert_tokenizer' not in globals() or 'scibert_model' not in globals():
@@ -115,379 +137,264 @@ def score_abstract_with_scibert(abstract, formula):
         attentions = outputs.attentions[-1][0].mean(dim=0).numpy()
         tokens = scibert_tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
         
-        relevance_prob = 0.5
-        keyword_indices = []
-        formula_indices = []
-        abstract_lower = abstract.lower()
+        relevance_score = 0.0
+        matched_terms = []
         formula_lower = formula.lower()
+        abstract_lower = abstract.lower()
         
+        # Calculate base relevance based on attention weights
         for i, token in enumerate(tokens):
             token_lower = token.lower().replace("##", "")
+            token_attention = attentions[i].mean() if i < len(attentions) else 0.0
+            
+            # Check for formula match
+            if formula_lower in token_lower or token_lower in formula_lower:
+                relevance_score += 3.0 * token_attention
+                matched_terms.append(formula)
+            
+            # Check for custom keywords
+            for keyword in custom_keywords:
+                if keyword.lower() in token_lower or token_lower in keyword.lower():
+                    relevance_score += 1.5 * token_attention
+                    matched_terms.append(keyword)
+            
+            # Check for thermoelectric terms and synonyms
             for key, synonyms in THERMOELECTRIC_SYNONYMS.items():
-                for term in [key] + synonyms:
-                    if re.search(rf'\b{re.escape(term)}\b', token_lower):
-                        keyword_indices.append(i)
-            if re.search(rf'\b{re.escape(formula_lower)}\b', token_lower):
-                formula_indices.append(i)
+                if any(syn.lower() in token_lower or token_lower in syn.lower() for syn in [key] + synonyms):
+                    weight = TERM_WEIGHTS.get(key, 1.0)
+                    relevance_score += weight * token_attention
+                    matched_terms.append(key)
+            
+            # Check for unit variants
+            for unit in UNIT_VARIANTS:
+                if unit.lower() in token_lower or token_lower in unit.lower():
+                    relevance_score += 1.0 * token_attention
+                    matched_terms.append(unit)
         
-        if keyword_indices:
-            attn_scores = attentions[keyword_indices].sum()
-            avg_attn_score = attn_scores / len(keyword_indices)
-            relevance_prob = min(relevance_prob + 0.4 * len(keyword_indices) * avg_attn_score, 1.0)
-            logger.info(f"Attention boost: {len(keyword_indices)} tokens, avg attention: {avg_attn_score:.3f}")
-        
-        for term in ["seebeck coefficient", "power factor", "zt", "thermoelectric"] + UNIT_VARIANTS:
-            if term in abstract_lower:
-                term_pos = abstract_lower.find(term)
-                formula_pos = abstract_lower.find(formula_lower)
-                if formula_pos != -1 and abs(term_pos - formula_pos) < 100:
-                    relevance_prob = min(relevance_prob + 0.25, 1.0)
-                    logger.info(f"Contextual boost: {term} near {formula}")
-        
-        if not keyword_indices:
-            word_counts = Counter(re.findall(r'\b\w+\b', abstract_lower))
-            total_words = sum(word_counts.values())
-            score = 0.0
-            for term, weight in TERM_WEIGHTS.items():
-                if term in word_counts:
-                    score += weight * word_counts[term] / (total_words + 1e-6)
-            max_possible_score = sum(TERM_WEIGHTS.values()) / 10
-            relevance_prob = min(score / max_possible_score, 1.0) if max_possible_score > 0 else 0.0
-            logger.info(f"Fallback scoring: {relevance_prob:.3f}")
-        
-        return relevance_prob
+        # Normalize relevance score
+        relevance_score = min(relevance_score / (len(tokens) + 1e-6), 1.0)
+        matched_terms = list(set(matched_terms))  # Remove duplicates
+        return relevance_score, matched_terms
     except Exception as e:
-        st.error(f"SciBERT scoring failed: {str(e)}")
-        logger.error(f"SciBERT error: {str(e)}")
-        return 0.5
+        logger.error(f"SciBERT scoring error: {str(e)}")
+        return 0.0, []
 
-# Extract material type and compute probabilities
-@st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
-def extract_material_type(elements, composition_dict):
+# Extract material type with PMI analysis
+def extract_material_type(elements, composition_dict, custom_keywords, year_range, pmi_threshold):
     try:
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
         formula = comp.reduced_formula
-        formula_variants = [
-            formula,
-            formula.replace('2', '₂'),
-            f"{elements[0]}{elements[1]}{elements[2]}",
-            re.compile(f"{re.escape(elements[0])}[0-9.]*{re.escape(elements[1])}[0-9.]*{re.escape(elements[2])}[0-9.]*")
-        ]
+        abstracts = fetch_arxiv_abstracts(elements, composition_dict, custom_keywords, year_range)
         
-        abstracts = fetch_arxiv_abstracts(elements, composition_dict)
-        total_abstracts = len(abstracts)
         if not abstracts:
-            logger.warning(f"No abstracts found for {formula}")
-            summary_dict = {
-                "total_abstracts": 0,
-                "formula_matches": 0,
-                "p_type_count": 0,
-                "n_type_count": 0,
-                "neutral_count": 0,
-                "relevance_scores": [],
-                "matched_terms": [],
-                "p_type_prob": 0.0,
-                "n_type_prob": 0.0
-            }
-            verbatim_matches = [{"arxiv_id": "", "title": "", "snippet": "No abstracts found.", "label": "Neutral", "score": 0.0}]
-            return "Neutral", summary_dict, verbatim_matches
+            logger.warning("No abstracts retrieved, returning neutral type.")
+            return "Neutral", {"p_type_prob": 0.5, "n_type_prob": 0.5, "total_abstracts": 0, "formula_matches": 0, "matched_terms": [], "pmi_scores": {}}, []
         
-        classifications = []
+        p_type_scores = []
+        n_type_scores = []
         verbatim_matches = []
+        matched_terms_counter = Counter()
         formula_matches = 0
-        relevance_scores = []
-        p_scores = []
-        n_scores = []
-        matched_terms = set()
         
         for abstract_data in abstracts:
-            abstract = abstract_data['abstract'].lower()
-            title = abstract_data['title']
-            arxiv_id = abstract_data['arxiv_id']
-            
-            formula_present = any(variant.lower() in abstract for variant in formula_variants[:-1]) or formula_variants[-1].search(abstract)
-            if not formula_present:
-                continue
-            formula_matches += 1
-            
-            relevance_score = score_abstract_with_scibert(abstract, formula)
-            if relevance_score < 0.3:
-                continue
-            relevance_scores.append(relevance_score)
-            
-            doc = nlp(abstract_data['abstract'])
+            abstract = abstract_data["abstract"]
+            doc = nlp(abstract)
             matches = matcher(doc)
+            p_type_count = 0
+            n_type_count = 0
             for match_id, start, end in matches:
-                label = nlp.vocab.strings[match_id].lower()
-                span = doc[start:end]
-                context_start = max(0, start - 50)
-                context_end = min(len(doc), end + 50)
-                context_text = doc[context_start:context_end].text
-                formula_in_context = any(variant.lower() in context_text.lower() for variant in formula_variants[:-1]) or formula_variants[-1].search(context_text)
-                if not formula_in_context:
-                    continue
-                thermoelectric_context = any(term in context_text.lower() for term in sum(THERMOELECTRIC_SYNONYMS.values(), []) + UNIT_VARIANTS)
-                if thermoelectric_context:
-                    matched_terms.update([term for term in sum(THERMOELECTRIC_SYNONYMS.values(), []) + UNIT_VARIANTS if term in context_text.lower()])
-                score = relevance_score * TERM_WEIGHTS.get(label, 2.0) * (1.2 if thermoelectric_context else 1.0)
-                classifications.append(label)
+                rule_id = nlp.vocab.strings[match_id]
+                if rule_id == "P_TYPE":
+                    p_type_count += 1
+                elif rule_id == "N_TYPE":
+                    n_type_count += 1
+            
+            # SciBERT scoring
+            relevance_score, matched_terms = score_abstract_with_scibert(abstract, formula, custom_keywords)
+            matched_terms_counter.update(matched_terms)
+            
+            # Check for formula in abstract
+            if re.search(r'\b' + re.escape(formula) + r'\b', abstract, re.IGNORECASE):
+                formula_matches += 1
+                snippet = " ".join([token.text for token in doc[max(0, start-10):min(len(doc), end+10)]])
                 verbatim_matches.append({
-                    "arxiv_id": arxiv_id,
-                    "title": title,
-                    "snippet": context_text,
-                    "label": label,
-                    "score": score
+                    "title": abstract_data["title"],
+                    "arxiv_id": abstract_data["arxiv_id"],
+                    "snippet": snippet,
+                    "label": "p-type" if p_type_count > n_type_count else "n-type" if n_type_count > p_type_count else "neutral",
+                    "score": relevance_score
                 })
-                if label == "p-type":
-                    p_scores.append(score)
-                elif label == "n-type":
-                    n_scores.append(score)
+            
+            # Weight scores by relevance
+            if p_type_count > n_type_count:
+                p_type_scores.append(relevance_score)
+                n_type_scores.append(0.0)
+            elif n_type_count > p_type_count:
+                n_type_scores.append(relevance_score)
+                p_type_scores.append(0.0)
+            else:
+                p_type_scores.append(relevance_score * 0.5)
+                n_type_scores.append(relevance_score * 0.5)
         
-        p_count = classifications.count('p-type')
-        n_count = classifications.count('n-type')
-        neutral_count = formula_matches - p_count - n_count
-        p_type_prob = sum(p_scores) / (sum(p_scores) + sum(n_scores) + 1e-6) if p_scores or n_scores else 0.0
-        n_type_prob = sum(n_scores) / (sum(p_scores) + sum(n_scores) + 1e-6) if p_scores or n_scores else 0.0
+        # Compute probabilities
+        total_score = sum(p_type_scores) + sum(n_type_scores) + 1e-6
+        p_type_prob = sum(p_type_scores) / total_score if total_score > 0 else 0.5
+        n_type_prob = sum(n_type_scores) / total_score if total_score > 0 else 0.5
         
-        material_type = "Neutral"
-        if p_type_prob > n_type_prob + 0.1:
-            material_type = "p-type"
-        elif n_type_prob > p_type_prob + 0.1:
-            material_type = "n-type"
+        # PMI analysis for key terms
+        all_terms = list(matched_terms_counter.keys()) + ["p-type", "n-type"] + custom_keywords
+        pmi_scores = {}
+        for term1, term2 in combinations(all_terms, 2):
+            pmi = calculate_pmi(abstracts, term1, term2, min_count=2)
+            if pmi >= pmi_threshold:
+                pmi_scores[f"{term1} - {term2}"] = pmi
+        
+        # Determine material type
+        material_type = "p-type" if p_type_prob > n_type_prob + 0.1 else "n-type" if n_type_prob > p_type_prob + 0.1 else "Neutral"
         
         summary_dict = {
-            "total_abstracts": total_abstracts,
-            "formula_matches": formula_matches,
-            "p_type_count": p_count,
-            "n_type_count": n_count,
-            "neutral_count": neutral_count,
-            "relevance_scores": relevance_scores,
-            "matched_terms": list(matched_terms),
             "p_type_prob": p_type_prob,
-            "n_type_prob": n_type_prob
+            "n_type_prob": n_type_prob,
+            "total_abstracts": len(abstracts),
+            "formula_matches": formula_matches,
+            "matched_terms": list(matched_terms_counter.keys()),
+            "pmi_scores": pmi_scores
         }
         
-        if not verbatim_matches:
-            verbatim_matches = [{"arxiv_id": "", "title": "", "snippet": "No p-type or n-type matches found.", "label": "Neutral", "score": 0.0}]
-        
-        logger.info(f"Material type: {material_type}, p-type prob: {p_type_prob:.3f}, n-type prob: {n_type_prob:.3f}")
         return material_type, summary_dict, verbatim_matches
     except Exception as e:
-        st.error(f"Failed to extract material type: {str(e)}")
         logger.error(f"Material type extraction error: {str(e)}")
-        summary_dict = {
-            "total_abstracts": 0,
-            "formula_matches": 0,
-            "p_type_count": 0,
-            "n_type_count": 0,
-            "neutral_count": 0,
-            "relevance_scores": [],
-            "matched_terms": [],
-            "p_type_prob": 0.0,
-            "n_type_prob": 0.0
-        }
-        verbatim_matches = [{"arxiv_id": "", "title": "", "snippet": f"Error: {str(e)}", "label": "Neutral", "score": 0.0}]
-        return "Neutral", summary_dict, verbatim_matches
+        return "Neutral", {"p_type_prob": 0.5, "n_type_prob": 0.5, "total_abstracts": 0, "formula_matches": 0, "matched_terms": [], "pmi_scores": {}}, []
 
 # Plot material type histogram
 def plot_material_type_histogram(summary_dict, font_size):
-    try:
-        labels = ['p-type', 'n-type', 'Neutral']
-        counts = [
-            summary_dict['p_type_count'],
-            summary_dict['n_type_count'],
-            summary_dict['neutral_count']
-        ]
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=labels,
-            y=counts,
-            marker=dict(color=['#FF9999', '#66B2FF', '#99FF99'], opacity=0.7),
-            text=counts,
-            textposition='auto',
-            textfont=dict(size=font_size - 2, family='Arial')
-        ))
-        fig.update_layout(
-            title=dict(
-                text='Material Type Distribution in Retrieved Abstracts',
-                x=0.5,
-                xanchor='center',
-                font=dict(size=font_size + 4, family='Arial')
-            ),
-            xaxis_title='Material Type',
-            yaxis_title='Count',
-            xaxis=dict(
-                titlefont=dict(size=font_size, family='Arial'),
-                tickfont=dict(size=font_size - 2, family='Arial')
-            ),
-            yaxis=dict(
-                titlefont=dict(size=font_size, family='Arial'),
-                tickfont=dict(size=font_size - 2, family='Arial')
-            ),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        return fig
-    except Exception as e:
-        st.error(f"Failed to plot material type histogram: {str(e)}")
-        logger.error(f"Histogram plot error: {str(e)}")
-        return go.Figure()
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=['p-type', 'n-type'],
+        y=[summary_dict['p_type_prob'], summary_dict['n_type_prob']],
+        marker=dict(color=['#1f77b4', '#ff7f0e'], opacity=0.7),
+        text=[f"{summary_dict['p_type_prob']:.3f}", f"{summary_dict['n_type_prob']:.3f}"],
+        textposition='auto'
+    ))
+    fig.update_layout(
+        title=dict(text='Material Type Probabilities', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+        xaxis_title='Material Type',
+        yaxis_title='Probability',
+        xaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        yaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50),
+        template='seaborn'
+    )
+    return fig
 
 # Plot material type probabilities
 def plot_material_probabilities(summary_dict, font_size):
-    try:
-        labels = ['p-type', 'n-type']
-        probs = [summary_dict['p_type_prob'], summary_dict['n_type_prob']]
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=labels,
-            y=probs,
-            marker=dict(color=['#FF9999', '#66B2FF'], opacity=0.7),
-            text=[f'{p:.3f}' for p in probs],
-            textposition='auto',
-            textfont=dict(size=font_size - 2, family='Arial')
-        ))
-        fig.update_layout(
-            title=dict(
-                text='Probability of Material Type',
-                x=0.5,
-                xanchor='center',
-                font=dict(size=font_size + 4, family='Arial')
-            ),
-            xaxis_title='Material Type',
-            yaxis_title='Probability',
-            xaxis=dict(
-                titlefont=dict(size=font_size, family='Arial'),
-                tickfont=dict(size=font_size - 2, family='Arial')
-            ),
-            yaxis=dict(
-                titlefont=dict(size=font_size, family='Arial'),
-                tickfont=dict(size=font_size - 2, family='Arial'),
-                range=[0, 1]
-            ),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        return fig
-    except Exception as e:
-        st.error(f"Failed to plot material probabilities: {str(e)}")
-        logger.error(f"Probability plot error: {str(e)}")
-        return go.Figure()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=['p-type', 'n-type'],
+        y=[summary_dict['p_type_prob'], summary_dict['n_type_prob']],
+        mode='markers+lines',
+        marker=dict(size=15, color=['#1f77b4', '#ff7f0e']),
+        line=dict(width=2),
+        text=[f"{summary_dict['p_type_prob']:.3f}", f"{summary_dict['n_type_prob']:.3f}"],
+        textposition='top center'
+    ))
+    fig.update_layout(
+        title=dict(text='Material Type Probability Trend', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+        xaxis_title='Material Type',
+        yaxis_title='Probability',
+        xaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        yaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size)), range=[0, 1]),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50),
+        template='seaborn'
+    )
+    return fig
 
-# Plot relevance score box plot
+# Plot relevance box plot
 def plot_relevance_box_plot(summary_dict, font_size):
-    try:
-        fig = go.Figure()
-        fig.add_trace(go.Box(
-            y=summary_dict['relevance_scores'],
-            name='Relevance Scores',
-            marker_color='#FFCC00',
-            boxpoints='all',
-            jitter=0.3,
-            pointpos=-1.8
-        ))
-        fig.update_layout(
-            title=dict(
-                text='Relevance Scores of Abstracts',
-                x=0.5,
-                xanchor='center',
-                font=dict(size=font_size + 4, family='Arial')
-            ),
-            yaxis_title='Relevance Score',
-            yaxis=dict(
-                titlefont=dict(size=font_size, family='Arial'),
-                tickfont=dict(size=font_size - 2, family='Arial')
-            ),
-            xaxis=dict(
-                showticklabels=False
-            ),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        return fig
-    except Exception as e:
-        st.error(f"Failed to plot relevance box plot: {str(e)}")
-        logger.error(f"Box plot error: {str(e)}")
-        return go.Figure()
+    fig = go.Figure()
+    fig.add_trace(go.Box(
+        y=[summary_dict['p_type_prob'], summary_dict['n_type_prob']],
+        name='Material Type Scores',
+        boxpoints='all',
+        jitter=0.3,
+        pointpos=-1.8,
+        marker=dict(color='#1f77b4'),
+        line=dict(color='#1f77b4')
+    ))
+    fig.update_layout(
+        title=dict(text='Relevance Score Distribution', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+        yaxis_title='Score',
+        xaxis=dict(showticklabels=False),
+        yaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50),
+        template='seaborn'
+    )
+    return fig
 
-# Plot term co-occurrence network
-def plot_term_cooccurrence_network(abstracts, font_size):
-    try:
-        G = nx.Graph()
-        terms = list(sum(THERMOELECTRIC_SYNONYMS.values(), []) + UNIT_VARIANTS)
-        for term in terms:
-            G.add_node(term, size=10)
-        
-        for abstract_data in abstracts:
-            abstract = abstract_data['abstract'].lower()
-            present_terms = [term for term in terms if term in abstract]
-            for term1, term2 in combinations(present_terms, 2):
-                if G.has_edge(term1, term2):
-                    G[term1][term2]['weight'] = G[term1][term2].get('weight', 0) + 1
-                else:
-                    G.add_edge(term1, term2, weight=1)
-        
-        pos = nx.spring_layout(G, k=0.5, iterations=50)
-        edge_x, edge_y = [], []
-        for edge in G.edges(data=True):
-            x0, y0 = pos[edge[0]]
-            x1, y1 = pos[edge[1]]
-            edge_x.extend([x0, x1, None])
-            edge_y.extend([y0, y1, None])
-        
-        edge_trace = go.Scatter(
-            x=edge_x, y=edge_y,
-            line=dict(width=1, color='#888'),
-            hoverinfo='none',
-            mode='lines'
-        )
-        
-        node_x, node_y = [], []
-        node_sizes = []
-        node_text = []
-        for node in G.nodes():
-            x, y = pos[node]
-            node_x.append(x)
-            node_y.append(y)
-            degree = G.degree(node)
-            node_sizes.append(10 + degree * 5)
-            node_text.append(f"{node}<br>Degree: {degree}")
-        
-        node_trace = go.Scatter(
-            x=node_x, y=node_y,
-            mode='markers+text',
-            text=[n for n in G.nodes()],
-            textposition='top center',
-            textfont=dict(size=font_size - 2, family='Arial'),
-            hoverinfo='text',
-            hovertext=node_text,
-            marker=dict(
-                size=node_sizes,
-                color='#FFCC00',
-                line=dict(width=2, color='black')
-            )
-        )
-        
-        fig = go.Figure(data=[edge_trace, node_trace])
-        fig.update_layout(
-            title=dict(
-                text='Term Co-occurrence Network in Abstracts',
-                x=0.5,
-                xanchor='center',
-                font=dict(size=font_size + 4, family='Arial')
-            ),
-            showlegend=False,
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            plot_bgcolor='white',
-            paper_bgcolor='white',
-            margin=dict(l=50, r=50, t=80, b=50)
-        )
-        return fig
-    except Exception as e:
-        st.error(f"Failed to plot term co-occurrence network: {str(e)}")
-        logger.error(f"Network plot error: {str(e)}")
-        return go.Figure()
+# Plot PMI network
+def plot_pmi_network(summary_dict, font_size):
+    G = nx.Graph()
+    for term_pair, pmi in summary_dict['pmi_scores'].items():
+        term1, term2 = term_pair.split(" - ")
+        G.add_edge(term1, term2, weight=pmi)
+    
+    pos = nx.spring_layout(G, k=0.5, iterations=50)
+    edge_x = []
+    edge_y = []
+    edge_weights = []
+    for edge in G.edges(data=True):
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+        edge_weights.append(edge[2]['weight'])
+    
+    # Normalize edge weights for visualization
+    max_weight = max(edge_weights, default=1.0)
+    edge_widths = [2 + 5 * (w / max_weight) for w in edge_weights]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=edge_x, y=edge_y,
+        line=dict(width=edge_widths, color='#888'),
+        hoverinfo='none',
+        mode='lines'
+    ))
+    
+    node_x = []
+    node_y = []
+    node_text = []
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        node_text.append(node)
+    
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers+text',
+        text=node_text,
+        textposition='top center',
+        marker=dict(size=20, color='#1f77b4', line=dict(width=2, color='black')),
+        hoverinfo='text',
+        textfont=dict(size=font_size, family='Arial')
+    ))
+    
+    fig.update_layout(
+        title=dict(text='PMI Term Network', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+        showlegend=False,
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50),
+        template='seaborn'
+    )
+    return fig
