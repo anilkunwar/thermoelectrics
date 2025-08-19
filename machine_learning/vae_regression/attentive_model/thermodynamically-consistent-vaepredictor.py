@@ -432,9 +432,56 @@ def plot_periodic_table(available_elements, selected_elements, element_color_map
     )
     return fig
 
+
+def plot_full_periodic_table(all_elements, available_elements, element_color_map, fontsize=12):
+    periodic_table_positions = {
+        'H': (1, 1), 'He': (1, 18),
+        'Li': (2, 1), 'Be': (2, 2), 'B': (2, 13), 'C': (2, 14), 'N': (2, 15), 'O': (2, 16), 'F': (2, 17), 'Ne': (2, 18),
+        'Na': (3, 1), 'Mg': (3, 2), 'Al': (3, 13), 'Si': (3, 14), 'P': (3, 15), 'S': (3, 16), 'Cl': (3, 17), 'Ar': (3, 18),
+        'K': (4, 1), 'Ca': (4, 2), 'Sc': (4, 3), 'Ti': (4, 4), 'V': (4, 5), 'Cr': (4, 6), 'Mn': (4, 7), 'Fe': (4, 8),
+        'Co': (4, 9), 'Ni': (4, 10), 'Cu': (4, 11), 'Zn': (4, 12), 'Ga': (4, 13), 'Ge': (4, 14), 'As': (4, 15),
+        'Se': (4, 16), 'Br': (4, 17), 'Kr': (4, 18),
+        'Rb': (5, 1), 'Sr': (5, 2), 'Y': (5, 3), 'Zr': (5, 4), 'Nb': (5, 5), 'Mo': (5, 6), 'Tc': (5, 7), 'Ru': (5, 8),
+        'Rh': (5, 9), 'Pd': (5, 10), 'Ag': (5, 11), 'Cd': (5, 12), 'In': (5, 13), 'Sn': (5, 14), 'Sb': (5, 15),
+        'Te': (5, 16), 'I': (5, 17), 'Xe': (5, 18),
+        'Cs': (6, 1), 'Ba': (6, 2), 'La': (6, 3), 'Ce': (7, 3), 'Pr': (7, 4), 'Nd': (7, 5), 'Pm': (7, 6), 'Sm': (7, 7),
+        'Eu': (7, 8), 'Gd': (7, 9), 'Tb': (7, 10), 'Dy': (7, 11), 'Ho': (7, 12), 'Er': (7, 13), 'Tm': (7, 14),
+        'Yb': (7, 15), 'Lu': (7, 16), 'Hf': (6, 4), 'Ta': (6, 5), 'W': (6, 6), 'Re': (6, 7), 'Os': (6, 8),
+        'Ir': (6, 9), 'Pt': (6, 10), 'Au': (6, 11), 'Hg': (6, 12), 'Tl': (6, 13), 'Pb': (6, 14), 'Bi': (6, 15)
+    }
+    fig = go.Figure()
+    for element in all_elements:
+        if element in periodic_table_positions:
+            row, col = periodic_table_positions[element]
+            en = electronegativity.get(element, 1.0)
+            tw = thermoelectric_weights.get(element, 1.0)
+            color = element_color_map.get(element, '#D3D3D3') if element in available_elements else '#D3D3D3'
+            fig.add_trace(go.Scatter(
+                x=[col], y=[-row],
+                mode='markers+text',
+                text=[element],
+                textposition='middle center',
+                textfont=dict(size=fontsize + 2, family='Arial'),
+                marker=dict(size=40, color=color, line=dict(width=2, color='black')),
+                hoverinfo='text',
+                hovertext=[f"Element: {element}<br>Electronegativity: {en:.2f}<br>Thermoelectric Weight: {tw:.2f}"],
+                customdata=[element],
+                name=element,
+                showlegend=False
+            ))
+    fig.update_layout(
+        title=dict(text='Periodic Table Legend (All Elements)', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
+        xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        yaxis=dict(range=[-8, 0], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        plot_bgcolor='white', paper_bgcolor='white',
+        width=900, height=450,
+        margin=dict(l=20, r=20, t=50, b=20)
+    )
+    return fig
+    
 # Plot both periodic tables, with full periodic table first
 st.subheader("Full Periodic Table")
-fig_full = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=True)
+fig_full = plot_full_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=True)
 st.plotly_chart(fig_full, use_container_width=True)
 
 st.subheader("Available Elements Only")
