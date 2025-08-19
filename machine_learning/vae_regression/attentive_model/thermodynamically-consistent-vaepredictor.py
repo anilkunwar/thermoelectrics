@@ -14,7 +14,7 @@ import joblib
 import colorsys
 from itertools import combinations
 import logging
-from physics_attention import extract_material_type
+from physics_attention import extract_material_type, plot_material_type_histogram, plot_material_probabilities, plot_relevance_box_plot, plot_pmi_network
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -30,13 +30,18 @@ st.write(f"Using device: {device}")
 
 # Electronegativity and thermoelectric weights
 electronegativity = {
-    'O': 3.44, 'Cl': 3.16, 'N': 3.04, 'Br': 2.96, 'I': 2.66, 'S': 2.58, 'Se': 2.55, 'Te': 2.1, 'P': 2.19, 'As': 2.18,
-    'Sb': 2.05, 'Bi': 2.02, 'Si': 1.90, 'Ge': 2.01, 'Sn': 1.96, 'Pb': 2.33, 'B': 2.04, 'Al': 1.61, 'Ga': 1.81,
-    'In': 1.78, 'Tl': 2.04, 'Mg': 1.31, 'Ca': 1.00, 'Sr': 0.95, 'Ba': 0.89, 'Li': 0.98, 'Na': 0.93, 'K': 0.82,
-    'Rb': 0.82, 'Cs': 0.79, 'Sc': 1.36, 'Y': 1.22, 'La': 1.10, 'Ce': 1.12, 'Pr': 1.13, 'Nd': 1.14, 'Sm': 1.17,
-    'Eu': 1.2, 'Gd': 1.2, 'Tb': 1.1, 'Dy': 1.22, 'Ho': 1.23, 'Er': 1.24, 'Tm': 1.25, 'Yb': 1.1, 'Lu': 1.27,
-    'Ti': 1.54, 'Zr': 1.33, 'Hf': 1.3, 'V': 1.63, 'Nb': 1.6, 'Ta': 1.5, 'Cr': 1.66, 'Mo': 2.16, 'Mn': 1.55,
-    'Fe': 1.83, 'Co': 1.88, 'Ni': 1.91, 'Cu': 1.90, 'Zn': 1.65, 'Cd': 1.69, 'Ag': 1.93, 'Au': 2.54, 'Pd': 2.20, 'Ru': 2.2
+    'H': 2.20, 'He': 0.0, 'Li': 0.98, 'Be': 1.57, 'B': 2.04, 'C': 2.55, 'N': 3.04, 'O': 3.44, 'F': 3.98, 'Ne': 0.0,
+    'Na': 0.93, 'Mg': 1.31, 'Al': 1.61, 'Si': 1.90, 'P': 2.19, 'S': 2.58, 'Cl': 3.16, 'Ar': 0.0, 'K': 0.82, 'Ca': 1.00,
+    'Sc': 1.36, 'Ti': 1.54, 'V': 1.63, 'Cr': 1.66, 'Mn': 1.55, 'Fe': 1.83, 'Co': 1.88, 'Ni': 1.91, 'Cu': 1.90, 'Zn': 1.65,
+    'Ga': 1.81, 'Ge': 2.01, 'As': 2.18, 'Se': 2.55, 'Br': 2.96, 'Kr': 0.0, 'Rb': 0.82, 'Sr': 0.95, 'Y': 1.22, 'Zr': 1.33,
+    'Nb': 1.6, 'Mo': 2.16, 'Tc': 1.9, 'Ru': 2.2, 'Rh': 2.28, 'Pd': 2.20, 'Ag': 1.93, 'Cd': 1.69, 'In': 1.78, 'Sn': 1.96,
+    'Sb': 2.05, 'Te': 2.1, 'I': 2.66, 'Xe': 0.0, 'Cs': 0.79, 'Ba': 0.89, 'La': 1.10, 'Ce': 1.12, 'Pr': 1.13, 'Nd': 1.14,
+    'Pm': 1.13, 'Sm': 1.17, 'Eu': 1.2, 'Gd': 1.2, 'Tb': 1.1, 'Dy': 1.22, 'Ho': 1.23, 'Er': 1.24, 'Tm': 1.25, 'Yb': 1.1,
+    'Lu': 1.27, 'Hf': 1.3, 'Ta': 1.5, 'W': 2.36, 'Re': 1.9, 'Os': 2.2, 'Ir': 2.2, 'Pt': 2.28, 'Au': 2.54, 'Hg': 2.00,
+    'Tl': 2.04, 'Pb': 2.33, 'Bi': 2.02, 'Po': 2.0, 'At': 2.2, 'Rn': 0.0, 'Fr': 0.7, 'Ra': 0.9, 'Ac': 1.1, 'Th': 1.3,
+    'Pa': 1.5, 'U': 1.38, 'Np': 1.36, 'Pu': 1.28, 'Am': 1.3, 'Cm': 1.3, 'Bk': 1.3, 'Cf': 1.3, 'Es': 1.3, 'Fm': 1.3,
+    'Md': 1.3, 'No': 1.3, 'Lr': 1.3, 'Rf': 1.3, 'Db': 1.2, 'Sg': 1.1, 'Bh': 1.1, 'Hs': 1.1, 'Mt': 1.1, 'Ds': 1.1,
+    'Rg': 1.1, 'Cn': 1.1, 'Nh': 1.1, 'Fl': 1.1, 'Mc': 1.1, 'Lv': 1.1, 'Ts': 1.1, 'Og': 1.1
 }
 
 thermoelectric_weights = {
@@ -45,7 +50,7 @@ thermoelectric_weights = {
 
 # VAE Model
 class VAE(nn.Module):
-    def __init__(self, input_dim=66, latent_dim=8):
+    def __init__(self, input_dim=119, latent_dim=8):
         super(VAE, self).__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
@@ -197,13 +202,14 @@ def plot_z_mean_bar_chart(z_mean_avg, z_mean_std, font_size):
         yaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
         plot_bgcolor='white',
         paper_bgcolor='white',
-        margin=dict(l=50, r=50, t=80, b=50)
+        margin=dict(l=50, r=50, t=80, b=50),
+        template='seaborn'
     )
     return fig
 
 # Plot z_mean bar chart (Matplotlib)
 def plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, output_path='z_mean_bar_chart.pdf'):
-    plt.style.use('default')
+    plt.style.use('seaborn')
     fig, ax = plt.subplots(figsize=(8, 6), dpi=300)
     dimensions = [f'Dim {i+1}' for i in range(len(z_mean_avg))]
     x = np.arange(len(z_mean_avg))
@@ -284,21 +290,23 @@ except RuntimeError as e:
     st.error(f"Error loading model: {e}")
     st.stop()
 
+# Complete periodic table elements
+all_elements = [
+    'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
+    'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr',
+    'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te', 'I', 'Xe',
+    'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
+    'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn',
+    'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr',
+    'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc', 'Lv', 'Ts', 'Og'
+]
+
 # Available elements
 available_elements = [
     'Mg', 'Cs', 'Co', 'Zr', 'Se', 'Dy', 'Pb', 'Ga', 'O', 'Sn', 'Yb', 'B', 'La', 'Si', 'V', 'Fe', 'S', 'Sc', 'Tl', 'Zn',
     'Cl', 'Ce', 'Er', 'Nd', 'Pd', 'Y', 'P', 'Ta', 'In', 'Te', 'Ru', 'Rb', 'Tm', 'Tb', 'Sb', 'Al', 'Lu', 'Bi', 'Pr', 'Eu',
     'Sm', 'Ba', 'Cr', 'Sr', 'Ni', 'Ca', 'As', 'Mn', 'Mo', 'Cd', 'Ti', 'Nb', 'Hf', 'Gd', 'Ag', 'Ge', 'Li', 'Br', 'Au', 'I',
     'N', 'Na', 'Cu', 'Ho', 'K'
-]
-
-# All elements for full periodic table
-all_elements = [
-    'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
-    'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr',
-    'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te', 'I', 'Xe',
-    'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
-    'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi'
 ]
 
 # Enhanced color map for all elements
@@ -325,15 +333,15 @@ default_color_list = base_color_list + additional_colors
 default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_elements)]))
 
 # Streamlit UI
+st.set_page_config(page_title="Ternary Seebeck Coefficient Predictor", layout="wide")
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and choose a material type (p-type, n-type, or Neutral) either manually or using a SciBERT-based suggestion. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart and uses a direction-specific bias vector to control the Seebeck coefficient's sign. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, choose optimization mode, and input proportions or use optimized compositions. Choose a material type (p-type, n-type, or Neutral) either manually or using a SciBERT-based suggestion. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart and uses a direction-specific bias vector to control the Seebeck coefficient's sign. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
 
-**Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is suggested by a SciBERT model analyzing arXiv abstracts. The bias vector (p-type to n-type) is scaled to 0.5 * avg(std(z_mean)) to ensure sign flipping while keeping values ~50–300 μV/K. Biased predictions are normalized to match the unbiased magnitude, with n-type enforced to be negative.
-
-**Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
-
-**Date and Time**: 07:19 PM CEST, Tuesday, August 19, 2025
+**Optimization Mode**: Choose 'Manual' to specify composition ratios or 'Informatics-Attention Optimize' for automatic composition optimization.
+**Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is suggested by a SciBERT model analyzing arXiv abstracts with customizable keywords and year range.
+**Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1.
+**Date and Time**: 07:47 PM CEST, Tuesday, August 19, 2025
 """)
 
 # Sidebar for figure customization
@@ -359,6 +367,13 @@ point_size = st.sidebar.slider("Point Size (Ternary/Temperature)", 5, 20, 10)
 axes_box_thickness = st.sidebar.slider("Axes Box Thickness", 1, 5, 2)
 legend_spacing = st.sidebar.slider("Legend Spacing (Point Legend to Ternary)", 0.0, 0.5, 0.3, step=0.05)
 
+# Physics attention options
+st.sidebar.header("Physics Attention Options")
+custom_keywords = st.sidebar.text_input("Custom Keywords (comma-separated)", "band gap, thermal conductivity, electrical conductivity").split(", ")
+custom_keywords = [kw.strip() for kw in custom_keywords if kw.strip()]
+year_range = st.sidebar.slider("Publication Year Range", 2000, 2025, (2020, 2025))
+pmi_threshold = st.sidebar.slider("PMI Threshold", 0.0, 5.0, 1.0, step=0.1)
+
 # Initialize session state with fallback
 try:
     if 'selected_elements' not in st.session_state:
@@ -373,6 +388,8 @@ try:
         st.session_state.sign_bias = 'Neutral'
     if 'use_manual_material_type' not in st.session_state:
         st.session_state.use_manual_material_type = False
+    if 'optimization_mode' not in st.session_state:
+        st.session_state.optimization_mode = 'Informatics-Attention Optimize'
 except Exception as e:
     st.warning(f"Session state initialization failed: {e}. Resetting to defaults.")
     st.session_state.selected_elements = []
@@ -381,6 +398,7 @@ except Exception as e:
     st.session_state.temperature = 800
     st.session_state.sign_bias = 'Neutral'
     st.session_state.use_manual_material_type = False
+    st.session_state.optimization_mode = 'Informatics-Attention Optimize'
 
 # Periodic Table for Reference
 st.header("Periodic Table Reference")
@@ -388,18 +406,20 @@ st.write("Below are two periodic tables: one showing the full periodic table wit
 
 def plot_periodic_table(available_elements, selected_elements, element_color_map, show_all_elements=False, fontsize=14):
     periodic_table_positions = {
-        'Li': (3, 1), 'Na': (4, 1), 'K': (5, 1), 'Rb': (6, 1), 'Cs': (7, 1),
-        'Be': (3, 2), 'Mg': (4, 2), 'Ca': (5, 2), 'Sr': (6, 2), 'Ba': (7, 2),
-        'Sc': (5, 3), 'Y': (6, 3), 'La': (8, 3), 'Ce': (8, 4), 'Pr': (8, 5), 'Nd': (8, 6),
-        'Sm': (8, 7), 'Eu': (8, 8), 'Gd': (8, 9), 'Tb': (8, 10), 'Dy': (8, 11), 'Ho': (8, 12),
-        'Er': (8, 13), 'Tm': (8, 14), 'Yb': (8, 15), 'Lu': (8, 16),
-        'Ti': (5, 4), 'Zr': (6, 4), 'Hf': (7, 4), 'V': (5, 5), 'Nb': (6, 5), 'Ta': (7, 5),
-        'Cr': (5, 6), 'Mo': (6, 6), 'Mn': (5, 7), 'Fe': (5, 8), 'Co': (5, 9), 'Ni': (5, 10),
-        'Cu': (5, 11), 'Zn': (5, 12), 'B': (3, 13), 'Al': (4, 13), 'Ga': (5, 13), 'In': (6, 13),
-        'Tl': (7, 13), 'Si': (4, 14), 'Ge': (5, 14), 'Sn': (6, 14), 'Pb': (7, 14),
-        'P': (4, 15), 'As': (5, 15), 'Sb': (6, 15), 'Bi': (7, 15), 'S': (4, 16), 'Se': (5, 16),
-        'Te': (6, 16), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17), 'Au': (7, 11), 'Ag': (6, 11),
-        'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8), 'N': (3, 15), 'Na': (3, 1), 'K': (4, 1)
+        'H': (1, 1), 'He': (1, 18), 'Li': (2, 1), 'Be': (2, 2), 'B': (2, 13), 'C': (2, 14), 'N': (2, 15), 'O': (2, 16), 'F': (2, 17), 'Ne': (2, 18),
+        'Na': (3, 1), 'Mg': (3, 2), 'Al': (3, 13), 'Si': (3, 14), 'P': (3, 15), 'S': (3, 16), 'Cl': (3, 17), 'Ar': (3, 18),
+        'K': (4, 1), 'Ca': (4, 2), 'Sc': (4, 3), 'Ti': (4, 4), 'V': (4, 5), 'Cr': (4, 6), 'Mn': (4, 7), 'Fe': (4, 8), 'Co': (4, 9), 'Ni': (4, 10),
+        'Cu': (4, 11), 'Zn': (4, 12), 'Ga': (4, 13), 'Ge': (4, 14), 'As': (4, 15), 'Se': (4, 16), 'Br': (4, 17), 'Kr': (4, 18),
+        'Rb': (5, 1), 'Sr': (5, 2), 'Y': (5, 3), 'Zr': (5, 4), 'Nb': (5, 5), 'Mo': (5, 6), 'Tc': (5, 7), 'Ru': (5, 8), 'Rh': (5, 9), 'Pd': (5, 10),
+        'Ag': (5, 11), 'Cd': (5, 12), 'In': (5, 13), 'Sn': (5, 14), 'Sb': (5, 15), 'Te': (5, 16), 'I': (5, 17), 'Xe': (5, 18),
+        'Cs': (6, 1), 'Ba': (6, 2), 'La': (6, 3), 'Ce': (6, 4), 'Pr': (6, 5), 'Nd': (6, 6), 'Pm': (6, 7), 'Sm': (6, 8), 'Eu': (6, 9), 'Gd': (6, 10),
+        'Tb': (6, 11), 'Dy': (6, 12), 'Ho': (6, 13), 'Er': (6, 14), 'Tm': (6, 15), 'Yb': (6, 16), 'Lu': (6, 17),
+        'Hf': (7, 4), 'Ta': (7, 5), 'W': (7, 6), 'Re': (7, 7), 'Os': (7, 8), 'Ir': (7, 9), 'Pt': (7, 10), 'Au': (7, 11), 'Hg': (7, 12),
+        'Tl': (7, 13), 'Pb': (7, 14), 'Bi': (7, 15), 'Po': (7, 16), 'At': (7, 17), 'Rn': (7, 18),
+        'Fr': (8, 1), 'Ra': (8, 2), 'Ac': (8, 3), 'Th': (8, 4), 'Pa': (8, 5), 'U': (8, 6), 'Np': (8, 7), 'Pu': (8, 8), 'Am': (8, 9),
+        'Cm': (8, 10), 'Bk': (8, 11), 'Cf': (8, 12), 'Es': (8, 13), 'Fm': (8, 14), 'Md': (8, 15), 'No': (8, 16), 'Lr': (8, 17),
+        'Rf': (9, 4), 'Db': (9, 5), 'Sg': (9, 6), 'Bh': (9, 7), 'Hs': (9, 8), 'Mt': (9, 9), 'Ds': (9, 10), 'Rg': (9, 11), 'Cn': (9, 12),
+        'Nh': (9, 13), 'Fl': (9, 14), 'Mc': (9, 15), 'Lv': (9, 16), 'Ts': (9, 17), 'Og': (9, 18)
     }
     elements_to_plot = all_elements if show_all_elements else [e for e in all_elements if e in available_elements or e in selected_elements]
     fig = go.Figure()
@@ -425,70 +445,28 @@ def plot_periodic_table(available_elements, selected_elements, element_color_map
     fig.update_layout(
         title=dict(text=f"{title_text} (Selected Elements with Bold Outline)", x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
         xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        yaxis=dict(range=[-9, -2], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        yaxis=dict(range=[-10, -1], showgrid=False, zeroline=False, showticklabels=False, title=''),
         plot_bgcolor='white', paper_bgcolor='white',
-        width=900, height=450,
-        margin=dict(l=20, r=20, t=50, b=20)
+        width=900, height=600,
+        margin=dict(l=20, r=20, t=50, b=20),
+        template='seaborn'
     )
     return fig
 
-def plot_full_periodic_table(all_elements, available_elements, selected_elements, element_color_map, fontsize=14):
-    periodic_table_positions = {
-        'Li': (3, 1), 'Na': (4, 1), 'K': (5, 1), 'Rb': (6, 1), 'Cs': (7, 1),
-        'Be': (3, 2), 'Mg': (4, 2), 'Ca': (5, 2), 'Sr': (6, 2), 'Ba': (7, 2),
-        'Sc': (5, 3), 'Y': (6, 3), 'La': (8, 3), 'Ce': (8, 4), 'Pr': (8, 5), 'Nd': (8, 6),
-        'Sm': (8, 7), 'Eu': (8, 8), 'Gd': (8, 9), 'Tb': (8, 10), 'Dy': (8, 11), 'Ho': (8, 12),
-        'Er': (8, 13), 'Tm': (8, 14), 'Yb': (8, 15), 'Lu': (8, 16),
-        'Ti': (5, 4), 'Zr': (6, 4), 'Hf': (7, 4), 'V': (5, 5), 'Nb': (6, 5), 'Ta': (7, 5),
-        'Cr': (5, 6), 'Mo': (6, 6), 'Mn': (5, 7), 'Fe': (5, 8), 'Co': (5, 9), 'Ni': (5, 10),
-        'Cu': (5, 11), 'Zn': (5, 12), 'B': (3, 13), 'Al': (4, 13), 'Ga': (5, 13), 'In': (6, 13),
-        'Tl': (7, 13), 'Si': (4, 14), 'Ge': (5, 14), 'Sn': (6, 14), 'Pb': (7, 14),
-        'P': (4, 15), 'As': (5, 15), 'Sb': (6, 15), 'Bi': (7, 15), 'S': (4, 16), 'Se': (5, 16),
-        'Te': (6, 16), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17), 'Au': (7, 11), 'Ag': (6, 11),
-        'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8), 'N': (3, 15), 'Na': (3, 1), 'K': (4, 1),
-        'H': (1, 1), 'He': (1, 18), 'C': (3, 14), 'F': (3, 17), 'Ne': (3, 18), 'Ar': (4, 18),
-        'Kr': (5, 18), 'Xe': (6, 18), 'Tc': (5, 7), 'Rh': (5, 9), 'Pm': (8, 6), 'W': (6, 6),
-        'Re': (6, 7), 'Os': (6, 8), 'Ir': (6, 9), 'Pt': (6, 10), 'Hg': (6, 12)
-    }
-    fig = go.Figure()
-    for element in all_elements:
-        if element in periodic_table_positions:
-            row, col = periodic_table_positions[element]
-            color = element_color_map.get(element, '#D3D3D3') if element in available_elements else '#D3D3D3'
-            opacity = 1.0 if element in selected_elements else (0.7 if element in available_elements else 0.3)
-            line_width = 4 if element in selected_elements else 2
-            fig.add_trace(go.Scatter(
-                x=[col], y=[-row],
-                mode='markers+text',
-                text=[element],
-                textposition='middle center',
-                textfont=dict(size=fontsize, family='Arial'),
-                marker=dict(size=40, color=color, opacity=opacity, line=dict(width=line_width, color='black')),
-                hoverinfo='text',
-                hovertext=[f"Element: {element}<br>Electronegativity: {electronegativity.get(element, 1.0):.2f}<br>Thermoelectric Weight: {thermoelectric_weights.get(element, 1.0):.2f}"],
-                name=element,
-                showlegend=False
-            ))
-    fig.update_layout(
-        title=dict(text='Periodic Table: Full (Unavailable in Gray) (Selected Elements with Bold Outline)', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
-        xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        yaxis=dict(range=[-9, -2], showgrid=False, zeroline=False, showticklabels=False, title=''),
-        plot_bgcolor='white', paper_bgcolor='white',
-        width=900, height=450,
-        margin=dict(l=20, r=20, t=50, b=20)
-    )
-    return fig
-
-# Plot both periodic tables, with full periodic table first
+# Plot both periodic tables
 st.subheader("Full Periodic Table")
-fig_full = plot_full_periodic_table(all_elements, available_elements, st.session_state.selected_elements, default_element_color_map, fontsize=14)
+fig_full = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=True, fontsize=font_size)
 st.plotly_chart(fig_full, use_container_width=True)
 
 st.subheader("Available Elements Only")
-fig_present = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=False, fontsize=14)
+fig_present = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=False, fontsize=font_size)
 st.plotly_chart(fig_present, use_container_width=True)
 
-# Element selection via dropdown
+# Optimization mode selection
+st.header("Optimization Mode")
+st.session_state.optimization_mode = st.selectbox("Select Optimization Mode", ["Informatics-Attention Optimize", "Manual"], index=0, key='optimization_mode')
+
+# Element selection
 st.header("Select Elements")
 st.session_state.selected_elements = st.multiselect(
     "Select up to three elements",
@@ -507,29 +485,35 @@ for element in st.session_state.selected_elements:
 st.session_state.proportions = {k: v for k, v in st.session_state.proportions.items() if k in st.session_state.selected_elements}
 st.session_state.compositions = {k: v for k, v in st.session_state.compositions.items() if k in st.session_state.selected_elements}
 
-# Proportion and Composition input
+# Composition input
 st.header("Input Proportions and View Normalized Compositions")
 if st.session_state.selected_elements:
     st.write(f"Selected Elements: {', '.join(st.session_state.selected_elements)}")
     
-    # Proportion input
-    st.subheader("Proportions")
-    cols = st.columns(len(st.session_state.selected_elements))
-    for idx, element in enumerate(st.session_state.selected_elements):
-        with cols[idx]:
-            st.session_state.proportions[element] = st.number_input(
-                f"Proportion for {element}", min_value=0.0, value=st.session_state.proportions.get(element, 0.0), step=0.1, key=f"prop_{element}"
-            )
-    
-    # Normalize proportions to compositions
-    if st.button("Normalize Proportions"):
-        total = sum(st.session_state.proportions.values())
-        if total > 0:
-            for element in st.session_state.proportions:
-                st.session_state.compositions[element] = st.session_state.proportions[element] / total
-            st.rerun()
-        else:
-            st.error("Please provide non-zero proportions for at least one element.")
+    if st.session_state.optimization_mode == "Manual":
+        st.subheader("Proportions")
+        cols = st.columns(len(st.session_state.selected_elements))
+        for idx, element in enumerate(st.session_state.selected_elements):
+            with cols[idx]:
+                st.session_state.proportions[element] = st.number_input(
+                    f"Proportion for {element}", min_value=0.0, value=st.session_state.proportions.get(element, 0.0), step=0.1, key=f"prop_{element}"
+                )
+        if st.button("Normalize Proportions"):
+            total = sum(st.session_state.proportions.values())
+            if total > 0:
+                for element in st.session_state.proportions:
+                    st.session_state.compositions[element] = st.session_state.proportions[element] / total
+                st.rerun()
+            else:
+                st.error("Please provide non-zero proportions for at least one element.")
+    else:
+        try:
+            comp = Composition({el: 1.0 for el in st.session_state.selected_elements})
+            st.session_state.compositions = {el: comp[el] / comp.num_atoms for el in comp}
+            st.write(f"Optimized composition: {comp.reduced_formula}")
+        except Exception as e:
+            st.error(f"Invalid composition: {str(e)}")
+            st.session_state.compositions = {el: 0.0 for el in st.session_state.selected_elements}
     
     # Display normalized compositions
     st.subheader("Normalized Compositions")
@@ -560,13 +544,25 @@ else:
     st.write("Using SciBERT-based material type suggestion from arXiv abstracts.")
     if st.session_state.selected_elements and sum(st.session_state.compositions.values()) > 0:
         try:
-            material_type, summary_dict, _ = extract_material_type(st.session_state.selected_elements, st.session_state.compositions)
+            material_type, summary_dict, verbatim_matches = extract_material_type(st.session_state.selected_elements, st.session_state.compositions, custom_keywords, year_range, pmi_threshold)
             st.session_state.sign_bias = material_type
             st.write(f"**Suggested Material Type**: {material_type}")
             st.write(f"**p-type Probability**: {summary_dict['p_type_prob']:.3f}")
             st.write(f"**n-type Probability**: {summary_dict['n_type_prob']:.3f}")
             st.write(f"**Total Abstracts Analyzed**: {summary_dict['total_abstracts']}")
             st.write(f"**Abstracts with Formula Matches**: {summary_dict['formula_matches']}")
+            st.write(f"**Matched Terms**: {', '.join(summary_dict['matched_terms'])}")
+            st.subheader("PMI Scores")
+            for term_pair, pmi in summary_dict['pmi_scores'].items():
+                st.write(f"{term_pair}: {pmi:.2f}")
+            st.subheader("Relevant Abstract Snippets")
+            for match in verbatim_matches:
+                st.write(f"**Title**: {match['title']}")
+                st.write(f"**arXiv ID**: {match['arxiv_id']}")
+                st.write(f"**Snippet**: {match['snippet']}")
+                st.write(f"**Label**: {match['label']}")
+                st.write(f"**Score**: {match['score']:.3f}")
+                st.markdown("---")
         except Exception as e:
             st.error(f"Failed to get SciBERT suggestion: {e}. Defaulting to Neutral.")
             logger.error(f"SciBERT material type error: {e}")
@@ -688,7 +684,8 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
             legend=dict(x=-(0.15 + legend_spacing), y=1, xanchor='right', font=dict(size=legend_font_size)),
             plot_bgcolor='white',
             paper_bgcolor='white',
-            margin=dict(l=50, r=50, t=80, b=50)
+            margin=dict(l=50, r=50, t=80, b=50),
+            template='seaborn'
         )
     except Exception as e:
         st.error(f"Error updating ternary plot layout: {e}")
@@ -736,7 +733,8 @@ def plot_temperature_variance(elements, user_composition, max_comp, temp_range, 
             plot_bgcolor='white',
             paper_bgcolor='white',
             legend=dict(x=1.05, y=1, font=dict(size=legend_font_size)),
-            margin=dict(l=50, r=50, t=80, b=50)
+            margin=dict(l=50, r=50, t=80, b=50),
+            template='seaborn'
         )
     except Exception as e:
         st.error(f"Error updating temperature variance plot layout: {e}")
@@ -753,7 +751,7 @@ if st.button("Generate Ternary Diagram"):
             available_elements
         )
         total = sum(proportions.values())
-        if total == 0:
+        if total == 0 and st.session_state.optimization_mode == "Manual":
             st.error("Please provide non-zero proportions for at least one element.")
         else:
             # Compute z_mean statistics and bias vector
@@ -920,5 +918,15 @@ if st.button("Generate Ternary Diagram"):
                     file_name="temperature_variance_data.csv",
                     mime="text/csv"
                 )
+            # Plot physics attention visualizations
+            if not st.session_state.use_manual_material_type:
+                st.write("### Physics Attention Visualizations")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.plotly_chart(plot_material_type_histogram(summary_dict, font_size), use_container_width=True)
+                    st.plotly_chart(plot_relevance_box_plot(summary_dict, font_size), use_container_width=True)
+                with col2:
+                    st.plotly_chart(plot_material_probabilities(summary_dict, font_size), use_container_width=True)
+                    st.plotly_chart(plot_pmi_network(summary_dict, font_size), use_container_width=True)
     else:
         st.error("Please select at least one element.")
