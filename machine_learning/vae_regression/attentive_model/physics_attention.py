@@ -96,6 +96,13 @@ def fetch_arxiv_abstracts(elements, composition_dict):
 @st.cache_data
 def score_abstract_with_scibert(abstract, formula):
     try:
+        global scibert_tokenizer, scibert_model
+        if 'scibert_tokenizer' not in globals() or 'scibert_model' not in globals():
+            scibert_tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
+            scibert_model = AutoModel.from_pretrained('allenai/scibert_scivocab_uncased')
+            scibert_model.eval()
+            scibert_model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        
         inputs = scibert_tokenizer(abstract, return_tensors="pt", truncation=True, max_length=512, padding=True)
         with torch.no_grad():
             outputs = scibert_model(**inputs, output_attentions=True)
@@ -151,13 +158,6 @@ def score_abstract_with_scibert(abstract, formula):
 @st.cache_data(hash_funcs={dict: lambda x: tuple(sorted(x.items()))})
 def extract_material_type(elements, composition_dict):
     try:
-        global scibert_tokenizer, scibert_model
-        if 'scibert_tokenizer' not in globals() or 'scibert_model' not in globals():
-            scibert_tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
-            scibert_model = AutoModel.from_pretrained('allenai/scibert_scivocab_uncased')
-            scibert_model.eval()
-            scibert_model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-        
         comp = Composition({el: composition_dict.get(el, 0) for el in elements})
         formula = comp.reduced_formula
         formula_variants = [
@@ -191,6 +191,7 @@ def extract_material_type(elements, composition_dict):
         relevance_scores = []
         p_scores = []
         n_scores = []
+        matched_terms = set()
         
         for abstract_data in abstracts:
             abstract = abstract_data['abstract'].lower()
@@ -219,6 +220,8 @@ def extract_material_type(elements, composition_dict):
                 if not formula_in_context:
                     continue
                 thermoelectric_context = any(term in context_text.lower() for term in sum(THERMOELECTRIC_SYNONYMS.values(), []) + UNIT_VARIANTS)
+                if thermoelectric_context:
+                    matched_terms.update([term for term in sum(THERMOELECTRIC_SYNONYMS.values(), []) + UNIT_VARIANTS if term in context_text.lower()])
                 score = relevance_score * TERM_WEIGHTS.get(label, 2.0) * (1.2 if thermoelectric_context else 1.0)
                 classifications.append(label)
                 verbatim_matches.append({
@@ -239,5 +242,228 @@ def extract_material_type(elements, composition_dict):
         p_type_prob = sum(p_scores) / (sum(p_scores) + sum(n_scores) + 1e-6) if p_scores or n_scores else 0.0
         n_type_prob = sum(n_scores) / (sum(p_scores) + sum(n_scores) + 1e-6) if p_scores or n_scores else 0.0
         
+        material_type = "Neutral"
+        if p_type_prob > n_type_prob + 0.1:
+            material_type = "p-type"
+        elif n_type_prob > p_type_prob + 0.1:
+            material_type = "n-type"
+        
         summary_dict = {
-            "total_abstract
+            "total_abstracts": total_abstracts,
+            "formula_matches": formula_matches,
+            "p_type_count": p_count,
+            "n_type_count": n_count,
+            "neutral_count": neutral_count,
+            "relevance_scores": relevance_scores,
+            "matched_terms": list(matched_terms),
+            "p_type_prob": p_type_prob,
+            "n_type_prob": n_type_prob
+        }
+        
+        if not verbatim_matches:
+            verbatim_matches = [{"arxiv_id": "", "title": "", "snippet": "No p-type or n-type matches found.", "label": "Neutral", "score": 0.0}]
+        
+        logger.info(f"Material type: {material_type}, p-type prob: {p_type_prob:.3f}, n-type prob: {n_type_prob:.3f}")
+        return material_type, summary_dict, verbatim_matches
+    except Exception as e:
+        logger.error(f"Failed to extract material type: {str(e)}")
+        summary_dict = {
+            "total_abstracts": 0,
+            "formula_matches": 0,
+            "p_type_count": 0,
+            "n_type_count": 0,
+            "neutral_count": 0,
+            "relevance_scores": [],
+            "matched_terms": [],
+            "p_type_prob": 0.0,
+            "n_type_prob": 0.0
+        }
+        verbatim_matches = [{"arxiv_id": "", "title": "", "snippet": f"Error: {str(e)}", "label": "Neutral", "score": 0.0}]
+        return "Neutral", summary_dict, verbatim_matches
+
+# Plot material type histogram
+def plot_material_type_histogram(summary_dict, font_size):
+    labels = ['p-type', 'n-type', 'Neutral']
+    counts = [
+        summary_dict['p_type_count'],
+        summary_dict['n_type_count'],
+        summary_dict['neutral_count']
+    ]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=labels,
+        y=counts,
+        marker=dict(color=['#FF9999', '#66B2FF', '#99FF99'], opacity=0.7),
+        text=counts,
+        textposition='auto',
+        textfont=dict(size=font_size - 2, family='Arial')
+    ))
+    fig.update_layout(
+        title=dict(
+            text='Material Type Distribution in Retrieved Abstracts',
+            x=0.5,
+            xanchor='center',
+            font=dict(size=font_size + 4, family='Arial')
+        ),
+        xaxis_title='Material Type',
+        yaxis_title='Count',
+        xaxis=dict(
+            titlefont=dict(size=font_size, family='Arial'),
+            tickfont=dict(size=font_size - 2, family='Arial')
+        ),
+        yaxis=dict(
+            titlefont=dict(size=font_size, family='Arial'),
+            tickfont=dict(size=font_size - 2, family='Arial')
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    return fig
+
+# Plot material type probabilities
+def plot_material_probabilities(summary_dict, font_size):
+    labels = ['p-type', 'n-type']
+    probs = [summary_dict['p_type_prob'], summary_dict['n_type_prob']]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=labels,
+        y=probs,
+        marker=dict(color=['#FF9999', '#66B2FF'], opacity=0.7),
+        text=[f'{p:.3f}' for p in probs],
+        textposition='auto',
+        textfont=dict(size=font_size - 2, family='Arial')
+    ))
+    fig.update_layout(
+        title=dict(
+            text='Probability of Material Type',
+            x=0.5,
+            xanchor='center',
+            font=dict(size=font_size + 4, family='Arial')
+        ),
+        xaxis_title='Material Type',
+        yaxis_title='Probability',
+        xaxis=dict(
+            titlefont=dict(size=font_size, family='Arial'),
+            tickfont=dict(size=font_size - 2, family='Arial')
+        ),
+        yaxis=dict(
+            titlefont=dict(size=font_size, family='Arial'),
+            tickfont=dict(size=font_size - 2, family='Arial'),
+            range=[0, 1]
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    return fig
+
+# Plot relevance score box plot
+def plot_relevance_box_plot(summary_dict, font_size):
+    fig = go.Figure()
+    fig.add_trace(go.Box(
+        y=summary_dict['relevance_scores'],
+        name='Relevance Scores',
+        marker_color='#FFCC00',
+        boxpoints='all',
+        jitter=0.3,
+        pointpos=-1.8
+    ))
+    fig.update_layout(
+        title=dict(
+            text='Relevance Scores of Abstracts',
+            x=0.5,
+            xanchor='center',
+            font=dict(size=font_size + 4, family='Arial')
+        ),
+        yaxis_title='Relevance Score',
+        yaxis=dict(
+            titlefont=dict(size=font_size, family='Arial'),
+            tickfont=dict(size=font_size - 2, family='Arial')
+        ),
+        xaxis=dict(
+            showticklabels=False
+        ),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50)
+    )
+    return fig
+
+# Plot term co-occurrence network
+def plot_term_cooccurrence_network(abstracts, font_size):
+    try:
+        G = nx.Graph()
+        terms = list(sum(THERMOELECTRIC_SYNONYMS.values(), []) + UNIT_VARIANTS)
+        for term in terms:
+            G.add_node(term, size=10)
+        
+        for abstract_data in abstracts:
+            abstract = abstract_data['abstract'].lower()
+            present_terms = [term for term in terms if term in abstract]
+            for term1, term2 in combinations(present_terms, 2):
+                if G.has_edge(term1, term2):
+                    G[term1][term2]['weight'] = G[term1][term2].get('weight', 0) + 1
+                else:
+                    G.add_edge(term1, term2, weight=1)
+        
+        pos = nx.spring_layout(G, k=0.5, iterations=50)
+        edge_x, edge_y = [], []
+        for edge in G.edges(data=True):
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+        
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=1, color='#888'),
+            hoverinfo='none',
+            mode='lines'
+        )
+        
+        node_x, node_y = [], []
+        node_sizes = []
+        node_text = []
+        for node in G.nodes():
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            degree = G.degree(node)
+            node_sizes.append(10 + degree * 5)
+            node_text.append(f"{node}<br>Degree: {degree}")
+        
+        node_trace = go.Scatter(
+            x=node_x, y=node_y,
+            mode='markers+text',
+            text=[n for n in G.nodes()],
+            textposition='top center',
+            textfont=dict(size=font_size - 2, family='Arial'),
+            hoverinfo='text',
+            hovertext=node_text,
+            marker=dict(
+                size=node_sizes,
+                color='#FFCC00',
+                line=dict(width=2, color='black')
+            )
+        )
+        
+        fig = go.Figure(data=[edge_trace, node_trace])
+        fig.update_layout(
+            title=dict(
+                text='Term Co-occurrence Network in Abstracts',
+                x=0.5,
+                xanchor='center',
+                font=dict(size=font_size + 4, family='Arial')
+            ),
+            showlegend=False,
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=50, r=50, t=80, b=50)
+        )
+        return fig
+    except Exception as e:
+        logger.error(f"Failed to plot term co-occurrence network: {str(e)}")
+        return go.Figure()
