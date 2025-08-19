@@ -505,7 +505,7 @@ st.plotly_chart(fig_present, use_container_width=True)
 
 # Optimization mode selection
 st.header("Optimization Mode")
-optimization_mode = st.selectbox("Select Optimization Mode", ["Informatics-Attention Optimize", "Manual"], index=0, key='optimization_mode')
+optimization_mode = st.selectbox("Select Composition Optimization Mode", ["Informatics-Attention Optimize", "Manual"], index=0, key='optimization_mode')
 if optimization_mode != st.session_state.optimization_mode:
     st.session_state.optimization_mode = optimization_mode
 
