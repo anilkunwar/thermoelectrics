@@ -333,7 +333,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 07:09 PM CEST, Tuesday, August 19, 2025
+**Date and Time**: 07:19 PM CEST, Tuesday, August 19, 2025
 """)
 
 # Sidebar for figure customization
@@ -432,9 +432,56 @@ def plot_periodic_table(available_elements, selected_elements, element_color_map
     )
     return fig
 
+def plot_full_periodic_table(all_elements, available_elements, selected_elements, element_color_map, fontsize=14):
+    periodic_table_positions = {
+        'Li': (3, 1), 'Na': (4, 1), 'K': (5, 1), 'Rb': (6, 1), 'Cs': (7, 1),
+        'Be': (3, 2), 'Mg': (4, 2), 'Ca': (5, 2), 'Sr': (6, 2), 'Ba': (7, 2),
+        'Sc': (5, 3), 'Y': (6, 3), 'La': (8, 3), 'Ce': (8, 4), 'Pr': (8, 5), 'Nd': (8, 6),
+        'Sm': (8, 7), 'Eu': (8, 8), 'Gd': (8, 9), 'Tb': (8, 10), 'Dy': (8, 11), 'Ho': (8, 12),
+        'Er': (8, 13), 'Tm': (8, 14), 'Yb': (8, 15), 'Lu': (8, 16),
+        'Ti': (5, 4), 'Zr': (6, 4), 'Hf': (7, 4), 'V': (5, 5), 'Nb': (6, 5), 'Ta': (7, 5),
+        'Cr': (5, 6), 'Mo': (6, 6), 'Mn': (5, 7), 'Fe': (5, 8), 'Co': (5, 9), 'Ni': (5, 10),
+        'Cu': (5, 11), 'Zn': (5, 12), 'B': (3, 13), 'Al': (4, 13), 'Ga': (5, 13), 'In': (6, 13),
+        'Tl': (7, 13), 'Si': (4, 14), 'Ge': (5, 14), 'Sn': (6, 14), 'Pb': (7, 14),
+        'P': (4, 15), 'As': (5, 15), 'Sb': (6, 15), 'Bi': (7, 15), 'S': (4, 16), 'Se': (5, 16),
+        'Te': (6, 16), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17), 'Au': (7, 11), 'Ag': (6, 11),
+        'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8), 'N': (3, 15), 'Na': (3, 1), 'K': (4, 1),
+        'H': (1, 1), 'He': (1, 18), 'C': (3, 14), 'F': (3, 17), 'Ne': (3, 18), 'Ar': (4, 18),
+        'Kr': (5, 18), 'Xe': (6, 18), 'Tc': (5, 7), 'Rh': (5, 9), 'Pm': (8, 6), 'W': (6, 6),
+        'Re': (6, 7), 'Os': (6, 8), 'Ir': (6, 9), 'Pt': (6, 10), 'Hg': (6, 12)
+    }
+    fig = go.Figure()
+    for element in all_elements:
+        if element in periodic_table_positions:
+            row, col = periodic_table_positions[element]
+            color = element_color_map.get(element, '#D3D3D3') if element in available_elements else '#D3D3D3'
+            opacity = 1.0 if element in selected_elements else (0.7 if element in available_elements else 0.3)
+            line_width = 4 if element in selected_elements else 2
+            fig.add_trace(go.Scatter(
+                x=[col], y=[-row],
+                mode='markers+text',
+                text=[element],
+                textposition='middle center',
+                textfont=dict(size=fontsize, family='Arial'),
+                marker=dict(size=40, color=color, opacity=opacity, line=dict(width=line_width, color='black')),
+                hoverinfo='text',
+                hovertext=[f"Element: {element}<br>Electronegativity: {electronegativity.get(element, 1.0):.2f}<br>Thermoelectric Weight: {thermoelectric_weights.get(element, 1.0):.2f}"],
+                name=element,
+                showlegend=False
+            ))
+    fig.update_layout(
+        title=dict(text='Periodic Table: Full (Unavailable in Gray) (Selected Elements with Bold Outline)', x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
+        xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        yaxis=dict(range=[-9, -2], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        plot_bgcolor='white', paper_bgcolor='white',
+        width=900, height=450,
+        margin=dict(l=20, r=20, t=50, b=20)
+    )
+    return fig
+
 # Plot both periodic tables, with full periodic table first
 st.subheader("Full Periodic Table")
-fig_full = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=True, fontsize=14)
+fig_full = plot_full_periodic_table(all_elements, available_elements, st.session_state.selected_elements, default_element_color_map, fontsize=14)
 st.plotly_chart(fig_full, use_container_width=True)
 
 st.subheader("Available Elements Only")
