@@ -53,7 +53,7 @@ thermoelectric_weights = {
 
 # VAE Model
 class VAE(nn.Module):
-    def __init__(self, input_dim=66, latent_dim=8):  # Updated to match checkpoint
+    def __init__(self, input_dim=66, latent_dim=8):
         super(VAE, self).__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
@@ -280,7 +280,7 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
 # Load models and scalers
 script_dir = os.path.dirname(os.path.abspath(__file__))
 try:
-    vae = VAE(input_dim=66).to(device)  # Updated to match checkpoint
+    vae = VAE(input_dim=66).to(device)
     regressor = Regressor().to(device)
     vae.load_state_dict(torch.load(os.path.join(script_dir, 'vae_model.pt'), map_location=device))
     regressor.load_state_dict(torch.load(os.path.join(script_dir, 'regressor_model.pt'), map_location=device))
@@ -343,7 +343,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 **Optimization Mode**: Choose 'Manual' to specify composition ratios or 'Informatics-Attention Optimize' for automatic composition optimization.
 **Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is suggested by a SciBERT model analyzing arXiv abstracts with customizable keywords and year range.
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1.
-**Date and Time**: 07:59 PM CEST, Tuesday, August 19, 2025
+**Date and Time**: 08:08 PM CEST, Tuesday, August 19, 2025
 """)
 
 # Sidebar for figure customization
@@ -368,6 +368,8 @@ ternary_axes_color = st.sidebar.color_picker("Ternary Axes Color", '#000000')
 point_size = st.sidebar.slider("Point Size (Ternary/Temperature)", 5, 20, 10)
 axes_box_thickness = st.sidebar.slider("Axes Box Thickness", 1, 5, 2)
 legend_spacing = st.sidebar.slider("Legend Spacing (Point Legend to Ternary)", 0.0, 0.5, 0.3, step=0.05)
+periodic_table_marker_size = st.sidebar.slider("Periodic Table Marker Size", 20, 60, 40)
+periodic_table_font_size = st.sidebar.slider("Periodic Table Font Size", 8, 20, 14)
 
 # Physics attention options
 st.sidebar.header("Physics Attention Options")
@@ -406,7 +408,7 @@ except Exception as e:
 st.header("Periodic Table Reference")
 st.write("Below are two periodic tables: one showing the full periodic table with unavailable elements in gray, and another showing only available elements in color. Selected elements have bold outlines in both.")
 
-def plot_periodic_table(available_elements, selected_elements, element_color_map, show_all_elements=False, fontsize=14):
+def plot_periodic_table(available_elements, selected_elements, element_color_map, show_all_elements=False, fontsize=14, marker_size=40):
     periodic_table_positions = {
         'H': (1, 1), 'He': (1, 18), 'Li': (2, 1), 'Be': (2, 2), 'B': (2, 13), 'C': (2, 14), 'N': (2, 15), 'O': (2, 16), 'F': (2, 17), 'Ne': (2, 18),
         'Na': (3, 1), 'Mg': (3, 2), 'Al': (3, 13), 'Si': (3, 14), 'P': (3, 15), 'S': (3, 16), 'Cl': (3, 17), 'Ar': (3, 18),
@@ -437,7 +439,7 @@ def plot_periodic_table(available_elements, selected_elements, element_color_map
                 text=[element],
                 textposition='middle center',
                 textfont=dict(size=fontsize, family='Arial'),
-                marker=dict(size=40, color=color, opacity=opacity, line=dict(width=line_width, color='black')),
+                marker=dict(size=marker_size, color=color, opacity=opacity, line=dict(width=line_width, color='black')),
                 hoverinfo='text',
                 hovertext=[f"Element: {element}<br>Electronegativity: {electronegativity.get(element, 1.0):.2f}<br>Thermoelectric Weight: {thermoelectric_weights.get(element, 1.0):.2f}"],
                 name=element,
@@ -449,7 +451,7 @@ def plot_periodic_table(available_elements, selected_elements, element_color_map
         xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
         yaxis=dict(range=[-10, -1], showgrid=False, zeroline=False, showticklabels=False, title=''),
         plot_bgcolor='white', paper_bgcolor='white',
-        width=900, height=600,
+        autosize=True,  # Enable responsive sizing
         margin=dict(l=20, r=20, t=50, b=20),
         template='seaborn'
     )
@@ -457,16 +459,19 @@ def plot_periodic_table(available_elements, selected_elements, element_color_map
 
 # Plot both periodic tables
 st.subheader("Full Periodic Table")
-fig_full = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=True, fontsize=font_size)
+fig_full = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=True, fontsize=periodic_table_font_size, marker_size=periodic_table_marker_size)
 st.plotly_chart(fig_full, use_container_width=True)
 
 st.subheader("Available Elements Only")
-fig_present = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=False, fontsize=font_size)
+fig_present = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=False, fontsize=periodic_table_font_size, marker_size=periodic_table_marker_size)
 st.plotly_chart(fig_present, use_container_width=True)
 
 # Optimization mode selection
 st.header("Optimization Mode")
-st.session_state.optimization_mode = st.selectbox("Select Optimization Mode", ["Informatics-Attention Optimize", "Manual"], index=0, key='optimization_mode')
+optimization_mode = st.selectbox("Select Optimization Mode", ["Informatics-Attention Optimize", "Manual"], index=0, key='optimization_mode')
+# Update session state if changed
+if optimization_mode != st.session_state.optimization_mode:
+    st.session_state.optimization_mode = optimization_mode
 
 # Element selection
 st.header("Select Elements")
