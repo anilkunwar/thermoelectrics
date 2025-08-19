@@ -50,7 +50,7 @@ thermoelectric_weights = {
 
 # VAE Model
 class VAE(nn.Module):
-    def __init__(self, input_dim=66, latent_dim=8):
+    def __init__(self, input_dim=66, latent_dim=8):  # Changed to 66
         super(VAE, self).__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
