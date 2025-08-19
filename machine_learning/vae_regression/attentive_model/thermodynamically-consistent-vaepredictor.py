@@ -16,6 +16,9 @@ from itertools import combinations
 import logging
 from physics_attention import extract_material_type, plot_material_type_histogram, plot_material_probabilities, plot_relevance_box_plot, plot_pmi_network
 
+# Set page config as the first Streamlit command
+st.set_page_config(page_title="Ternary Seebeck Coefficient Predictor", layout="wide")
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -50,7 +53,7 @@ thermoelectric_weights = {
 
 # VAE Model
 class VAE(nn.Module):
-    def __init__(self, input_dim=66, latent_dim=8):  # Changed to 66
+    def __init__(self, input_dim=66, latent_dim=8):  # Updated to match checkpoint
         super(VAE, self).__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
@@ -277,7 +280,7 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
 # Load models and scalers
 script_dir = os.path.dirname(os.path.abspath(__file__))
 try:
-    vae = VAE().to(device)
+    vae = VAE(input_dim=66).to(device)  # Updated to match checkpoint
     regressor = Regressor().to(device)
     vae.load_state_dict(torch.load(os.path.join(script_dir, 'vae_model.pt'), map_location=device))
     regressor.load_state_dict(torch.load(os.path.join(script_dir, 'regressor_model.pt'), map_location=device))
@@ -301,7 +304,7 @@ all_elements = [
     'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc', 'Lv', 'Ts', 'Og'
 ]
 
-# Available elements
+# Available elements (matching checkpoint)
 available_elements = [
     'Mg', 'Cs', 'Co', 'Zr', 'Se', 'Dy', 'Pb', 'Ga', 'O', 'Sn', 'Yb', 'B', 'La', 'Si', 'V', 'Fe', 'S', 'Sc', 'Tl', 'Zn',
     'Cl', 'Ce', 'Er', 'Nd', 'Pd', 'Y', 'P', 'Ta', 'In', 'Te', 'Ru', 'Rb', 'Tm', 'Tb', 'Sb', 'Al', 'Lu', 'Bi', 'Pr', 'Eu',
@@ -333,7 +336,6 @@ default_color_list = base_color_list + additional_colors
 default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_elements)]))
 
 # Streamlit UI
-st.set_page_config(page_title="Ternary Seebeck Coefficient Predictor", layout="wide")
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
 This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, choose optimization mode, and input proportions or use optimized compositions. Choose a material type (p-type, n-type, or Neutral) either manually or using a SciBERT-based suggestion. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart and uses a direction-specific bias vector to control the Seebeck coefficient's sign. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
@@ -341,7 +343,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 **Optimization Mode**: Choose 'Manual' to specify composition ratios or 'Informatics-Attention Optimize' for automatic composition optimization.
 **Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is suggested by a SciBERT model analyzing arXiv abstracts with customizable keywords and year range.
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1.
-**Date and Time**: 07:47 PM CEST, Tuesday, August 19, 2025
+**Date and Time**: 07:59 PM CEST, Tuesday, August 19, 2025
 """)
 
 # Sidebar for figure customization
