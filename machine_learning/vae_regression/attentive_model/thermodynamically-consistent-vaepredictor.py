@@ -264,7 +264,32 @@ def plot_formula_histogram(verbatim_matches, font_size):
     )
     return fig
 
-def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
+# Plot literature Seebeck values
+def plot_literature_seebeck(summary_dict, font_size):
+    if 'seebeck_values' not in summary_dict or not summary_dict['seebeck_values']:
+        return None
+    seebeck_values = summary_dict['seebeck_values']
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(
+        x=seebeck_values,
+        nbinsx=30,
+        marker=dict(color='#1f77b4', opacity=0.7),
+        name='Literature Seebeck'
+    ))
+    fig.update_layout(
+        title=dict(text='Histogram of Literature Seebeck Coefficients (μV/K)', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+        xaxis_title='Seebeck Coefficient (μV/K)',
+        yaxis_title='Frequency',
+        xaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        yaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50),
+        template='seaborn'
+    )
+    return fig
+
+def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003, summary_dict=None):
     try:
         df = featurize_composition(composition_dict, available_elements, temperature)
         X_scaled = preprocess_new_data(df, available_elements, _scaler)
@@ -282,6 +307,11 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
             y_pred_unbiased = np.clip(y_pred_unbiased, -300, 300)
             logger.debug(f"Unbiased z_mean: {z_mean_original.cpu().numpy().tolist()}, y_pred_unbiased: {y_pred_unbiased.tolist()}")
             if sign_bias is not None and bias_vector is not None:
+                # Adjust bias magnitude based on SciBERT Seebeck values
+                if summary_dict and 'seebeck_values' in summary_dict and summary_dict['seebeck_values']:
+                    avg_seebeck = np.mean([abs(v) for v in summary_dict['seebeck_values']])
+                    bias_magnitude = bias_magnitude * (avg_seebeck / 100.0)  # Scale based on literature
+                    logger.info(f"Adjusted bias_magnitude using SciBERT Seebeck values: {bias_magnitude}")
                 bias_vector = torch.FloatTensor(bias_vector).to(device) * bias_magnitude
                 if sign_bias == 'p-type':
                     z_mean = z_mean + bias_vector
@@ -295,8 +325,11 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
                 if sign_bias == 'n-type' and y_pred[0] > 0:
                     y_pred = -y_pred
                     logger.warning(f"N-type bias produced positive Seebeck {y_pred[0]:.2f}, enforced negative sign")
-                if abs(y_pred[0]) > 0:
-                    y_pred = y_pred * (abs(y_pred_unbiased[0]) / abs(y_pred[0]))
+                # Scale prediction to match SciBERT Seebeck magnitude if available
+                if summary_dict and 'seebeck_values' in summary_dict and summary_dict['seebeck_values']:
+                    scale_factor = avg_seebeck / abs(y_pred[0]) if abs(y_pred[0]) > 0 else 1.0
+                    y_pred = y_pred * scale_factor
+                    logger.info(f"Scaled prediction by {scale_factor} to match SciBERT Seebeck magnitude")
                 logger.debug(f"Biased z_mean: {z_mean.cpu().numpy().tolist()}, y_pred: {y_pred.tolist()}")
             else:
                 y_pred = y_pred_unbiased
@@ -305,7 +338,7 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
         logger.error(f"Prediction failed: {e}")
         if sign_bias is not None:
             logger.warning(f"Retrying prediction without sign bias due to error with {sign_bias} bias.")
-            return predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=bias_magnitude)
+            return predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=bias_magnitude, summary_dict=summary_dict)
         return None, None
 
 # Load models and scalers
@@ -369,12 +402,13 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 # Streamlit UI
 st.title("Ternary Seebeck Coefficient Predictor")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, choose optimization mode, and input proportions or use optimized compositions. Choose a material type (p-type, n-type, or Neutral) either manually or using a SciBERT-based suggestion. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart and uses a direction-specific bias vector to control the Seebeck coefficient's sign. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, choose optimization mode, and input proportions or use optimized compositions based on SciBERT analysis. Choose a material type (p-type, n-type, or Neutral) either manually or using a SciBERT-based suggestion from arXiv abstracts. The app integrates SciBERT-derived Seebeck coefficients to adjust predictions and highlights matched literature formulas.
 
-**Optimization Mode**: Choose 'Manual' to specify composition ratios or 'Informatics-Attention Optimize' for automatic composition optimization.
-**Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is suggested by a SciBERT model analyzing arXiv abstracts with customizable keywords and year range.
+**Optimization Mode**: Choose 'Manual' to specify composition ratios or 'Informatics-Attention Optimize' to use SciBERT-derived formulas and Seebeck values for optimization.
+**Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is suggested by SciBERT analyzing arXiv abstracts with customizable keywords and year range.
+**SciBERT Integration**: Predictions are adjusted using literature Seebeck coefficients (μV/K) and matched formulas (e.g., Bi₂Te₃) from arXiv abstracts.
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1.
-**Date and Time**: 08:34 PM CEST, Tuesday, August 19, 2025
+**Date and Time**: 08:56 PM CEST, Tuesday, August 19, 2025
 """)
 
 # Sidebar for figure customization
@@ -394,6 +428,7 @@ font_size = st.sidebar.slider("Font Size (Axes/Title)", 8, 20, 16)
 grid_width = st.sidebar.slider("Grid Width", 0.5, 3.0, 1.0, step=0.5)
 user_point_color = st.sidebar.color_picker("User Composition Point Color", '#FF0000')
 max_point_color = st.sidebar.color_picker("Max |Seebeck| Point Color", '#00FF00')
+literature_point_color = st.sidebar.color_picker("Literature Formula Point Color", '#FFFF00')
 ternary_grid_color = st.sidebar.color_picker("Ternary Grid Color", '#000000')
 ternary_axes_color = st.sidebar.color_picker("Ternary Axes Color", '#000000')
 point_size = st.sidebar.slider("Point Size (Ternary/Temperature)", 5, 20, 10)
@@ -505,7 +540,7 @@ st.plotly_chart(fig_present, use_container_width=True)
 
 # Optimization mode selection
 st.header("Optimization Mode")
-optimization_mode = st.selectbox("Select Composition Optimization Mode", ["Informatics-Attention Optimize", "Manual"], index=0, key='optimization_mode')
+optimization_mode = st.selectbox("Select Optimization Mode", ["Informatics-Attention Optimize", "Manual"], index=0, key='optimization_mode')
 if optimization_mode != st.session_state.optimization_mode:
     st.session_state.optimization_mode = optimization_mode
 
@@ -551,9 +586,34 @@ if st.session_state.selected_elements:
                 st.error("Please provide non-zero proportions for at least one element.")
     else:
         try:
-            comp = Composition({el: 1.0 for el in st.session_state.selected_elements})
-            st.session_state.compositions = {el: comp[el] / comp.num_atoms for el in comp}
-            st.write(f"Optimized composition: {comp.reduced_formula}")
+            # Use SciBERT-derived formula if available
+            material_type, summary_dict, verbatim_matches = extract_material_type(
+                st.session_state.selected_elements, 
+                {el: 1.0 / len(st.session_state.selected_elements) for el in st.session_state.selected_elements}, 
+                custom_keywords, year_range, pmi_threshold
+            )
+            matched_formulas = list(set([match['matched_formula'] for match in verbatim_matches if 'matched_formula' in match]))
+            if matched_formulas:
+                # Select the formula with the highest average Seebeck coefficient
+                formula_seebeck = {}
+                for formula in matched_formulas:
+                    formula_matches = [m for m in verbatim_matches if m.get('matched_formula') == formula]
+                    seebeck_values = summary_dict.get('seebeck_values', [])
+                    if seebeck_values:
+                        formula_seebeck[formula] = np.mean([abs(v) for v in seebeck_values])
+                if formula_seebeck:
+                    best_formula = max(formula_seebeck, key=formula_seebeck.get)
+                    comp = Composition(best_formula)
+                    st.session_state.compositions = {el: comp[el] / comp.num_atoms for el in comp if el in st.session_state.selected_elements}
+                    st.write(f"Optimized composition based on SciBERT formula: {best_formula}")
+                else:
+                    comp = Composition({el: 1.0 for el in st.session_state.selected_elements})
+                    st.session_state.compositions = {el: comp[el] / comp.num_atoms for el in comp}
+                    st.write(f"Default composition (equal proportions): {comp.reduced_formula}")
+            else:
+                comp = Composition({el: 1.0 for el in st.session_state.selected_elements})
+                st.session_state.compositions = {el: comp[el] / comp.num_atoms for el in comp}
+                st.write(f"No SciBERT formulas found, using default composition: {comp.reduced_formula}")
         except Exception as e:
             st.error(f"Invalid composition: {str(e)}")
             st.session_state.compositions = {el: 0.0 for el in st.session_state.selected_elements}
@@ -599,6 +659,9 @@ else:
             st.write(f"**Total Abstracts Analyzed**: {summary_dict['total_abstracts']}")
             st.write(f"**Abstracts with Formula Matches**: {summary_dict['formula_matches']}")
             st.write(f"**Matched Terms**: {', '.join(summary_dict['matched_terms'])}")
+            if summary_dict.get('seebeck_values'):
+                st.write(f"**Literature Seebeck Coefficients (μV/K)**: Mean = {np.mean(summary_dict['seebeck_values']):.2f}, Std = {np.std(summary_dict['seebeck_values']):.2f}")
+            st.write(f"**Matched Formulas**: {', '.join(set([m.get('matched_formula', 'N/A') for m in verbatim_matches]))}")
             st.subheader("PMI Scores")
             for term_pair, pmi in summary_dict['pmi_scores'].items():
                 st.write(f"{term_pair}: {pmi:.2f}")
@@ -642,6 +705,13 @@ else:
                 st.plotly_chart(fig_formula, use_container_width=True)
             else:
                 st.write("No matched formulas available for histogram.")
+            # Plot literature Seebeck histogram
+            st.subheader("Literature Seebeck Coefficient Histogram")
+            fig_seebeck = plot_literature_seebeck(summary_dict, font_size)
+            if fig_seebeck:
+                st.plotly_chart(fig_seebeck, use_container_width=True)
+            else:
+                st.write("No Seebeck coefficients extracted from literature.")
         except Exception as e:
             st.error(f"Failed to get SciBERT suggestion: {e}. Defaulting to Neutral.")
             logger.error(f"SciBERT material type error: {e}")
@@ -672,7 +742,7 @@ def complete_to_three_elements(selected_elements, proportions, compositions, ava
 
 # Generate ternary data with caching
 @st.cache_resource
-def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, sign_bias, bias_vector, bias_magnitude, steps=30):
+def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, sign_bias, bias_vector, bias_magnitude, summary_dict, steps=30):
     compositions = []
     seebeck_values = []
     for a in np.linspace(0, 1, steps):
@@ -680,7 +750,7 @@ def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temper
             c = 1 - a - b
             if c >= 0:
                 comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
-                seebeck, _ = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
+                seebeck, _ = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude, summary_dict=summary_dict)
                 if seebeck is not None:
                     compositions.append([a, b, c])
                     seebeck_values.append(abs(seebeck))
@@ -690,7 +760,7 @@ def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temper
         logger.error("No valid compositions generated.")
     return np.array(compositions), np.array(seebeck_values)
 
-def plot_ternary_diagram(compositions, seebeck_values, elements, user_composition, user_seebeck, max_comp, max_seebeck, color_scale, font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing, user_point_color, max_point_color, ternary_grid_color, ternary_axes_color):
+def plot_ternary_diagram(compositions, seebeck_values, elements, user_composition, user_seebeck, max_comp, max_seebeck, literature_compositions, literature_seebeck, color_scale, font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing, user_point_color, max_point_color, literature_point_color, ternary_grid_color, ternary_axes_color):
     if len(compositions) == 0:
         st.warning("No valid ternary data to plot. Please check inputs or model files.")
         return None
@@ -736,6 +806,17 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
             hoverinfo='text',
             name='Max |Seebeck|'
         ))
+    if literature_compositions:
+        for comp, seebeck in zip(literature_compositions, literature_seebeck):
+            lit_hover_text = f"Literature Composition<br>{elements[0]}: {comp[0]:.2f}<br>{elements[1]}: {comp[1]:.2f}<br>{elements[2]}: {comp[2]:.2f}<br>|Seebeck|: {seebeck:.2f} μV/K"
+            fig.add_trace(go.Scatterternary(
+                a=[comp[0]], b=[comp[1]], c=[comp[2]],
+                mode='markers',
+                marker=dict(size=point_size + 5, color=literature_point_color, symbol='diamond'),
+                text=[lit_hover_text],
+                hoverinfo='text',
+                name='Literature Composition'
+            ))
     try:
         fig.update_layout(
             title=dict(text=f"Ternary Diagram: |Seebeck Coefficient| at {st.session_state.temperature} K", x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
@@ -775,18 +856,28 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
         return None
     return fig
 
-def plot_temperature_variance(elements, user_composition, max_comp, temp_range, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias, bias_vector, bias_magnitude, font_size, axes_line_width, grid_width, user_point_color, max_point_color, point_size, axes_box_thickness):
+def plot_temperature_variance(elements, user_composition, max_comp, literature_compositions, literature_seebeck, temp_range, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias, bias_vector, bias_magnitude, summary_dict, font_size, axes_line_width, grid_width, user_point_color, max_point_color, literature_point_color, point_size, axes_box_thickness):
     temps = np.linspace(temp_range[0], temp_range[1], 20)
     user_seebeck = []
     max_seebeck = []
+    literature_seebeck_vals = []
     for temp in temps:
-        user_val, _ = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
-        max_val, _ = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
+        user_val, _ = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude, summary_dict=summary_dict)
+        max_val, _ = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude, summary_dict=summary_dict)
         user_seebeck.append(abs(user_val) if user_val is not None else np.nan)
         max_seebeck.append(abs(max_val) if max_val is not None else np.nan)
+        # Predict for literature compositions
+        lit_vals = []
+        for comp in literature_compositions:
+            comp_dict = {elements[i]: comp[i] for i in range(3)}
+            lit_val, _ = predict_seebeck(comp_dict, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude, summary_dict=summary_dict)
+            lit_vals.append(abs(lit_val) if lit_val is not None else np.nan)
+        literature_seebeck_vals.append(lit_vals)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=temps, y=user_seebeck, mode='lines+markers', name='User Composition', line=dict(color=user_point_color, width=axes_line_width), marker=dict(size=point_size)))
     fig.add_trace(go.Scatter(x=temps, y=max_seebeck, mode='lines+markers', name='Max |Seebeck|', line=dict(color=max_point_color, width=axes_line_width), marker=dict(size=point_size)))
+    for idx, lit_vals in enumerate(np.array(literature_seebeck_vals).T):
+        fig.add_trace(go.Scatter(x=temps, y=lit_vals, mode='lines+markers', name=f'Literature Comp {idx+1}', line=dict(color=literature_point_color, width=axes_line_width, dash='dash'), marker=dict(size=point_size)))
     try:
         fig.update_layout(
             title=dict(text='|Seebeck Coefficient| vs Temperature', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
@@ -873,7 +964,8 @@ if st.button("Generate Ternary Diagram"):
                 y_scaler,
                 sign_bias=sign_bias,
                 bias_vector=bias_vector,
-                bias_magnitude=bias_magnitude
+                bias_magnitude=bias_magnitude,
+                summary_dict=st.session_state.summary_dict
             )
             if user_seebeck is None:
                 st.warning("Failed to predict Seebeck coefficient for user composition with sign bias, using unbiased prediction.")
@@ -887,7 +979,8 @@ if st.button("Generate Ternary Diagram"):
                     y_scaler,
                     sign_bias=None,
                     bias_vector=None,
-                    bias_magnitude=bias_magnitude
+                    bias_magnitude=bias_magnitude,
+                    summary_dict=st.session_state.summary_dict
                 )
             if user_seebeck is None:
                 st.error("Failed to predict Seebeck coefficient even without bias. Please check inputs or model files.")
@@ -896,11 +989,43 @@ if st.button("Generate Ternary Diagram"):
             # Generate ternary data with error handling
             try:
                 compositions_array, seebeck_values = generate_ternary_data(
-                    vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude
+                    vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements, 
+                    sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude, summary_dict=st.session_state.summary_dict
                 )
             except Exception as e:
                 st.error(f"Failed to generate ternary data due to computation error: {e}")
                 compositions_array, seebeck_values = [], []
+            # Extract literature compositions and Seebeck values
+            literature_compositions = []
+            literature_seebeck = []
+            if st.session_state.summary_dict.get('matched_terms'):
+                for formula in set([m.get('matched_formula', '') for m in st.session_state.verbatim_matches if m.get('matched_formula')]):
+                    try:
+                        comp = Composition(formula)
+                        comp_dict = {el: comp[el] / comp.num_atoms for el in comp if el in elements}
+                        if len(comp_dict) == len(elements):
+                            lit_comp = [comp_dict.get(elements[i], 0) for i in range(3)]
+                            total = sum(lit_comp)
+                            if total > 0:
+                                lit_comp = [x / total for x in lit_comp]
+                                lit_seebeck, _ = predict_seebeck(
+                                    {elements[i]: lit_comp[i] for i in range(3)},
+                                    st.session_state.temperature,
+                                    available_elements,
+                                    scaler,
+                                    vae,
+                                    regressor,
+                                    y_scaler,
+                                    sign_bias=sign_bias,
+                                    bias_vector=bias_vector,
+                                    bias_magnitude=bias_magnitude,
+                                    summary_dict=st.session_state.summary_dict
+                                )
+                                if lit_seebeck is not None:
+                                    literature_compositions.append(lit_comp)
+                                    literature_seebeck.append(abs(lit_seebeck))
+                    except:
+                        continue
             if len(compositions_array) == 0:
                 st.error("No valid ternary data generated. Using user composition as fallback.")
                 max_comp, max_seebeck_abs, max_seebeck_signed = user_composition, abs(user_seebeck), user_seebeck
@@ -921,7 +1046,8 @@ if st.button("Generate Ternary Diagram"):
                     y_scaler,
                     sign_bias=sign_bias,
                     bias_vector=bias_vector,
-                    bias_magnitude=bias_magnitude
+                    bias_magnitude=bias_magnitude,
+                    summary_dict=st.session_state.summary_dict
                 )
                 if max_seebeck_signed is None:
                     max_seebeck_signed, _ = predict_seebeck(
@@ -934,7 +1060,8 @@ if st.button("Generate Ternary Diagram"):
                         y_scaler,
                         sign_bias=None,
                         bias_vector=None,
-                        bias_magnitude=bias_magnitude
+                        bias_magnitude=bias_magnitude,
+                        summary_dict=st.session_state.summary_dict
                     )
                     if max_seebeck_signed is None:
                         max_seebeck_signed = user_seebeck
@@ -951,18 +1078,30 @@ if st.button("Generate Ternary Diagram"):
             st.write(f"**Maximum |Seebeck| Composition**: {elements[0]}: {max_comp[0]:.2f}, {elements[1]}: {max_comp[1]:.2f}, {elements[2]}: {max_comp[2]:.2f}")
             st.write(f"**Maximum |Seebeck Coefficient|**: {max_seebeck_abs:.2f} μV/K")
             st.write(f"**Maximum Signed Seebeck Coefficient**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
+            # Display literature compositions and Seebeck values if available
+            if literature_compositions:
+                st.write("**Literature Compositions and Seebeck Coefficients**:")
+                for idx, (comp, seebeck) in enumerate(zip(literature_compositions, literature_seebeck)):
+                    st.write(f"  - Composition {idx+1}: {elements[0]}: {comp[0]:.2f}, {elements[1]}: {comp[1]:.2f}, {elements[2]}: {comp[2]:.2f}, |Seebeck|: {seebeck:.2f} μV/K")
             # Plot ternary diagram
             st.write("### Ternary Diagram")
             fig_ternary = plot_ternary_diagram(
                 compositions_array, seebeck_values, elements, user_composition, user_seebeck,
-                max_comp, max_seebeck_abs, color_scale, font_size, axes_line_width, point_size,
-                axes_box_thickness, legend_spacing, user_point_color, max_point_color,
-                ternary_grid_color, ternary_axes_color
+                max_comp, max_seebeck_abs, literature_compositions, literature_seebeck, color_scale,
+                font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing,
+                user_point_color, max_point_color, literature_point_color, ternary_grid_color,
+                ternary_axes_color
             )
             if fig_ternary:
                 st.plotly_chart(fig_ternary, use_container_width=True)
                 try:
                     fig_ternary.write_html(os.path.join(script_dir, 'ternary_diagram.html'))
+                    st.download_button(
+                        label="Download Ternary Diagram as HTML",
+                        data=open(os.path.join(script_dir, 'ternary_diagram.html'), 'r').read(),
+                        file_name="ternary_diagram.html",
+                        mime="text/html"
+                    )
                 except Exception as e:
                     st.warning(f"Failed to save ternary diagram: {e}")
                 # Prepare ternary data for download
@@ -978,14 +1117,21 @@ if st.button("Generate Ternary Diagram"):
             # Plot temperature variance
             st.write("### |Seebeck Coefficient| vs Temperature")
             fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(
-                elements, user_composition, max_comp, [100, 1000], available_elements,
-                scaler, vae, regressor, y_scaler, sign_bias, bias_vector, bias_magnitude, font_size, axes_line_width, grid_width,
-                user_point_color, max_point_color, point_size, axes_box_thickness
+                elements, user_composition, max_comp, literature_compositions, literature_seebeck, [100, 1000],
+                available_elements, scaler, vae, regressor, y_scaler, sign_bias, bias_vector,
+                bias_magnitude, st.session_state.summary_dict, font_size, axes_line_width, grid_width,
+                user_point_color, max_point_color, literature_point_color, point_size, axes_box_thickness
             )
             if fig_temp:
                 st.plotly_chart(fig_temp, use_container_width=True)
                 try:
                     fig_temp.write_html(os.path.join(script_dir, 'temperature_variance.html'))
+                    st.download_button(
+                        label="Download Temperature Variance Plot as HTML",
+                        data=open(os.path.join(script_dir, 'temperature_variance.html'), 'r').read(),
+                        file_name="temperature_variance.html",
+                        mime="text/html"
+                    )
                 except Exception as e:
                     st.warning(f"Failed to save temperature variance plot: {e}")
                 # Prepare temperature variance data for download
@@ -994,6 +1140,8 @@ if st.button("Generate Ternary Diagram"):
                     'User |Seebeck| (μV/K)': user_seebeck_vals,
                     'Max |Seebeck| (μV/K)': max_seebeck_vals
                 })
+                for idx, lit_vals in enumerate(np.array(literature_seebeck_vals).T):
+                    temp_df[f'Literature Comp {idx+1} |Seebeck| (μV/K)'] = lit_vals
                 csv = temp_df.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="Download Temperature Variance Data as CSV",
@@ -1006,10 +1154,18 @@ if st.button("Generate Ternary Diagram"):
                 st.write("### Physics Attention Visualizations")
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.plotly_chart(plot_material_type_histogram(st.session_state.summary_dict, font_size), use_container_width=True)
-                    st.plotly_chart(plot_relevance_box_plot(st.session_state.summary_dict, font_size), use_container_width=True)
+                    fig_hist = plot_material_type_histogram(st.session_state.summary_dict, font_size)
+                    if fig_hist:
+                        st.plotly_chart(fig_hist, use_container_width=True)
+                    fig_box = plot_relevance_box_plot(st.session_state.summary_dict, font_size)
+                    if fig_box:
+                        st.plotly_chart(fig_box, use_container_width=True)
                 with col2:
-                    st.plotly_chart(plot_material_probabilities(st.session_state.summary_dict, font_size), use_container_width=True)
-                    st.plotly_chart(plot_pmi_network(st.session_state.summary_dict, font_size), use_container_width=True)
+                    fig_prob = plot_material_probabilities(st.session_state.summary_dict, font_size)
+                    if fig_prob:
+                        st.plotly_chart(fig_prob, use_container_width=True)
+                    fig_network = plot_pmi_network(st.session_state.summary_dict, font_size)
+                    if fig_network:
+                        st.plotly_chart(fig_network, use_container_width=True)
     else:
         st.error("Please select at least one element.")
