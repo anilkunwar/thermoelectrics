@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import io
 from cleantext import clean
+import time
 
 # Define database directory and files
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,9 +38,9 @@ st.set_page_config(page_title="Thermoelectric Data Inspector and NER Analysis", 
 # Initialize Streamlit app
 st.title("Thermoelectric Data Inspector and NER Analysis")
 st.markdown("""
-This tool inspects the `thermoelectric_universe.db` file containing full-text papers, performs SciBERT attention-based NER analysis to extract chemical formulas and classify materials as p-type or n-type, and generates a histogram, word cloud, and lightweight co-occurrence network of frequent terms/phrases. Outputs are downloadable as CSV, SQLite, and PNG (visualizations). Model analysis starts only after pressing 'Inspect and Analyze Database'.
+This tool inspects the `thermoelectric_universe.db` file, performs SciBERT-based NER to extract chemical formulas and classify materials as p-type or n-type, and generates visualizations. Model analysis starts only after pressing 'Inspect and Analyze Database'.
 
-**Date and Time**: 06:20 PM CEST, Wednesday, August 20, 2025
+**Date and Time**: 08:52 PM CEST, Wednesday, August 20, 2025
 """)
 
 # Dependency check
@@ -60,7 +61,7 @@ if "pmi_threshold" not in st.session_state:
 if "similarity_threshold" not in st.session_state:
     st.session_state.similarity_threshold = 0.7
 if "strict_validation" not in st.session_state:
-    st.session_state.strict_validation = True
+    st.session_state.strict_validation = False
 if "material_types" not in st.session_state:
     st.session_state.material_types = ["p-type", "n-type", "neutral"]
 if "max_terms" not in st.session_state:
@@ -120,12 +121,14 @@ def preprocess_text(text):
         return clean(text, no_urls=True, no_emails=True, no_punct=False, replace_with_url="", replace_with_email="", lowercase=True, no_numbers=False)
     except Exception as e:
         update_log(f"Text preprocessing error: {str(e)}")
-        return text
+        return ""
 
 # Load spaCy model
 @st.cache_resource
 def load_spacy():
     try:
+        update_log("Loading spaCy model...")
+        start_time = time.time()
         nlp = spacy.load("en_core_web_lg")
         matcher = Matcher(nlp.vocab)
         material_patterns = [
@@ -136,9 +139,9 @@ def load_spacy():
         matcher.add("P_TYPE", [material_patterns[0]])
         matcher.add("N_TYPE", [material_patterns[1]])
         matcher.add("MATERIAL_VARIANTS", [material_patterns[2]])
-        # Add thermoelectric phrases
         thermo_patterns = [[{"LOWER": kw} for kw in phrase.split()] for phrase in THERMOELECTRIC_KEYWORDS]
         matcher.add("THERMO_PHRASES", thermo_patterns)
+        update_log(f"Loaded spaCy model in {time.time() - start_time:.2f} seconds")
         return nlp, matcher
     except Exception as e:
         logging.warning(f"Failed to load 'en_core_web_lg': {e}. Using 'en_core_web_sm'.")
@@ -149,6 +152,7 @@ def load_spacy():
             matcher.add("N_TYPE", [material_patterns[1]])
             matcher.add("MATERIAL_VARIANTS", [material_patterns[2]])
             matcher.add("THERMO_PHRASES", thermo_patterns)
+            update_log(f"Loaded spaCy sm model in {time.time() - start_time:.2f} seconds")
             return nlp, matcher
         except Exception as e2:
             st.error(f"Failed to load spaCy: {e2}. Install: `python -m spacy download en_core_web_sm`")
@@ -158,7 +162,7 @@ def load_spacy():
 # Initialize database
 def initialize_metadata_db(db_file=METADATA_DB_FILE):
     try:
-        conn = sqlite3.connect(db_file)
+        conn = sqlite3.connect(db_file, timeout=10)
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS papers (
@@ -215,11 +219,9 @@ def extract_terms_with_scibert(texts, query, similarity_threshold=0.7, top_n=20,
             text = preprocess_text(text)
             doc = nlp(text)
             
-            # Regex-based term detection
             for term in key_terms:
                 term_counts[term] += len(re.findall(r'\b' + re.escape(term) + r'\b', text, re.IGNORECASE))
             
-            # Formula extraction
             formulas = set()
             for match in re.finditer(MATERIAL_FORMULA_PATTERN, text, re.IGNORECASE):
                 formula = match.group(0).replace(" ", "").replace("-", "").replace("_", "")
@@ -232,21 +234,19 @@ def extract_terms_with_scibert(texts, query, similarity_threshold=0.7, top_n=20,
                         formulas.add(formula)
             key_terms.update(formulas)
             
-            # SciBERT processing
             text, formula_map = preserve_formulas(text)
-            inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512, padding=True).to(device)
+            inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=256, padding=True).to(device)
             with torch.no_grad():
                 outputs = model(**inputs, output_attentions=True)
             attentions = outputs.attentions[-1].mean(dim=1).cpu().numpy()[0]
             tokens = [formula_map.get(token, token).lower().replace("##", "") for token in tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])]
             
             for i, token in enumerate(tokens):
-                if attentions[i] < 0.05:  # Lowered threshold
+                if attentions[i] < 0.05:
                     continue
                 if token in key_terms or any(fuzz.ratio(token, k.lower()) > 70 for k in key_terms):
                     term_counts[token] += 1
             
-            # Phrase extraction
             for chunk in doc.noun_chunks:
                 phrase = chunk.text.lower()
                 if phrase in key_terms or any(fuzz.ratio(phrase, k.lower()) > 70 for k in key_terms):
@@ -257,16 +257,14 @@ def extract_terms_with_scibert(texts, query, similarity_threshold=0.7, top_n=20,
         update_log(f"Term extraction error: {str(e)}")
         return {}
 
-# Generate histogram of common terms
+# Generate histogram
 def generate_term_histogram(term_counts, max_terms=20):
     try:
         if not term_counts:
             update_log("No terms for histogram generation")
             return None
-        
         terms = list(term_counts.keys())[:max_terms]
         counts = list(term_counts.values())[:max_terms]
-        
         plt.figure(figsize=(10, 6))
         plt.bar(terms, counts, color='skyblue')
         plt.xlabel("Terms")
@@ -279,24 +277,15 @@ def generate_term_histogram(term_counts, max_terms=20):
         update_log(f"Histogram generation error: {str(e)}")
         return None
 
-# Generate word cloud from term counts
+# Generate word cloud
 def generate_word_cloud_from_terms(term_counts):
     try:
         if not term_counts:
             update_log("No terms for word cloud generation")
             return None
-        
         custom_stopwords = set(STOPWORDS) | {'et', 'al', 'fig', 'figure', 'table', 'equation', 'http', 'https', 'arxiv', 'journal', 'volume', 'doi', 'published'}
         filtered_terms = {term: count for term, count in term_counts.items() if term not in custom_stopwords}
-        
-        wordcloud = WordCloud(
-            width=800,
-            height=400,
-            background_color='white',
-            min_font_size=10,
-            max_font_size=150
-        ).generate_from_frequencies(filtered_terms)
-        
+        wordcloud = WordCloud(width=800, height=400, background_color='white', min_font_size=10, max_font_size=150).generate_from_frequencies(filtered_terms)
         plt.figure(figsize=(10, 5))
         plt.imshow(wordcloud, interpolation='bilinear')
         plt.axis('off')
@@ -305,12 +294,11 @@ def generate_word_cloud_from_terms(term_counts):
         update_log(f"Word cloud generation error: {str(e)}")
         return None
 
-# Generate lightweight word co-occurrence network
+# Generate word co-occurrence network
 def generate_word_network(texts, context_window=50, min_edge_weight=2):
     try:
         G = nx.Graph()
         key_terms = set(THERMOELECTRIC_KEYWORDS + P_TYPE_KEYWORDS + N_TYPE_KEYWORDS + list(SYNONYM_MAPPING.keys()))
-        
         for text in texts:
             if not isinstance(text, str) or not text.strip():
                 continue
@@ -327,7 +315,6 @@ def generate_word_network(texts, context_window=50, min_edge_weight=2):
                     if any(fuzz.ratio(formula.lower(), f.lower()) > 70 for f in formulas):
                         formulas.add(formula)
             key_terms.update(formulas)
-            
             words = [w.lower() for w in text.split() if w.lower() in key_terms]
             for i, word1 in enumerate(words):
                 for j, word2 in enumerate(words[i+1:], start=i+1):
@@ -336,16 +323,13 @@ def generate_word_network(texts, context_window=50, min_edge_weight=2):
                             G[word1][word2]['weight'] += 1
                         else:
                             G.add_edge(word1, word2, weight=1)
-        
         G_filtered = nx.Graph()
         for u, v, data in G.edges(data=True):
             if data['weight'] >= min_edge_weight:
                 G_filtered.add_edge(u, v, weight=data['weight'])
-        
         plt.figure(figsize=(10, 8))
         pos = nx.spring_layout(G_filtered, k=0.5, iterations=50)
         nx.draw(G_filtered, pos, with_labels=True, node_color='lightblue', node_size=500, font_size=10, edge_color='gray')
-        edge_labels = nx.get_edge_attributes(G_filtered, 'weight')
         nx.draw_network_edges(G_filtered, pos, edge_color='gray', width=[data['weight'] * 0.5 for u, v, data in G_filtered.edges(data=True)])
         plt.title("Word Co-occurrence Network")
         return plt.gcf()
@@ -359,11 +343,9 @@ def compute_pmi(text, formula, keyword, total_words, word_counts):
         formula_count = len(re.findall(r'\b' + re.escape(formula) + r'\b', text, re.IGNORECASE))
         keyword_count = word_counts.get(keyword.lower(), 0)
         co_occurrence = len(re.findall(rf'\b{re.escape(formula)}\b.*?\b{keyword}\b|\b{keyword}\b.*?\b{re.escape(formula)}\b', text, re.IGNORECASE))
-        
         p_formula = formula_count / total_words
         p_keyword = keyword_count / total_words
         p_joint = co_occurrence / total_words
-        
         if p_formula == 0 or p_keyword == 0 or p_joint == 0:
             return 0.0
         pmi = log2(p_joint / (p_formula * p_keyword))
@@ -386,14 +368,14 @@ def get_scibert_embedding(text, tokenizer, model, device):
         update_log(f"SciBERT embedding error for '{text}': {str(e)}")
         return None
 
-# Batch SciBERT scoring with sentence-level relevance
+# Batch SciBERT scoring
 def score_text_with_scibert(texts, query, pmi_threshold, similarity_threshold, tokenizer, model, device, nlp, matcher):
     try:
         inputs = tokenizer(
-            [preprocess_text(t) for t in texts],
+            [preprocess_text(t)[:10000] for t in texts],  # Limit text length
             return_tensors="pt",
             truncation=True,
-            max_length=512,
+            max_length=256,
             padding=True
         ).to(device)
         with torch.no_grad():
@@ -404,7 +386,13 @@ def score_text_with_scibert(texts, query, pmi_threshold, similarity_threshold, t
         query_terms = [query] + THERMOELECTRIC_KEYWORDS
         
         for idx, text in enumerate(texts):
-            text = preprocess_text(text)
+            start_time = time.time()
+            if time.time() - start_time > 30:  # Timeout after 30 seconds
+                update_log(f"Timeout processing text {idx}")
+                results.append((0.0, [], [], []))
+                continue
+                
+            text = preprocess_text(text)[:10000]  # Limit text length
             doc = nlp(text)
             sentences = [sent.text for sent in doc.sents]
             word_counts = defaultdict(int)
@@ -420,7 +408,7 @@ def score_text_with_scibert(texts, query, pmi_threshold, similarity_threshold, t
             matched_formulas = []
             seebeck_values = []
             
-            for sent_idx, sentence in enumerate(sentences):
+            for sent_idx, sentence in enumerate(sentences[:50]):  # Limit sentences
                 sentence_score = 0.0
                 sentence_terms = []
                 sentence_formulas = []
@@ -461,7 +449,6 @@ def score_text_with_scibert(texts, query, pmi_threshold, similarity_threshold, t
                     token_attention = sent_attentions[i] if i < len(sent_attentions) else 0.0
                     if token_attention < 0.05:
                         continue
-                    
                     for q in query_terms:
                         query_embedding = get_scibert_embedding(q, tokenizer, model, device)
                         token_embedding = get_scibert_embedding(token, tokenizer, model, device)
@@ -470,7 +457,6 @@ def score_text_with_scibert(texts, query, pmi_threshold, similarity_threshold, t
                             if similarity > similarity_threshold:
                                 sentence_score += 3.0 * token_attention
                                 sentence_terms.append(q)
-                    
                     for keyword in THERMOELECTRIC_KEYWORDS + list(SYNONYM_MAPPING.keys()):
                         mapped_keyword = SYNONYM_MAPPING.get(keyword.lower(), keyword.lower())
                         if fuzz.ratio(token, mapped_keyword) > 70:
@@ -479,7 +465,6 @@ def score_text_with_scibert(texts, query, pmi_threshold, similarity_threshold, t
                                 weight = TERM_WEIGHTS.get(mapped_keyword, 1.0)
                                 sentence_score += weight * token_attention * pmi
                                 sentence_terms.append(mapped_keyword)
-                    
                     for unit in UNIT_VARIANTS:
                         if re.search(unit, token, re.IGNORECASE):
                             sentence_score += 1.0 * token_attention
@@ -493,17 +478,17 @@ def score_text_with_scibert(texts, query, pmi_threshold, similarity_threshold, t
             matched_terms = list(set(matched_terms))
             matched_formulas = list(set(matched_formulas))
             results.append((relevance_score, matched_terms, matched_formulas, seebeck_values))
+            update_log(f"Processed text {idx} in {time.time() - start_time:.2f} seconds")
         
         return results
     except Exception as e:
-        logging.error(f"SciBERT scoring error: {str(e)}")
         update_log(f"SciBERT scoring error: {str(e)}")
         return [(0.0, [], [], []) for _ in texts]
 
 # Inspect universe database
 def inspect_universe_db(db_file=UNIVERSE_DB_FILE):
     try:
-        conn = sqlite3.connect(db_file)
+        conn = sqlite3.connect(db_file, timeout=10)
         query_sql = "SELECT id, title, authors, year, content FROM papers"
         df = pd.read_sql_query(query_sql, conn)
         conn.close()
@@ -515,24 +500,24 @@ def inspect_universe_db(db_file=UNIVERSE_DB_FILE):
             update_log(f"Invalid content in papers: {', '.join(invalid_papers)}")
             st.warning(f"Found {len(invalid_papers)} papers with invalid or empty content. Check logs for details.")
         update_log(f"Loaded {len(df)} papers from {db_file}")
-        return df
+        return df[df["content"].apply(lambda x: isinstance(x, str) and x.strip())]
     except Exception as e:
         update_log(f"Error loading {db_file}: {str(e)}")
         st.error(f"Error loading {db_file}: {str(e)}")
         return pd.DataFrame()
 
-# Perform NER and classification on universe database
+# Perform NER and classification
 def analyze_universe_db(db_file=UNIVERSE_DB_FILE, query="thermoelectric materials", material_types=["p-type", "n-type", "neutral"], pmi_threshold=1.0, similarity_threshold=0.7, relevance_threshold=30.0):
     try:
-        # Load models only when analysis is triggered
+        start_time = time.time()
+        update_log("Starting database analysis...")
         tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
         model = AutoModel.from_pretrained('allenai/scibert_scivocab_uncased', output_attentions=True, output_hidden_states=True)
         model.eval()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
-        update_log(f"SciBERT loaded on {device}")
+        update_log(f"SciBERT loaded on {device} in {time.time() - start_time:.2f} seconds")
         
-        # Train classifier
         X_train = [
             "p-type semiconductor antimony", "n-type material selenium", "hole-doped", "electron-doped",
             "positive seebeck coefficient", "negative seebeck coefficient", "hole conduction material",
@@ -545,129 +530,128 @@ def analyze_universe_db(db_file=UNIVERSE_DB_FILE, query="thermoelectric material
         clf = RandomForestClassifier(n_estimators=100, random_state=42).fit(X_train_vec, y_train)
         update_log("Trained Random Forest classifier")
         
-        # Load spaCy
         nlp, matcher = load_spacy()
         
         df = inspect_universe_db(db_file)
         if df.empty:
-            update_log(f"No data found in {db_file}")
+            update_log(f"No valid data found in {db_file}")
             return [], [], {}
         
         metadata = []
         papers = []
         term_counts = Counter()
-        batch_size = 10
+        batch_size = 5  # Reduced batch size
         progress_bar = st.progress(0)
         
         for i in range(0, len(df), batch_size):
             batch_df = df[i:i+batch_size]
             batch_texts = batch_df["content"]
+            update_log(f"Processing batch {i//batch_size + 1} of {len(df)//batch_size + 1}")
             
-            # Update term counts
             batch_term_counts = extract_terms_with_scibert(batch_texts, query, similarity_threshold, st.session_state.max_terms, tokenizer, model, device)
             term_counts.update(batch_term_counts)
             
-            # Analyze batch
             batch_results = score_text_with_scibert(batch_texts, query, pmi_threshold, similarity_threshold, tokenizer, model, device, nlp, matcher)
             
             for idx, (row, (relevance_score, matched_terms, matched_formulas, seebeck_values)) in enumerate(zip(batch_df.itertuples(), batch_results)):
-                if not isinstance(row.content, str) or not row.content.strip():
-                    update_log(f"Skipping paper {row.id} due to invalid content")
+                paper_id = row.id
+                update_log(f"Analyzing paper {paper_id}")
+                try:
+                    if not matched_formulas or relevance_score * 100 < relevance_threshold:
+                        continue
+                    text = preprocess_text(row.content)[:10000]
+                    doc = nlp(text)
+                    matches = matcher(doc)
+                    p_type_count = len(re.finditer(P_TYPE_PATTERN, text, re.IGNORECASE))
+                    n_type_count = len(re.finditer(N_TYPE_PATTERN, text, re.IGNORECASE))
+                    
+                    for match_id, start, end in matches:
+                        rule_id = nlp.vocab.strings[match_id]
+                        if rule_id in ["P_TYPE", "MATERIAL_VARIANTS"]:
+                            p_type_count += 1
+                        elif rule_id == "N_TYPE":
+                            n_type_count += 1
+                    
+                    material_type = "neutral"
+                    p_type_score = p_type_count * 2.0
+                    n_type_score = n_type_count * 2.0
+                    X_vec = vectorizer.transform([text])
+                    clf_pred = clf.predict(X_vec)[0]
+                    clf_prob = clf.predict_proba(X_vec)[0]
+                    p_type_prob = clf_prob[0] if clf_pred == "p-type" else clf_prob[1]
+                    n_type_prob = clf_prob[1] if clf_pred == "n-type" else clf_prob[0]
+                    p_type_score += p_type_prob * 3.0
+                    n_type_score += n_type_prob * 3.0
+                    
+                    if seebeck_values:
+                        positive_count = sum(1 for v in seebeck_values if v > 0)
+                        negative_count = sum(1 for v in seebeck_values if v < 0)
+                        if positive_count > negative_count:
+                            p_type_score += 3.0
+                            p_type_prob = max(p_type_prob, 0.7)
+                        elif negative_count > positive_count:
+                            n_type_score += 3.0
+                            n_type_prob = max(n_type_prob, 0.7)
+                    
+                    word_counts = defaultdict(int)
+                    for word in text.lower().split():
+                        word_counts[word] += 1
+                    total_words = sum(word_counts.values())
+                    
+                    for formula in matched_formulas:
+                        formula_pos = text.lower().find(formula.lower())
+                        if formula_pos != -1:
+                            context_window = text[max(0, formula_pos - 50):formula_pos + len(formula) + 50]
+                            pmi_scores = [compute_pmi(context_window, formula, kw, total_words, word_counts) for kw in P_TYPE_KEYWORDS + N_TYPE_KEYWORDS]
+                            if any(pmi > pmi_threshold for pmi in pmi_scores):
+                                if any(kw in context_window.lower() for kw in P_TYPE_KEYWORDS + list(SYNONYM_MAPPING.keys())):
+                                    p_type_score += 2.0
+                                if any(kw in context_window.lower() for kw in N_TYPE_KEYWORDS + list(SYNONYM_MAPPING.keys())):
+                                    n_type_score += 2.0
+                    
+                    if p_type_score > n_type_score + 0.05:
+                        material_type = "p-type"
+                    elif n_type_score > p_type_score + 0.05:
+                        material_type = "n-type"
+                    
+                    if material_type not in material_types:
+                        continue
+                    
+                    papers.append({
+                        "id": row.id,
+                        "title": row.title,
+                        "authors": row.authors,
+                        "year": row.year,
+                        "matched_terms": ", ".join(matched_terms),
+                        "relevance_prob": relevance_score * 100
+                    })
+                    
+                    for matched_formula in matched_formulas:
+                        formula_match = re.search(r'\b' + re.escape(matched_formula) + r'\b', text, re.IGNORECASE)
+                        if formula_match:
+                            snippet_start = max(0, formula_match.start() - 100)
+                            snippet_end = min(len(text), formula_match.end() + 100)
+                            snippet = text[snippet_start:snippet_end]
+                            metadata.append({
+                                "paper_id": row.id,
+                                "formula": matched_formula,
+                                "material_type": material_type,
+                                "p_type_prob": p_type_prob,
+                                "n_type_prob": n_type_prob,
+                                "seebeck_value": seebeck_values[0] if seebeck_values else None,
+                                "unit": "μV/K" if seebeck_values else None,
+                                "context": snippet,
+                                "score": relevance_score,
+                                "title": row.title,
+                                "year": row.year
+                            })
+                except Exception as e:
+                    update_log(f"Error processing paper {paper_id}: {str(e)}")
                     continue
-                
-                if not matched_formulas or relevance_score * 100 < relevance_threshold:
-                    continue
-                
-                text = preprocess_text(row.content)
-                doc = nlp(text)
-                matches = matcher(doc)
-                p_type_count = len(re.finditer(P_TYPE_PATTERN, text, re.IGNORECASE))
-                n_type_count = len(re.finditer(N_TYPE_PATTERN, text, re.IGNORECASE))
-                
-                for match_id, start, end in matches:
-                    rule_id = nlp.vocab.strings[match_id]
-                    if rule_id in ["P_TYPE", "MATERIAL_VARIANTS"]:
-                        p_type_count += 1
-                    elif rule_id == "N_TYPE":
-                        n_type_count += 1
-                
-                material_type = "neutral"
-                p_type_score = p_type_count * 2.0
-                n_type_score = n_type_count * 2.0
-                X_vec = vectorizer.transform([text])
-                clf_pred = clf.predict(X_vec)[0]
-                clf_prob = clf.predict_proba(X_vec)[0]
-                p_type_prob = clf_prob[0] if clf_pred == "p-type" else clf_prob[1]
-                n_type_prob = clf_prob[1] if clf_pred == "n-type" else clf_prob[0]
-                p_type_score += p_type_prob * 3.0
-                n_type_score += n_type_prob * 3.0
-                
-                if seebeck_values:
-                    positive_count = sum(1 for v in seebeck_values if v > 0)
-                    negative_count = sum(1 for v in seebeck_values if v < 0)
-                    if positive_count > negative_count:
-                        p_type_score += 3.0
-                        p_type_prob = max(p_type_prob, 0.7)
-                    elif negative_count > positive_count:
-                        n_type_score += 3.0
-                        n_type_prob = max(n_type_prob, 0.7)
-                
-                word_counts = defaultdict(int)
-                for word in text.lower().split():
-                    word_counts[word] += 1
-                total_words = sum(word_counts.values())
-                
-                for formula in matched_formulas:
-                    formula_pos = text.lower().find(formula.lower())
-                    if formula_pos != -1:
-                        context_window = text[max(0, formula_pos - 50):formula_pos + len(formula) + 50]
-                        pmi_scores = [compute_pmi(context_window, formula, kw, total_words, word_counts) for kw in P_TYPE_KEYWORDS + N_TYPE_KEYWORDS]
-                        if any(pmi > pmi_threshold for pmi in pmi_scores):
-                            if any(kw in context_window.lower() for kw in P_TYPE_KEYWORDS + list(SYNONYM_MAPPING.keys())):
-                                p_type_score += 2.0
-                            if any(kw in context_window.lower() for kw in N_TYPE_KEYWORDS + list(SYNONYM_MAPPING.keys())):
-                                n_type_score += 2.0
-                
-                if p_type_score > n_type_score + 0.05:
-                    material_type = "p-type"
-                elif n_type_score > p_type_score + 0.05:
-                    material_type = "n-type"
-                
-                if material_type not in material_types:
-                    continue
-                
-                papers.append({
-                    "id": row.id,
-                    "title": row.title,
-                    "authors": row.authors,
-                    "year": row.year,
-                    "matched_terms": ", ".join(matched_terms),
-                    "relevance_prob": relevance_score * 100
-                })
-                
-                for matched_formula in matched_formulas:
-                    formula_match = re.search(r'\b' + re.escape(matched_formula) + r'\b', text, re.IGNORECASE)
-                    if formula_match:
-                        snippet_start = max(0, formula_match.start() - 100)
-                        snippet_end = min(len(text), formula_match.end() + 100)
-                        snippet = text[snippet_start:snippet_end]
-                        metadata.append({
-                            "paper_id": row.id,
-                            "formula": matched_formula,
-                            "material_type": material_type,
-                            "p_type_prob": p_type_prob,
-                            "n_type_prob": n_type_prob,
-                            "seebeck_value": seebeck_values[0] if seebeck_values else None,
-                            "unit": "μV/K" if seebeck_values else None,
-                            "context": snippet,
-                            "score": relevance_score,
-                            "title": row.title,
-                            "year": row.year
-                        })
                 
                 progress_bar.progress((i + idx + 1) / len(df))
         
-        update_log(f"Extracted {len(metadata)} materials from {len(papers)} papers")
+        update_log(f"Extracted {len(metadata)} materials from {len(papers)} papers in {time.time() - start_time:.2f} seconds")
         return papers, metadata, term_counts
     except Exception as e:
         update_log(f"Error analyzing {db_file}: {str(e)}")
@@ -678,7 +662,7 @@ def analyze_universe_db(db_file=UNIVERSE_DB_FILE, query="thermoelectric material
 def save_to_sqlite(papers_df, materials_list, db_file=METADATA_DB_FILE):
     try:
         initialize_metadata_db(db_file)
-        conn = sqlite3.connect(db_file)
+        conn = sqlite3.connect(db_file, timeout=10)
         papers_df.to_sql("papers", conn, if_exists="replace", index=False)
         materials_df = pd.DataFrame(materials_list)
         if not materials_df.empty:
@@ -704,7 +688,6 @@ context_window = st.sidebar.slider("Context Window for Network (words)", 10, 100
 min_edge_weight = st.sidebar.slider("Minimum Edge Weight for Network", 1, 10, st.session_state.min_edge_weight)
 analyze_button = st.sidebar.button("Inspect and Analyze Database")
 
-# Update session state
 st.session_state.material_types = material_types
 st.session_state.relevance_threshold = relevance_threshold
 st.session_state.pmi_threshold = pmi_threshold
@@ -719,8 +702,9 @@ st.subheader("Database Contents (thermoelectric_universe.db)")
 universe_df = inspect_universe_db()
 if not universe_df.empty:
     st.dataframe(universe_df[["id", "title", "authors", "year"]], use_container_width=True)
+    st.info(f"Loaded {len(universe_df)} valid papers")
 else:
-    st.warning("No data found in thermoelectric_universe.db. Please ensure the database is populated.")
+    st.warning("No valid data found in thermoelectric_universe.db. Please ensure the database is populated.")
 
 # Debug mode
 if st.sidebar.checkbox("Debug Mode: Test Term Extraction"):
@@ -744,7 +728,6 @@ if analyze_button:
                 UNIVERSE_DB_FILE, query, material_types, pmi_threshold, similarity_threshold, relevance_threshold
             )
         
-        # Visualizations
         if not universe_df.empty:
             st.subheader("Histogram of Common Terms and Phrases")
             if term_counts:
@@ -803,7 +786,6 @@ if analyze_button:
             else:
                 st.warning("Failed to generate word network. Check logs for details.")
         
-        # Analysis results
         if not metadata:
             st.warning("No materials extracted. Adjust query, thresholds, or ensure thermoelectric_universe.db contains valid data.")
         else:
@@ -823,7 +805,6 @@ if analyze_button:
                 use_container_width=True
             )
             
-            # Save and download
             csv = materials_df.to_csv(index=False)
             st.download_button(
                 label="Download Materials CSV",
@@ -836,7 +817,7 @@ if analyze_button:
             st.info(sqlite_status)
             if sqlite_status.startswith("Saved"):
                 try:
-                    conn_source = sqlite3.connect(METADATA_DB_FILE)
+                    conn_source = sqlite3.connect(METADATA_DB_FILE, timeout=10)
                     conn_target = sqlite3.connect(":memory:")
                     conn_source.backup(conn_target)
                     sqlite_data = BytesIO()
