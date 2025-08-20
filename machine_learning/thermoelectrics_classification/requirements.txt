@@ -26,6 +26,7 @@ seaborn
 pymatgen
 scikit-learn
 fuzzywuzzy
+cleantext
 
 
 
