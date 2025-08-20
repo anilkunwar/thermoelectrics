@@ -23,6 +23,7 @@ import networkx as nx
 import io
 from cleantext import clean
 import time
+import psutil
 
 # Define database directory and files
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,17 +39,17 @@ st.set_page_config(page_title="Thermoelectric Data Inspector and NER Analysis", 
 # Initialize Streamlit app
 st.title("Thermoelectric Data Inspector and NER Analysis")
 st.markdown("""
-This tool inspects the `thermoelectric_universe.db` file, performs SciBERT-based NER to extract chemical formulas and classify materials as p-type or n-type, and generates visualizations. Model analysis starts only after pressing 'Inspect and Analyze Database'.
+This tool inspects `thermoelectric_universe.db`, performs lightweight NER to extract chemical formulas and classify materials as p-type or n-type, and generates visualizations. Analysis starts only after pressing 'Inspect and Analyze Database'.
 
-**Date and Time**: 08:52 PM CEST, Wednesday, August 20, 2025
+**Date and Time**: 09:05 PM CEST, Wednesday, August 20, 2025
 """)
 
 # Dependency check
 st.sidebar.header("Setup")
 st.sidebar.markdown("""
 **Dependencies**:
-- `pip install streamlit spacy transformers torch pymatgen pandas scikit-learn fuzzywuzzy python-Levenshtein wordcloud matplotlib networkx clean-text`
-- `python -m spacy download en_core_web_lg`
+- `pip install streamlit spacy transformers torch pymatgen pandas scikit-learn fuzzywuzzy python-Levenshtein wordcloud matplotlib networkx clean-text psutil`
+- `python -m spacy download en_core_web_sm`
 """)
 
 # Initialize session state
@@ -74,30 +75,25 @@ if "min_edge_weight" not in st.session_state:
 # Constants
 P_TYPE_KEYWORDS = [
     "p-type", "p-doped", "hole-doped", "positive seebeck", "hole carrier", "hole conduction",
-    "p-type semiconductor", "acceptor doping", "hole transport", "antimony", "boron", "gallium", "indium", "aluminum",
-    "p-type doping"
+    "p-type semiconductor", "acceptor doping", "hole transport", "antimony", "boron", "gallium", "indium", "aluminum"
 ]
 N_TYPE_KEYWORDS = [
     "n-type", "n-doped", "electron-doped", "negative seebeck", "electron carrier", "electron conduction",
-    "n-type semiconductor", "donor doping", "electron transport", "selenium", "phosphorus", "arsenic",
-    "n-type doping"
+    "n-type semiconductor", "donor doping", "electron transport", "selenium", "phosphorus", "arsenic"
 ]
 THERMOELECTRIC_KEYWORDS = [
-    "seebeck coefficient", "thermopower", "seebeck", "power factor", "zt", "figure of merit",
+    "seebeck coefficient", "thermopower", "power factor", "zt", "figure of merit",
     "thermoelectric", "thermoelectric material", "band gap", "electrical conductivity",
-    "thermal conductivity", "carrier concentration", "carrier mobility", "thermoelectric performance",
-    "charge carrier"
+    "thermal conductivity", "carrier concentration", "carrier mobility"
 ]
 SYNONYM_MAPPING = {
     "p-doped": "p-type", "hole-doped": "p-type", "acceptor-doped": "p-type", "hole conduction": "p-type",
     "n-doped": "n-type", "electron-doped": "n-type", "donor-doped": "n-type", "electron transport": "n-type",
     "seebeck": "seebeck coefficient", "thermopower": "seebeck coefficient",
-    "figure of merit": "zt", "dimensionless figure of merit": "zt"
+    "figure of merit": "zt"
 }
 TERM_WEIGHTS = {
-    "p-type": 2.0, "p-doped": 2.0, "hole-doped": 2.0, "positive seebeck": 2.5,
-    "n-type": 2.0, "n-doped": 2.0, "electron-doped": 2.0, "negative seebeck": 2.5,
-    "seebeck coefficient": 2.5, "zt": 2.5, "thermoelectric": 1.5,
+    "p-type": 2.0, "n-type": 2.0, "seebeck coefficient": 2.5, "zt": 2.5, "thermoelectric": 1.5,
     "antimony": 1.5, "selenium": 1.5, "boron": 1.5, "phosphorus": 1.5
 }
 UNIT_VARIANTS = ["microvolt/K", "μV/K", "mV/K", "V/K", "microvolts per Kelvin", "microvolts/Kelvin"]
@@ -108,17 +104,18 @@ N_TYPE_PATTERN = r'\b(?:' + '|'.join(N_TYPE_KEYWORDS + list(SYNONYM_MAPPING.keys
 
 def update_log(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    st.session_state.log_buffer.append(f"[{timestamp}] {message}")
+    memory_usage = psutil.Process().memory_info().rss / 1024**2  # MB
+    st.session_state.log_buffer.append(f"[{timestamp}] {message} (Memory: {memory_usage:.2f} MB)")
     if len(st.session_state.log_buffer) > 30:
         st.session_state.log_buffer.pop(0)
-    logging.info(message)
+    logging.info(f"{message} (Memory: {memory_usage:.2f} MB)")
 
 # Text preprocessing
 def preprocess_text(text):
     try:
         if not isinstance(text, str):
             return ""
-        return clean(text, no_urls=True, no_emails=True, no_punct=False, replace_with_url="", replace_with_email="", lowercase=True, no_numbers=False)
+        return clean(text, no_urls=True, no_emails=True, no_punct=False, replace_with_url="", replace_with_email="", lowercase=True, no_numbers=False)[:5000]
     except Exception as e:
         update_log(f"Text preprocessing error: {str(e)}")
         return ""
@@ -127,9 +124,9 @@ def preprocess_text(text):
 @st.cache_resource
 def load_spacy():
     try:
-        update_log("Loading spaCy model...")
+        update_log("Loading spaCy en_core_web_sm...")
         start_time = time.time()
-        nlp = spacy.load("en_core_web_lg")
+        nlp = spacy.load("en_core_web_sm")
         matcher = Matcher(nlp.vocab)
         material_patterns = [
             [{"LOWER": {"IN": ["p-type", "p-doped", "hole-doped", "acceptor-doped", "hole conduction"]}, "OP": "?"}, {"LOWER": {"IN": ["material", "semiconductor", "thermoelectric"]}, "OP": "?"}],
@@ -141,23 +138,12 @@ def load_spacy():
         matcher.add("MATERIAL_VARIANTS", [material_patterns[2]])
         thermo_patterns = [[{"LOWER": kw} for kw in phrase.split()] for phrase in THERMOELECTRIC_KEYWORDS]
         matcher.add("THERMO_PHRASES", thermo_patterns)
-        update_log(f"Loaded spaCy model in {time.time() - start_time:.2f} seconds")
+        update_log(f"Loaded spaCy en_core_web_sm in {time.time() - start_time:.2f} seconds")
         return nlp, matcher
     except Exception as e:
-        logging.warning(f"Failed to load 'en_core_web_lg': {e}. Using 'en_core_web_sm'.")
-        try:
-            nlp = spacy.load("en_core_web_sm")
-            matcher = Matcher(nlp.vocab)
-            matcher.add("P_TYPE", [material_patterns[0]])
-            matcher.add("N_TYPE", [material_patterns[1]])
-            matcher.add("MATERIAL_VARIANTS", [material_patterns[2]])
-            matcher.add("THERMO_PHRASES", thermo_patterns)
-            update_log(f"Loaded spaCy sm model in {time.time() - start_time:.2f} seconds")
-            return nlp, matcher
-        except Exception as e2:
-            st.error(f"Failed to load spaCy: {e2}. Install: `python -m spacy download en_core_web_sm`")
-            logging.error(f"spaCy loading error: {e2}")
-            st.stop()
+        st.error(f"Failed to load spaCy: {e}. Install: `python -m spacy download en_core_web_sm`")
+        logging.error(f"spaCy loading error: {e}")
+        st.stop()
 
 # Initialize database
 def initialize_metadata_db(db_file=METADATA_DB_FILE):
@@ -206,9 +192,8 @@ def preserve_formulas(text):
         formula_map[placeholder] = formula
     return text, formula_map
 
-# Extract terms and phrases with SciBERT
-@st.cache_data
-def extract_terms_with_scibert(texts, query, similarity_threshold=0.7, top_n=20, tokenizer=None, model=None, device=None):
+# Extract terms (simplified, no SciBERT attentions)
+def extract_terms(texts, query, similarity_threshold=0.7, top_n=20):
     try:
         term_counts = Counter()
         key_terms = set(THERMOELECTRIC_KEYWORDS + P_TYPE_KEYWORDS + N_TYPE_KEYWORDS + list(SYNONYM_MAPPING.keys()))
@@ -234,19 +219,6 @@ def extract_terms_with_scibert(texts, query, similarity_threshold=0.7, top_n=20,
                         formulas.add(formula)
             key_terms.update(formulas)
             
-            text, formula_map = preserve_formulas(text)
-            inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=256, padding=True).to(device)
-            with torch.no_grad():
-                outputs = model(**inputs, output_attentions=True)
-            attentions = outputs.attentions[-1].mean(dim=1).cpu().numpy()[0]
-            tokens = [formula_map.get(token, token).lower().replace("##", "") for token in tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])]
-            
-            for i, token in enumerate(tokens):
-                if attentions[i] < 0.05:
-                    continue
-                if token in key_terms or any(fuzz.ratio(token, k.lower()) > 70 for k in key_terms):
-                    term_counts[token] += 1
-            
             for chunk in doc.noun_chunks:
                 phrase = chunk.text.lower()
                 if phrase in key_terms or any(fuzz.ratio(phrase, k.lower()) > 70 for k in key_terms):
@@ -265,17 +237,19 @@ def generate_term_histogram(term_counts, max_terms=20):
             return None
         terms = list(term_counts.keys())[:max_terms]
         counts = list(term_counts.values())[:max_terms]
-        plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(10, 6))
         plt.bar(terms, counts, color='skyblue')
         plt.xlabel("Terms")
         plt.ylabel("Frequency")
         plt.title("Top Terms and Phrases in Thermoelectric Data")
         plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
-        return plt.gcf()
+        return fig
     except Exception as e:
         update_log(f"Histogram generation error: {str(e)}")
         return None
+    finally:
+        plt.close()
 
 # Generate word cloud
 def generate_word_cloud_from_terms(term_counts):
@@ -286,19 +260,22 @@ def generate_word_cloud_from_terms(term_counts):
         custom_stopwords = set(STOPWORDS) | {'et', 'al', 'fig', 'figure', 'table', 'equation', 'http', 'https', 'arxiv', 'journal', 'volume', 'doi', 'published'}
         filtered_terms = {term: count for term, count in term_counts.items() if term not in custom_stopwords}
         wordcloud = WordCloud(width=800, height=400, background_color='white', min_font_size=10, max_font_size=150).generate_from_frequencies(filtered_terms)
-        plt.figure(figsize=(10, 5))
+        fig = plt.figure(figsize=(10, 5))
         plt.imshow(wordcloud, interpolation='bilinear')
         plt.axis('off')
-        return plt.gcf()
+        return fig
     except Exception as e:
         update_log(f"Word cloud generation error: {str(e)}")
         return None
+    finally:
+        plt.close()
 
 # Generate word co-occurrence network
 def generate_word_network(texts, context_window=50, min_edge_weight=2):
     try:
         G = nx.Graph()
         key_terms = set(THERMOELECTRIC_KEYWORDS + P_TYPE_KEYWORDS + N_TYPE_KEYWORDS + list(SYNONYM_MAPPING.keys()))
+        
         for text in texts:
             if not isinstance(text, str) or not text.strip():
                 continue
@@ -327,15 +304,17 @@ def generate_word_network(texts, context_window=50, min_edge_weight=2):
         for u, v, data in G.edges(data=True):
             if data['weight'] >= min_edge_weight:
                 G_filtered.add_edge(u, v, weight=data['weight'])
-        plt.figure(figsize=(10, 8))
+        fig = plt.figure(figsize=(10, 8))
         pos = nx.spring_layout(G_filtered, k=0.5, iterations=50)
         nx.draw(G_filtered, pos, with_labels=True, node_color='lightblue', node_size=500, font_size=10, edge_color='gray')
         nx.draw_network_edges(G_filtered, pos, edge_color='gray', width=[data['weight'] * 0.5 for u, v, data in G_filtered.edges(data=True)])
         plt.title("Word Co-occurrence Network")
-        return plt.gcf()
+        return fig
     except Exception as e:
         update_log(f"Word network generation error: {str(e)}")
         return None
+    finally:
+        plt.close()
 
 # Compute PMI
 def compute_pmi(text, formula, keyword, total_words, word_counts):
@@ -354,61 +333,44 @@ def compute_pmi(text, formula, keyword, total_words, word_counts):
         update_log(f"PMI computation error for {formula}, {keyword}: {str(e)}")
         return 0.0
 
-# Get SciBERT embedding
-@st.cache_data
-def get_scibert_embedding(text, tokenizer, model, device):
-    try:
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128, padding=True).to(device)
-        with torch.no_grad():
-            outputs = model(**inputs, output_hidden_states=True)
-        embedding = outputs.hidden_states[-1].mean(dim=1).squeeze().cpu().numpy()
-        norm = np.linalg.norm(embedding)
-        return embedding / norm if norm > 0 else embedding
-    except Exception as e:
-        update_log(f"SciBERT embedding error for '{text}': {str(e)}")
-        return None
-
-# Batch SciBERT scoring
+# Simplified SciBERT scoring
 def score_text_with_scibert(texts, query, pmi_threshold, similarity_threshold, tokenizer, model, device, nlp, matcher):
     try:
         inputs = tokenizer(
-            [preprocess_text(t)[:10000] for t in texts],  # Limit text length
+            [preprocess_text(t) for t in texts],
             return_tensors="pt",
             truncation=True,
-            max_length=256,
+            max_length=128,
             padding=True
         ).to(device)
         with torch.no_grad():
-            outputs = model(**inputs, output_attentions=True)
-        attentions = outputs.attentions[-1].mean(dim=1).cpu().numpy()
+            outputs = model(**inputs)
+        embeddings = outputs.last_hidden_state.mean(dim=1).cpu().numpy()
         
         results = []
         query_terms = [query] + THERMOELECTRIC_KEYWORDS
         
         for idx, text in enumerate(texts):
             start_time = time.time()
-            if time.time() - start_time > 30:  # Timeout after 30 seconds
+            if time.time() - start_time > 20:
                 update_log(f"Timeout processing text {idx}")
                 results.append((0.0, [], [], []))
                 continue
                 
-            text = preprocess_text(text)[:10000]  # Limit text length
+            text = preprocess_text(text)
             doc = nlp(text)
-            sentences = [sent.text for sent in doc.sents]
+            sentences = [sent.text for sent in doc.sents][:20]
             word_counts = defaultdict(int)
             for word in text.lower().split():
                 word_counts[word] += 1
             total_words = sum(word_counts.values())
-            
-            sent_tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][idx])
-            sent_attention = attentions[idx][:len(sent_tokens)]
             
             relevance_scores = []
             matched_terms = []
             matched_formulas = []
             seebeck_values = []
             
-            for sent_idx, sentence in enumerate(sentences[:50]):  # Limit sentences
+            for sentence in sentences:
                 sentence_score = 0.0
                 sentence_terms = []
                 sentence_formulas = []
@@ -438,37 +400,14 @@ def score_text_with_scibert(texts, query, pmi_threshold, similarity_threshold, t
                         seebeck_values.append(value)
                         sentence_terms.append(match.group(0))
                 
-                sent_text, formula_map = preserve_formulas(sentence)
-                sent_inputs = tokenizer(sent_text, return_tensors="pt", truncation=True, max_length=128, padding=True).to(device)
-                with torch.no_grad():
-                    sent_outputs = model(**sent_inputs, output_attentions=True)
-                sent_attentions = sent_outputs.attentions[-1].mean(dim=1).cpu().numpy()[0]
-                sent_tokens = [formula_map.get(token, token).lower().replace("##", "") for token in tokenizer.convert_ids_to_tokens(sent_inputs["input_ids"][0])]
-                
-                for i, token in enumerate(sent_tokens):
-                    token_attention = sent_attentions[i] if i < len(sent_attentions) else 0.0
-                    if token_attention < 0.05:
-                        continue
-                    for q in query_terms:
-                        query_embedding = get_scibert_embedding(q, tokenizer, model, device)
-                        token_embedding = get_scibert_embedding(token, tokenizer, model, device)
-                        if query_embedding is not None and token_embedding is not None:
-                            similarity = np.dot(query_embedding, token_embedding) / (np.linalg.norm(query_embedding) * np.linalg.norm(token_embedding))
-                            if similarity > similarity_threshold:
-                                sentence_score += 3.0 * token_attention
-                                sentence_terms.append(q)
-                    for keyword in THERMOELECTRIC_KEYWORDS + list(SYNONYM_MAPPING.keys()):
+                for keyword in THERMOELECTRIC_KEYWORDS + list(SYNONYM_MAPPING.keys()):
+                    if re.search(r'\b' + re.escape(keyword) + r'\b', sentence, re.IGNORECASE):
                         mapped_keyword = SYNONYM_MAPPING.get(keyword.lower(), keyword.lower())
-                        if fuzz.ratio(token, mapped_keyword) > 70:
-                            pmi = compute_pmi(sentence, q, mapped_keyword, total_words, word_counts)
-                            if pmi > pmi_threshold:
-                                weight = TERM_WEIGHTS.get(mapped_keyword, 1.0)
-                                sentence_score += weight * token_attention * pmi
-                                sentence_terms.append(mapped_keyword)
-                    for unit in UNIT_VARIANTS:
-                        if re.search(unit, token, re.IGNORECASE):
-                            sentence_score += 1.0 * token_attention
-                            sentence_terms.append(unit)
+                        pmi = compute_pmi(sentence, query, mapped_keyword, total_words, word_counts)
+                        if pmi > pmi_threshold:
+                            weight = TERM_WEIGHTS.get(mapped_keyword, 1.0)
+                            sentence_score += weight * pmi
+                            sentence_terms.append(mapped_keyword)
                 
                 relevance_scores.append(sentence_score)
                 matched_terms.extend(sentence_terms)
@@ -512,7 +451,7 @@ def analyze_universe_db(db_file=UNIVERSE_DB_FILE, query="thermoelectric material
         start_time = time.time()
         update_log("Starting database analysis...")
         tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
-        model = AutoModel.from_pretrained('allenai/scibert_scivocab_uncased', output_attentions=True, output_hidden_states=True)
+        model = AutoModel.from_pretrained('allenai/scibert_scivocab_uncased', torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32)
         model.eval()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
@@ -522,12 +461,12 @@ def analyze_universe_db(db_file=UNIVERSE_DB_FILE, query="thermoelectric material
             "p-type semiconductor antimony", "n-type material selenium", "hole-doped", "electron-doped",
             "positive seebeck coefficient", "negative seebeck coefficient", "hole conduction material",
             "electron transport semiconductor", "thermoelectric Bi2Te3 n-type", "p-type PbTe doping",
-            "thermoelectric performance", "charge carrier concentration", "n-type doping", "p-type doping"
+            "thermoelectric performance", "charge carrier concentration"
         ]
-        y_train = ["p-type", "n-type", "p-type", "n-type", "p-type", "n-type", "p-type", "n-type", "n-type", "p-type", "neutral", "neutral", "n-type", "p-type"]
+        y_train = ["p-type", "n-type", "p-type", "n-type", "p-type", "n-type", "p-type", "n-type", "n-type", "p-type", "neutral", "neutral"]
         vectorizer = TfidfVectorizer()
         X_train_vec = vectorizer.fit_transform(X_train)
-        clf = RandomForestClassifier(n_estimators=100, random_state=42).fit(X_train_vec, y_train)
+        clf = RandomForestClassifier(n_estimators=50, random_state=42).fit(X_train_vec, y_train)
         update_log("Trained Random Forest classifier")
         
         nlp, matcher = load_spacy()
@@ -540,7 +479,7 @@ def analyze_universe_db(db_file=UNIVERSE_DB_FILE, query="thermoelectric material
         metadata = []
         papers = []
         term_counts = Counter()
-        batch_size = 5  # Reduced batch size
+        batch_size = 3
         progress_bar = st.progress(0)
         
         for i in range(0, len(df), batch_size):
@@ -548,7 +487,7 @@ def analyze_universe_db(db_file=UNIVERSE_DB_FILE, query="thermoelectric material
             batch_texts = batch_df["content"]
             update_log(f"Processing batch {i//batch_size + 1} of {len(df)//batch_size + 1}")
             
-            batch_term_counts = extract_terms_with_scibert(batch_texts, query, similarity_threshold, st.session_state.max_terms, tokenizer, model, device)
+            batch_term_counts = extract_terms(batch_texts, query, similarity_threshold, st.session_state.max_terms)
             term_counts.update(batch_term_counts)
             
             batch_results = score_text_with_scibert(batch_texts, query, pmi_threshold, similarity_threshold, tokenizer, model, device, nlp, matcher)
@@ -559,7 +498,7 @@ def analyze_universe_db(db_file=UNIVERSE_DB_FILE, query="thermoelectric material
                 try:
                     if not matched_formulas or relevance_score * 100 < relevance_threshold:
                         continue
-                    text = preprocess_text(row.content)[:10000]
+                    text = preprocess_text(row.content)
                     doc = nlp(text)
                     matches = matcher(doc)
                     p_type_count = len(re.finditer(P_TYPE_PATTERN, text, re.IGNORECASE))
@@ -710,12 +649,7 @@ else:
 if st.sidebar.checkbox("Debug Mode: Test Term Extraction"):
     debug_text = "Bi2Te3 is an n-type thermoelectric material with a Seebeck coefficient of -200 μV/K."
     nlp, matcher = load_spacy()
-    tokenizer = AutoTokenizer.from_pretrained('allenai/scibert_scivocab_uncased')
-    model = AutoModel.from_pretrained('allenai/scibert_scivocab_uncased', output_attentions=True, output_hidden_states=True)
-    model.eval()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    debug_terms = extract_terms_with_scibert([debug_text], query, similarity_threshold, st.session_state.max_terms, tokenizer, model, device)
+    debug_terms = extract_terms([debug_text], query, similarity_threshold, st.session_state.max_terms)
     st.write("Debug Term Extraction:", debug_terms)
 
 # Process analysis
