@@ -24,6 +24,7 @@ torchaudio
 kaleido
 seaborn
 pymatgen
+scikit-learn
 
 
 
