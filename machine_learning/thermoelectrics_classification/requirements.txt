@@ -23,6 +23,7 @@ torchvision
 torchaudio
 kaleido
 seaborn
+pymatgen
 
 
 
