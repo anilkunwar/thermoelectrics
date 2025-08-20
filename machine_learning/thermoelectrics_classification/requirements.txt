@@ -25,6 +25,7 @@ kaleido
 seaborn
 pymatgen
 scikit-learn
+fuzzywuzzy
 
 
 
