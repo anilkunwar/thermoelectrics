@@ -1,0 +1,88 @@
+p_type_keywords:
+  - p-type
+  - p-doped
+  - hole-doped
+  - positive seebeck
+  - hole carrier
+  - hole conduction
+  - p-type semiconductor
+  - acceptor doping
+  - hole transport
+  - antimony
+  - boron
+  - gallium
+  - indium
+  - aluminum
+n_type_keywords:
+  - n-type
+  - n-doped
+  - electron-doped
+  - negative seebeck
+  - electron carrier
+  - electron conduction
+  - n-type semiconductor
+  - donor doping
+  - electron transport
+  - selenium
+  - phosphorus
+  - arsenic
+thermoelectric_keywords:
+  - seebeck coefficient
+  - thermopower
+  - seebeck
+  - power factor
+  - zt
+  - figure of merit
+  - thermoelectric
+  - thermoelectric material
+  - band gap
+  - electrical conductivity
+  - thermal conductivity
+  - carrier concentration
+  - carrier mobility
+synonym_mapping:
+  p-doped: p-type
+  hole-doped: p-type
+  acceptor-doped: p-type
+  hole conduction: p-type
+  n-doped: n-type
+  electron-doped: n-type
+  donor-doped: n-type
+  electron transport: n-type
+  seebeck: seebeck coefficient
+  thermopower: seebeck coefficient
+  figure of merit: zt
+  dimensionless figure of merit: zt
+term_weights:
+  p-type: 2.0
+  p-doped: 2.0
+  hole-doped: 2.0
+  positive seebeck: 2.5
+  n-type: 2.0
+  n-doped: 2.0
+  electron-doped: 2.0
+  negative seebeck: 2.5
+  seebeck coefficient: 2.5
+  zt: 2.5
+  thermoelectric: 1.5
+  antimony: 1.5
+  selenium: 1.5
+  boron: 1.5
+  phosphorus: 1.5
+unit_variants:
+  - microvolt/K
+  - μV/K
+  - mV/K
+  - V/K
+  - microvolts per Kelvin
+  - microvolts/Kelvin
+material_formula_pattern: '\b(?:[A-Z][a-z]?(?:[0-9.]+)?(?:\([A-Z][a-z]?(?:[0-9.]+)?\)[0-9.]+)?(?:[-_/][A-Z][a-z]?)?){1,}\b'
+seebeck_value_pattern: '(-?\d*\.?\d+)\s*(microvolt/K|μV/K|mV/K|V/K|microvolts per Kelvin|microvolts/Kelvin)'
+p_type_pattern: '\b(?:p-type|p-doped|hole-doped|positive seebeck|hole carrier|hole conduction|p-type semiconductor|acceptor doping|hole transport|antimony|boron|gallium|indium|aluminum)\b'
+n_type_pattern: '\b(?:n-type|n-doped|electron-doped|negative seebeck|electron carrier|electron conduction|n-type semiconductor|donor doping|electron transport|selenium|phosphorus|arsenic)\b'
+categories:
+  - cond-mat.mtrl-sci
+  - physics.app-ph
+  - physics.chem-ph
+  - cond-mat.soft
+
