@@ -82,6 +82,9 @@ Querying the Abstracts on the Materials Science, Applied Physics and Condensed M
 [![machinelearningthermoelectricity](https://img.shields.io/badge/querythermoinformatics-streamlit-red)](https://thermoelectrics-queryinterface.streamlit.app/)
 
 
+NER analysis for material type classification 
+[![machinelearningthermoelectricity](https://img.shields.io/badge/nerpnthermo-streamlit-red)](https://thermoelectric-inspector.streamlit.app/)
+
 
 # Basic Models
 
