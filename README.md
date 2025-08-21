@@ -78,6 +78,11 @@ Materials informatics and transformers enforcing physics based bias to VAE-Regre
 
 # Informatics approach to classify p-type and n-type thermoelectric materials
 
+Basic Illustrative Tutorial
+[![machinelearningthermoelectricity](https://img.shields.io/badge/basictutorial-streamlit-red)](https://thermoelectricmaterialtypeclassifier-tutorial.streamlit.app/)
+
+
+
 Querying the Abstracts on the Materials Science, Applied Physics and Condensed Matter Physics on Keyterms Specific to Thermoelectrics
 [![machinelearningthermoelectricity](https://img.shields.io/badge/querythermoinformatics-streamlit-red)](https://thermoelectrics-queryinterface.streamlit.app/)
 
