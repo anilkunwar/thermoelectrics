@@ -80,6 +80,8 @@ Materials informatics and transformers enforcing physics based bias to VAE-Regre
 
 Basic Illustrative Tutorial
 [![machinelearningthermoelectricity](https://img.shields.io/badge/basictutorial-streamlit-red)](https://thermoelectricmaterialtypeclassifier-tutorial.streamlit.app/)
+[![machinelearningthermoelectricity](https://img.shields.io/badge/interactivetutorial-streamlit-red)](https://thermoelectricmaterialclassifier-interactive.streamlit.app/)
+
 
 
 
