@@ -587,16 +587,22 @@ def batch_classify_formulas(formulas, material_df, fuzzy_match=False):
 
 def plot_material_classifications(df, top_n=20, year_range=None):
     if df.empty:
+        update_log("Empty DataFrame provided to plot_material_classifications")
         return None, None, None, None
     
     if year_range:
         df = df[(df["year"] >= year_range[0]) & (df["year"] <= year_range[1])]
+        if df.empty:
+            update_log("No data after year range filtering")
+            return None, None, None, None
     
     material_counts = df.groupby(["material", "classification"]).size().reset_index(name="count")
     
+    # Get top N materials based on total count
     top_materials = material_counts.groupby("material")["count"].sum().nlargest(top_n).index
     filtered_df = material_counts[material_counts["material"].isin(top_materials)]
     
+    # Bar chart
     fig_bar = px.bar(
         filtered_df, 
         x="material", 
@@ -608,6 +614,7 @@ def plot_material_classifications(df, top_n=20, year_range=None):
     )
     fig_bar.update_layout(xaxis_tickangle=-45, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
+    # Pie chart
     class_dist = df["classification"].value_counts()
     fig_pie = px.pie(
         values=class_dist.values,
@@ -617,6 +624,7 @@ def plot_material_classifications(df, top_n=20, year_range=None):
     )
     fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
+    # Timeline chart
     if "year" in df.columns and df["year"].notna().any():
         yearly_data = df.groupby(["year", "classification"]).size().reset_index(name="count")
         fig_timeline = px.line(
@@ -631,30 +639,41 @@ def plot_material_classifications(df, top_n=20, year_range=None):
         fig_timeline.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     else:
         fig_timeline = None
+        update_log("No valid year data for timeline plot")
     
+    # Heatmap: Co-occurrence matrix
     material_papers = df.groupby(["material", "paper_id"]).size().unstack(fill_value=0)
     co_occurrence = material_papers.T.dot(material_papers)
     np.fill_diagonal(co_occurrence.values, 0)
-    top_materials = material_counts.groupby("material")["count"].sum().nlargest(top_n).index
-    co_occurrence = co_occurrence.loc[top_materials, top_materials]
     
-    fig_heatmap = go.Figure(data=go.Heatmap(
-        z=co_occurrence.values,
-        x=co_occurrence.columns,
-        y=co_occurrence.index,
-        colorscale="Viridis",
-        text=co_occurrence.values,
-        texttemplate="%{text}",
-        textfont={"size": 10}
-    ))
-    fig_heatmap.update_layout(
-        title="Material Co-occurrence Heatmap",
-        xaxis_title="Material",
-        yaxis_title="Material",
-        xaxis_tickangle=-45,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)"
-    )
+    # Filter top_materials to only those present in co_occurrence
+    valid_materials = [m for m in top_materials if m in co_occurrence.index and m in co_occurrence.columns]
+    update_log(f"Top materials: {list(top_materials)}")
+    update_log(f"Valid materials for co-occurrence: {valid_materials}")
+    update_log(f"Co-occurrence index: {list(co_occurrence.index)}")
+    
+    if not valid_materials:
+        update_log("No valid materials for co-occurrence heatmap")
+        fig_heatmap = None
+    else:
+        co_occurrence = co_occurrence.loc[valid_materials, valid_materials]
+        fig_heatmap = go.Figure(data=go.Heatmap(
+            z=co_occurrence.values,
+            x=co_occurrence.columns,
+            y=co_occurrence.index,
+            colorscale="Viridis",
+            text=co_occurrence.values,
+            texttemplate="%{text}",
+            textfont={"size": 10}
+        ))
+        fig_heatmap.update_layout(
+            title="Material Co-occurrence Heatmap",
+            xaxis_title="Material",
+            yaxis_title="Material",
+            xaxis_tickangle=-45,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)"
+        )
     
     return fig_bar, fig_pie, fig_timeline, fig_heatmap
 
