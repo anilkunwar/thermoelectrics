@@ -40,7 +40,7 @@ st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases (e.g., thermoelectric_universe.db) and allows classification of user-input chemical formulas.
 
-**Date and Time**: 08:43 PM CEST, Thursday, August 21, 2025
+**Date and Time**: 08:52 PM CEST, Thursday, August 21, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen`
@@ -102,7 +102,7 @@ def formula_ner(doc):
         if span is not None:
             new_ents.append(span)
     
-    # Resolve overlapping spans by keeping the longest
+    # Resolve overlapping spans
     sorted_ents = sorted(new_ents, key=lambda x: (x.start, -x.end))
     final_ents = []
     last_end = -1
@@ -131,6 +131,8 @@ if "error_summary" not in st.session_state:
     st.session_state.error_summary = []
 if "progress_log" not in st.session_state:
     st.session_state.progress_log = []
+if "text_column" not in st.session_state:
+    st.session_state.text_column = "content"
 
 def update_log(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -241,12 +243,23 @@ def standardize_material_formula(formula, preserve_stoichiometry=False, canonica
     update_log(f"Normalized formula '{formula}' using basic standardization")
     return formula
 
+def detect_text_column(conn):
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(papers)")
+    columns = {col[1] for col in cursor.fetchall()}
+    possible_text_columns = ['content', 'text', 'abstract', 'body']
+    for col in possible_text_columns:
+        if col in columns:
+            update_log(f"Detected text column: {col}")
+            return col
+    update_log("No text column found in 'papers' table")
+    return None
+
 def extract_material_classifications(db_file, preserve_stoichiometry=False, year_range=None):
     try:
         update_log("Starting p-type/n-type material classification with NER")
         update_progress("Connecting to database...")
         
-        # Validate database schema
         conn = sqlite3.connect(db_file)
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='papers'")
@@ -258,7 +271,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
         
         cursor.execute("PRAGMA table_info(papers)")
         columns = {col[1] for col in cursor.fetchall()}
-        required_columns = {'id', 'title', 'year', 'content'}
+        required_columns = {'id', 'title', 'year'}
         if not required_columns.issubset(columns):
             missing = required_columns - columns
             update_log(f"Missing required columns: {missing}")
@@ -266,7 +279,14 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             conn.close()
             return pd.DataFrame()
         
-        query = "SELECT id, title, year, content FROM papers WHERE content IS NOT NULL AND content NOT LIKE 'Error%'"
+        text_column = detect_text_column(conn)
+        if not text_column:
+            st.session_state.error_summary.append("No text column (content, text, abstract, body) found in database")
+            conn.close()
+            return pd.DataFrame()
+        st.session_state.text_column = text_column
+        
+        query = f"SELECT id, title, year, {text_column} FROM papers WHERE {text_column} IS NOT NULL AND {text_column} NOT LIKE 'Error%'"
         if year_range:
             query += f" AND year BETWEEN {year_range[0]} AND {year_range[1]}"
         df = pd.read_sql_query(query, conn)
@@ -324,7 +344,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
         progress_bar = st.progress(0)
         for i, row in df.iterrows():
             update_progress(f"Processing paper {row['id']} ({i+1}/{len(df)})")
-            content = row["content"]
+            content = row[text_column]
             chunks = chunk_text(content)
             
             for chunk_idx, chunk in enumerate(chunks):
@@ -403,7 +423,6 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                         "context": f"Found in context: {context}..."
                     })
                 
-                # Clear spaCy buffers
                 doc = None
                 import gc
                 gc.collect()
@@ -439,7 +458,7 @@ def classify_formula(formula, material_df, fuzzy_match=False):
     try:
         if not formula.strip():
             update_log("Empty formula input provided")
-            return None, "Please enter a valid chemical formula."
+            return None, "Please enter a valid chemical formula.", None
         
         normalized_formula = standardize_material_formula(formula, 
                                                         preserve_stoichiometry=st.session_state.get('preserve_stoichiometry', False))
@@ -457,11 +476,10 @@ def classify_formula(formula, material_df, fuzzy_match=False):
         similar_formula = None
         
         if formula_matches.empty and fuzzy_match:
-            # Find similar formula
             materials = material_df["material"].unique()
             similarities = [(m, SequenceMatcher(None, normalized_formula.lower(), m.lower()).ratio()) for m in materials]
             best_match, similarity = max(similarities, key=lambda x: x[1]) if similarities else (None, 0)
-            if similarity > 0.8:  # Threshold for fuzzy match
+            if similarity > 0.8:
                 formula_matches = material_df[material_df["material"].str.lower() == best_match.lower()]
                 similar_formula = best_match
                 update_log(f"Fuzzy matched '{normalized_formula}' to '{best_match}' (similarity: {similarity:.2%})")
@@ -526,16 +544,19 @@ def plot_material_classifications(df, top_n=20, year_range=None):
         y="count", 
         color="classification",
         title=f"Top {top_n} Materials by p-type/n-type Classification",
-        labels={"material": "Material", "count": "Frequency", "classification": "Type"}
+        labels={"material": "Material", "count": "Frequency", "classification": "Type"},
+        color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"}
     )
-    fig_bar.update_layout(xaxis_tickangle=-45)
+    fig_bar.update_layout(xaxis_tickangle=-45, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
     class_dist = df["classification"].value_counts()
     fig_pie = px.pie(
         values=class_dist.values,
         names=class_dist.index,
-        title="Distribution of p-type vs n-type Classifications"
+        title="Distribution of p-type vs n-type Classifications",
+        color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"}
     )
+    fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
     if "year" in df.columns and df["year"].notna().any():
         yearly_data = df.groupby(["year", "classification"]).size().reset_index(name="count")
@@ -545,8 +566,10 @@ def plot_material_classifications(df, top_n=20, year_range=None):
             y="count",
             color="classification",
             title="Trend of p-type and n-type Classifications Over Time",
-            labels={"year": "Year", "count": "Number of Mentions", "classification": "Type"}
+            labels={"year": "Year", "count": "Number of Mentions", "classification": "Type"},
+            color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"}
         )
+        fig_timeline.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     else:
         fig_timeline = None
     
@@ -569,7 +592,9 @@ def plot_material_classifications(df, top_n=20, year_range=None):
         title="Material Co-occurrence Heatmap",
         xaxis_title="Material",
         yaxis_title="Material",
-        xaxis_tickangle=-45
+        xaxis_tickangle=-45,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)"
     )
     
     return fig_bar, fig_pie, fig_timeline, fig_heatmap
@@ -599,13 +624,25 @@ if st.session_state.db_file:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM papers WHERE content IS NOT NULL AND content NOT LIKE 'Error%'")
         paper_count = cursor.fetchone()[0]
-        cursor.execute("SELECT id, title, year, content FROM papers WHERE content IS NOT NULL AND content NOT LIKE 'Error%' LIMIT 5")
-        preview_data = pd.read_sql_query("SELECT id, title, year, content FROM papers WHERE content IS NOT NULL AND content NOT LIKE 'Error%' LIMIT 5", conn)
+        
+        text_column = detect_text_column(conn)
+        if not text_column:
+            st.error("No text column (content, text, abstract, body) found in database. Please check the database schema.")
+            conn.close()
+            st.stop()
+        
+        query = f"SELECT id, title, year, {text_column} FROM papers WHERE {text_column} IS NOT NULL AND {text_column} NOT LIKE 'Error%' LIMIT 5"
+        preview_data = pd.read_sql_query(query, conn)
         conn.close()
         st.info(f"Database contains {paper_count} valid papers.")
         
         st.subheader("Database Preview (First 5 Papers)")
-        st.dataframe(preview_data[["id", "title", "year"]].assign(content=lambda x: x["content"].str[:100] + "..."), use_container_width=True)
+        display_columns = [col for col in ["id", "title", "year"] if col in preview_data.columns]
+        if text_column in preview_data.columns:
+            preview_data = preview_data[display_columns].assign(**{text_column: lambda x: x[text_column].str[:100] + "..."})
+        else:
+            preview_data = preview_data[display_columns]
+        st.dataframe(preview_data, use_container_width=True)
         
         if st.button("Clear Cached Formulas"):
             conn = sqlite3.connect(st.session_state.db_file)
