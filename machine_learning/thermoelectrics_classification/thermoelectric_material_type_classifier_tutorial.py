@@ -46,12 +46,12 @@ def material_matcher(doc):
     spans = []
     for match_id, start, end in matches:
         canonical = doc.vocab.strings[match_id]
-        span = doc[start:end].as_span(label="MATERIAL_TYPE")
-        if span:
-            span._.norm = canonical
-            spans.append(span)
+        span = Span(doc, start, end, label="MATERIAL_TYPE")  # FIXED
+        span._.norm = canonical
+        spans.append(span)
     doc.ents = filter_spans(list(doc.ents) + spans)
     return doc
+
 
 # -----------------------------
 # Loader
