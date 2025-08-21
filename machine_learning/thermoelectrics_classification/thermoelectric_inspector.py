@@ -38,10 +38,12 @@ plt.rcParams.update({
 })
 
 # Directory and logging setup
-# Set up logging
-DB_DIR = os.path.dirname(os.path.abspath(__file__))
-logging.basicConfig(filename=os.path.join(DB_DIR, 'thermoelectric_ner_analysis.log'), level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
+DB_DIR = "/home/kindness/workstation/declarmima_members/anil_kunwar/projects/word_graph1/conferenceFME/debuggin1/material_type"
+logging.basicConfig(
+    filename=os.path.join(DB_DIR, 'thermoelectric_ner.log'),
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # Streamlit configuration
 st.set_page_config(page_title="Thermoelectric Term and NER Analysis Tool (SciBERT)", layout="wide")
@@ -51,7 +53,7 @@ This tool inspects SQLite databases, extracts common terms and phrases related t
 Select or upload a database, then use the tabs to inspect the database, analyze terms, or extract entities associated with numerical values.
 All papers are processed without sampling for comprehensive analysis.
 
-**Date and Time**: 03:50 AM CEST, Thursday, August 21, 2025
+**Date and Time**: 04:13 AM CEST, Thursday, August 21, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy transformers torch nltk networkx wordcloud seaborn matplotlib psutil plotly`
@@ -116,6 +118,10 @@ if "csv_data" not in st.session_state:
     st.session_state.csv_data = None
 if "csv_filename" not in st.session_state:
     st.session_state.csv_filename = None
+if "material_terms_csv_data" not in st.session_state:
+    st.session_state.material_terms_csv_data = None
+if "material_terms_csv_filename" not in st.session_state:
+    st.session_state.material_terms_csv_filename = None
 
 def update_log(message):
     from datetime import datetime
@@ -188,6 +194,55 @@ def inspect_database(db_path):
             count = cursor.fetchone()[0]
             term_counts[term] = count
             st.write(f"'{term}': {count} papers")
+        # Extract p-type, n-type, and material formulas with source IDs
+        st.subheader("p-type, n-type, and Material Formulas")
+        phrase_variations = {
+            "p-type": ["p type", "p-type", "positive type"],
+            "n-type": ["n type", "n-type", "negative type"]
+        }
+        material_pattern = r'[A-Z][a-z]?\d*[_]?[A-Z][a-z]?\d*|[A-Z][a-z]?\d*'
+        material_regex = re.compile(material_pattern)
+        all_terms = []
+        query = "SELECT id, content FROM papers WHERE content IS NOT NULL AND content NOT LIKE 'Error%'"
+        df_content = pd.read_sql_query(query, conn)
+        for _, row in df_content.iterrows():
+            content = row["content"].lower()
+            paper_id = row["id"]
+            # Find p-type and n-type variations
+            for standard, variants in phrase_variations.items():
+                for variant in variants:
+                    if re.search(rf'\b{re.escape(variant)}\b', content, re.IGNORECASE):
+                        all_terms.append({"Term/Phrase": standard, "Paper_ID": paper_id})
+                        update_log(f"Found '{standard}' (variant: '{variant}') in paper {paper_id}")
+            # Find material formulas
+            material_matches = material_regex.findall(content)
+            for match in material_matches:
+                if len(match) >= 3 and re.match(r'^[A-Z][a-z]?\d*([_][A-Z][a-z]?\d*)*$', match):
+                    all_terms.append({"Term/Phrase": match, "Paper_ID": paper_id})
+                    update_log(f"Found material formula '{match}' in paper {paper_id}")
+        # Create DataFrame and CSV
+        if all_terms:
+            terms_df = pd.DataFrame(all_terms).drop_duplicates()
+            terms_df = terms_df.sort_values(by=["Term/Phrase", "Paper_ID"])
+            csv_filename = f"material_terms_{uuid.uuid4().hex}.csv"
+            csv_path = os.path.join(DB_DIR, csv_filename)
+            terms_df.to_csv(csv_path, index=False)
+            with open(csv_path, "rb") as f:
+                st.session_state.material_terms_csv_data = f.read()
+            st.session_state.material_terms_csv_filename = csv_filename
+            st.dataframe(terms_df, use_container_width=True)
+            st.download_button(
+                label="Download Material Terms CSV",
+                data=st.session_state.material_terms_csv_data,
+                file_name="material_terms.csv",
+                mime="text/csv",
+                key="download_material_terms"
+            )
+            update_log(f"Generated material terms CSV with {len(terms_df)} entries")
+        else:
+            st.warning("No p-type, n-type, or material formulas found.")
+            update_log("No p-type, n-type, or material formulas extracted.")
+        # Sample content CSV
         query = "SELECT id, title, year, substr(content, 1, 1000) as content FROM papers WHERE content IS NOT NULL AND content NOT LIKE 'Error%' LIMIT 10"
         df_full = pd.read_sql_query(query, conn)
         csv_filename = f"database_sample_{uuid.uuid4().hex}.csv"
@@ -982,4 +1037,3 @@ if st.session_state.db_file:
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="ner_logs")
 else:
     st.warning("Select or upload a database file.")
-
