@@ -40,7 +40,7 @@ st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases (e.g., thermoelectric_universe.db) and allows classification of user-input chemical formulas.
 
-**Date and Time**: 08:52 PM CEST, Thursday, August 21, 2025
+**Date and Time**: 09:06 PM CEST, Thursday, August 21, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen`
@@ -622,27 +622,35 @@ if st.session_state.db_file:
     try:
         conn = sqlite3.connect(st.session_state.db_file)
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM papers WHERE content IS NOT NULL AND content NOT LIKE 'Error%'")
-        paper_count = cursor.fetchone()[0]
         
+        # Use detected text_column for paper count query
         text_column = detect_text_column(conn)
         if not text_column:
             st.error("No text column (content, text, abstract, body) found in database. Please check the database schema.")
             conn.close()
             st.stop()
         
+        cursor.execute(f"SELECT COUNT(*) FROM papers WHERE {text_column} IS NOT NULL AND {text_column} NOT LIKE 'Error%'")
+        paper_count = cursor.fetchone()[0]
+        
         query = f"SELECT id, title, year, {text_column} FROM papers WHERE {text_column} IS NOT NULL AND {text_column} NOT LIKE 'Error%' LIMIT 5"
         preview_data = pd.read_sql_query(query, conn)
         conn.close()
+        
         st.info(f"Database contains {paper_count} valid papers.")
         
         st.subheader("Database Preview (First 5 Papers)")
         display_columns = [col for col in ["id", "title", "year"] if col in preview_data.columns]
+        update_log(f"Preview data columns: {preview_data.columns.tolist()}")
+        
+        # Check if text_column exists in preview_data
         if text_column in preview_data.columns:
-            preview_data = preview_data[display_columns].assign(**{text_column: lambda x: x[text_column].str[:100] + "..."})
+            preview_data_display = preview_data[display_columns].copy()
+            preview_data_display[f"{text_column}_preview"] = preview_data[text_column].str[:100] + "..."
+            st.dataframe(preview_data_display, use_container_width=True)
         else:
-            preview_data = preview_data[display_columns]
-        st.dataframe(preview_data, use_container_width=True)
+            st.dataframe(preview_data[display_columns], use_container_width=True)
+            st.warning(f"Text column '{text_column}' not found in preview data. Available columns: {', '.join(preview_data.columns)}")
         
         if st.button("Clear Cached Formulas"):
             conn = sqlite3.connect(st.session_state.db_file)
