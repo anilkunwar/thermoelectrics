@@ -4,7 +4,9 @@ import streamlit as st
 import pandas as pd
 import spacy
 from spacy.language import Language
-from spacy.tokens import Span
+from spacy.tokens import Span, Doc
+from spacy.util import filter_spans
+from spacy.matcher import PhraseMatcher
 import re
 import logging
 import plotly.express as px
@@ -25,6 +27,92 @@ try:
 except ImportError:
     PYMAGEN_AVAILABLE = False
     st.warning("pymatgen is not installed. Material formula standardization will be limited. Install with: `pip install pymatgen`")
+
+# -----------------------------
+# Regex NER for formulas
+# -----------------------------
+@Language.component("formula_ner")
+def formula_ner(doc):
+    formula_pattern = r'\b(?:[A-Z][a-z]?(?:\d*\.?\d*)?)+(?:-[A-Z][a-z]?(?:\d*\.?\d*)?)*\b'
+    spans = []
+    for match in re.finditer(formula_pattern, doc.text):
+        span = doc.char_span(match.start(), match.end(), label="FORMULA")
+        if span:
+            spans.append(span)
+    doc.ents = filter_spans(list(doc.ents) + spans)
+    return doc
+
+# -----------------------------
+# Material matcher with synonyms
+# -----------------------------
+def build_material_matcher(nlp, synonyms):
+    matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
+    for canonical, variants in synonyms.items():
+        patterns = [nlp.make_doc(v) for v in variants]
+        matcher.add(canonical, patterns)
+    return matcher
+
+@Language.component("material_matcher")
+def material_matcher(doc):
+    matcher = doc._.material_matcher
+    matches = matcher(doc)
+    spans = []
+    for match_id, start, end in matches:
+        canonical = doc.vocab.strings[match_id]
+        span = Span(doc, start, end, label="MATERIAL_TYPE")
+        span._.norm = canonical
+        spans.append(span)
+    doc.ents = filter_spans(list(doc.ents) + spans)
+    return doc
+
+# -----------------------------
+# Load spaCy model with improved NER
+# -----------------------------
+def load_spacy_model(synonyms):
+    try:
+        nlp = spacy.load("en_core_web_sm", disable=["ner"])
+    except Exception as e:
+        st.error(f"Failed to load spaCy: {e}. Install: `python -m spacy download en_core_web_sm`")
+        st.stop()
+    
+    # Add custom components
+    nlp.add_pipe("formula_ner", last=True)
+    
+    # Material matcher
+    matcher = build_material_matcher(nlp, synonyms)
+    nlp.add_pipe("material_matcher", last=True)
+    
+    # Attach matcher to doc
+    if not Doc.has_extension("material_matcher"):
+        Doc.set_extension("material_matcher", default=None)
+    Doc.set_extension("material_matcher", default=matcher, force=True)
+    
+    if not Span.has_extension("norm"):
+        Span.set_extension("norm", default=None)
+    
+    return nlp
+
+# -----------------------------
+# Link formulas to nearest material type
+# -----------------------------
+def link_formula_to_material(doc):
+    formulas = [ent for ent in doc.ents if ent.label_ == "FORMULA"]
+    materials = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
+
+    pairs = []
+    for f in formulas:
+        nearest_material = None
+        min_distance = float("inf")
+        for m in materials:
+            distance = abs(f.start_char - m.start_char)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_material = m
+        pairs.append({
+            "Formula": f.text,
+            "Material_Type": nearest_material._.norm if nearest_material else "-"
+        })
+    return pairs
 
 # Directory and logging setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -47,13 +135,6 @@ This tool extracts p-type and n-type material classifications from SQLite databa
 - `python -m spacy download en_core_web_sm`
 """)
 
-# Load spaCy with minimal pipeline to avoid NER conflicts
-try:
-    nlp = spacy.load("en_core_web_sm", disable=["ner"])
-except Exception as e:
-    st.error(f"Failed to load spaCy: {e}. Install: `python -m spacy download en_core_web_sm`")
-    st.stop()
-
 # Custom tokenizer for hyphenated phrases
 @Language.component("custom_tokenizer")
 def custom_tokenizer(doc):
@@ -72,54 +153,6 @@ def custom_tokenizer(doc):
                         retokenizer.merge(doc[start_token:start_token+len(phrase.split('-'))])
     return doc
 
-# Rule-based NER for chemical formulas
-@Language.component("formula_ner")
-def formula_ner(doc):
-    formula_pattern = r'\b(?:[A-Z][a-z]?(?:\d*\.?\d*)?)+(?:[-:][A-Z][a-z]?(?:\d*\.?\d*)?)*\b'
-    invalid_terms = {
-        'p-type', 'n-type', 'doping', 'doped', 'thermoelectric', 'material', 'the', 'and',
-        'is', 'exhibits', 'type', 'based', 'sample', 'compound', 'system', 'properties'
-    }
-    
-    new_ents = []
-    matches = list(re.finditer(formula_pattern, doc.text))
-    for match in matches:
-        start_char, end_char = match.span()
-        formula_text = doc.text[start_char:end_char]
-        
-        if formula_text.lower() in invalid_terms:
-            continue
-        
-        if PYMAGEN_AVAILABLE:
-            try:
-                comp = Composition(formula_text)
-                if not comp.valid:
-                    continue
-            except Exception:
-                continue
-        
-        span = doc.char_span(start_char, end_char, label="FORMULA")
-        if span is not None:
-            new_ents.append(span)
-    
-    # Resolve overlapping spans
-    sorted_ents = sorted(new_ents, key=lambda x: (x.start, -x.end))
-    final_ents = []
-    last_end = -1
-    for ent in sorted_ents:
-        if ent.start >= last_end:
-            final_ents.append(ent)
-            last_end = ent.end
-        else:
-            update_log(f"Resolved overlapping span: '{ent.text}' at {ent.start}-{ent.end}")
-    
-    doc.ents = final_ents
-    return doc
-
-nlp.add_pipe("custom_tokenizer", before="parser")
-nlp.add_pipe("formula_ner")
-nlp.max_length = 500_000
-
 # Initialize session state
 if "log_buffer" not in st.session_state:
     st.session_state.log_buffer = []
@@ -133,6 +166,11 @@ if "progress_log" not in st.session_state:
     st.session_state.progress_log = []
 if "text_column" not in st.session_state:
     st.session_state.text_column = "content"
+if "synonyms" not in st.session_state:
+    st.session_state.synonyms = {
+        "p-type": ["p-type", "positive type", "positive thermoelectric", "hole conducting"],
+        "n-type": ["n-type", "negative type", "negative thermoelectric", "electron conducting"]
+    }
 
 def update_log(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -305,6 +343,9 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             st.session_state.error_summary.append("No valid papers found in database")
             return pd.DataFrame()
         
+        # Load spaCy model with improved NER
+        nlp = load_spacy_model(st.session_state.synonyms)
+        
         material_classifications = []
         p_type_patterns = [
             r"p-type\s+([A-Za-z0-9\(\)\-\s,:]+?)(?=\s|,|\.|;|:|$)",
@@ -349,8 +390,26 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             
             for chunk_idx, chunk in enumerate(chunks):
                 doc = nlp(chunk)
-                formula_entities = [ent.text for ent in doc.ents if ent.label_ == "FORMULA"]
                 
+                # Use the improved NER components
+                formula_entities = [ent.text for ent in doc.ents if ent.label_ == "FORMULA"]
+                material_entities = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
+                
+                # Link formulas to materials
+                linked_pairs = link_formula_to_material(doc)
+                
+                for pair in linked_pairs:
+                    if pair["Material_Type"] in ["p-type", "n-type"]:
+                        material_classifications.append({
+                            "paper_id": row["id"],
+                            "title": row["title"],
+                            "year": row["year"],
+                            "material": pair["Formula"],
+                            "classification": pair["Material_Type"],
+                            "context": f"Found in context: {chunk[max(0, chunk.find(pair['Formula'])-50):min(len(chunk), chunk.find(pair['Formula'])+50)]}..."
+                        })
+                
+                # Also use the original pattern matching as fallback
                 p_type_materials = set()
                 for pattern in p_type_patterns:
                     matches = re.finditer(pattern, chunk, re.IGNORECASE)
@@ -652,7 +711,7 @@ if st.session_state.db_file:
             st.dataframe(preview_data[display_columns], use_container_width=True)
             st.warning(f"Text column '{text_column}' not found in preview data. Available columns: {', '.join(preview_data.columns)}")
         
-        if st.button("Clear Cached Formulas"):
+        if st.button("Clear Cached Formulas", key="clear_cache"):
             conn = sqlite3.connect(st.session_state.db_file)
             cursor = conn.cursor()
             cursor.execute("DROP TABLE IF EXISTS standardized_formulas")
@@ -678,7 +737,24 @@ if st.session_state.db_file:
                                          disabled=not PYMAGEN_AVAILABLE, key="enable_pymatgen")
             preserve_stoichiometry = st.checkbox("Preserve Exact Stoichiometry", value=False, key="preserve_stoichiometry")
             year_range = st.slider("Year Range", min_value=1980, max_value=2025, value=(2000, 2025), key="year_range")
-            material_filter = st.multiselect("Filter Materials", options=st.session_state.get("material_filter_options", []), 
+            
+            # Add synonym management UI
+            st.subheader("Synonym Settings")
+            with st.form("add_synonym_form"):
+                st.write("➕ Add new synonym")
+                synonym_text = st.text_input("Phrase (e.g. 'hole transport'):", key="synonym_text")
+                synonym_type = st.selectbox("Maps to:", ["p-type", "n-type"], key="synonym_type")
+                submitted = st.form_submit_button("Add Synonym")
+                if submitted and synonym_text.strip():
+                    st.session_state.synonyms[synonym_type].append(synonym_text.strip())
+                    st.success(f"Added '{synonym_text}' → {synonym_type}")
+            
+            st.write("### Current synonyms:")
+            st.json(st.session_state.synonyms)
+            
+            # Material filter - only show after extraction
+            material_filter_options = st.session_state.get("material_filter_options", [])
+            material_filter = st.multiselect("Filter Materials", options=material_filter_options, 
                                            placeholder="Select materials after extraction", key="material_filter")
         
         if st.button("Extract Material Classifications", key="extract_materials"):
@@ -690,8 +766,6 @@ if st.session_state.db_file:
                 
                 if not material_df.empty:
                     st.session_state.material_filter_options = sorted(material_df["material"].unique())
-                    st.sidebar.multiselect("Filter Materials", options=st.session_state.material_filter_options, 
-                                         default=st.session_state.material_filter, key="material_filter")
             
             if material_df.empty:
                 st.warning("No material classifications found. Check logs for details.")
@@ -700,8 +774,8 @@ if st.session_state.db_file:
             else:
                 st.success(f"Extracted {len(material_df)} unique material classifications!")
                 
-                filtered_df = material_df if not st.session_state.material_filter else \
-                             material_df[material_df["material"].isin(st.session_state.material_filter)]
+                filtered_df = material_df if not material_filter else \
+                             material_df[material_df["material"].isin(material_filter)]
                 
                 st.subheader("Classification Summary")
                 col1, col2, col3 = st.columns(3)
@@ -781,7 +855,7 @@ if st.session_state.db_file:
                             st.error(error)
                             if similar_formula:
                                 st.warning(f"Suggested similar formula: {similar_formula}")
-                                if st.button(f"Classify Suggested Formula: {similar_formula}"):
+                                if st.button(f"Classify Suggested Formula: {similar_formula}", key="classify_similar"):
                                     result, error, _ = classify_formula(similar_formula, st.session_state.material_classifications, fuzzy_match)
                                     if error:
                                         st.error(error)
