@@ -25,12 +25,9 @@ except ImportError:
     st.warning("pymatgen is not installed. Material formula standardization will be limited. Install with: `pip install pymatgen`")
 
 # Directory and logging setup
-DB_DIR = "/home/kindness/workstation/declarmima_members/anil_kunwar/projects/word_graph1/conferenceFME/debuggin1/material_type"
-logging.basicConfig(
-    filename=os.path.join(DB_DIR, 'thermoelectric_ner.log'),
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Set up logging
+DB_DIR = os.path.dirname(os.path.abspath(__file__))
+logging.basicConfig(filename=os.path.join(DB_DIR, 'thermoelectric_ner_analysis.log'), level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Streamlit configuration
 st.set_page_config(page_title="Thermoelectric Material Classification Tool", layout="wide")
