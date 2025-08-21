@@ -23,11 +23,14 @@ import glob
 import uuid
 import seaborn as sns
 import psutil
+
+# Try to import pymatgen for material formula parsing
 try:
     from pymatgen.core.composition import Composition
-except ImportError as e:
-    st.error(f"Failed to import pymatgen: {e}. Install: `pip install pymatgen`")
-    st.stop()
+    PYMAGEN_AVAILABLE = True
+except ImportError:
+    PYMAGEN_AVAILABLE = False
+    st.warning("pymatgen is not installed. Material formula standardization will be limited. Install with: `pip install pymatgen`")
 
 # Matplotlib configuration
 plt.rcParams.update({
@@ -44,9 +47,12 @@ plt.rcParams.update({
 })
 
 # Directory and logging setup
-# Set up logging
-DB_DIR = os.path.dirname(os.path.abspath(__file__))
-logging.basicConfig(filename=os.path.join(DB_DIR, 'thermoelectric_ner_analysis.log'), level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+DB_DIR = "/home/kindness/workstation/declarmima_members/anil_kunwar/projects/word_graph1/conferenceFME/debuggin1/material_type"
+logging.basicConfig(
+    filename=os.path.join(DB_DIR, 'thermoelectric_ner.log'),
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # Streamlit configuration
 st.set_page_config(page_title="Thermoelectric Material Classification Tool", layout="wide")
@@ -55,7 +61,7 @@ st.markdown("""
 This tool inspects SQLite databases, extracts common terms and phrases related to thermoelectric materials, 
 performs rule-based NER analysis using SciBERT, classifies materials as p-type or n-type, and allows users to input a chemical formula to check its classification.
 
-**Date and Time**: 04:35 AM CEST, Thursday, August 21, 2025
+**Date and Time**: 10:39 AM CEST, Thursday, August 21, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy transformers torch nltk networkx wordcloud seaborn matplotlib psutil plotly pymatgen`
@@ -132,6 +138,54 @@ def update_log(message):
     if len(st.session_state.log_buffer) > 30:
         st.session_state.log_buffer.pop(0)
     logging.info(log_message)
+
+def standardize_material_formula(formula):
+    """
+    Standardize material formula using pymatgen if available, otherwise use basic normalization
+    """
+    if not formula or not isinstance(formula, str):
+        return None
+    
+    # Basic cleaning
+    formula = re.sub(r'\s+', '', formula)  # Remove whitespace
+    formula = re.sub(r'[\(\)\[\]\{\}]', '', formula)  # Remove brackets
+    
+    # Pre-validation to filter out obvious non-chemical terms
+    invalid_terms = [
+        'p-type', 'n-type', 'doping', 'doped', 'thermoelectric', 'material', 'the', 'and',
+        'is', 'exhibits', 'type', 'based', 'sample', 'compound', 'system', 'properties'
+    ]
+    if any(term.lower() in formula.lower() for term in invalid_terms) or not re.search(r'[A-Z][a-z]?\d*', formula):
+        update_log(f"Skipped non-chemical term '{formula}'")
+        return None
+    
+    # If pymatgen is available and enabled, use it to standardize the formula
+    if PYMAGEN_AVAILABLE and st.session_state.get('enable_pymatgen', False):
+        try:
+            comp = Composition(formula)
+            reduced_formula = comp.reduced_formula
+            update_log(f"Standardized formula '{formula}' to '{reduced_formula}' using pymatgen")
+            return reduced_formula
+        except Exception as e:
+            update_log(f"pymatgen could not parse formula '{formula}': {str(e)}")
+            # Fall back to basic normalization
+            pass
+    
+    # Basic normalization for common patterns
+    formula = re.sub(r'([A-Z][a-z]?)(\d*\.?\d*)', lambda m: m.group(1) + (m.group(2) if m.group(2) else ""), formula)
+    
+    # Handle common substitutions
+    formula = re.sub(r'Bi2Te3|Bi2Te3-based', 'Bi2Te3', formula)
+    formula = re.sub(r'PbTe|PbTe-based', 'PbTe', formula)
+    formula = re.sub(r'SnSe|SnSe-based', 'SnSe', formula)
+    formula = re.sub(r'CoSb3|CoSb3-based', 'CoSb3', formula)
+    formula = re.sub(r'SiGe|SiGe-based', 'SiGe', formula)
+    
+    # Convert numbers to subscripts for better readability
+    subscript_map = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
+    formula = formula.translate(subscript_map)
+    
+    return formula
 
 @st.cache_data
 def get_scibert_embedding(text):
@@ -512,23 +566,37 @@ def extract_material_classifications(db_file):
             return pd.DataFrame()
         
         material_classifications = []
+        
+        # Enhanced patterns for material extraction
         p_type_patterns = [
-            r"p-type\s+([A-Za-z0-9\(\)\-\s]+?)(?=\s|,|\.|;|:)",
-            r"p-type\s+material.*?([A-Za-z0-9\(\)\-\s]+?)(?=\s|,|\.|;|:)",
-            r"([A-Za-z0-9\(\)\-\s]+?)\s+is\s+p-type",
-            r"([A-Za-z0-9\(\)\-\s]+?)\s+exhibits\s+p-type"
+            r"p-type\s+([A-Za-z0-9\(\)\-\s,]+?)(?=\s|,|\.|;|:|$)",
+            r"p-type\s+material.*?([A-Za-z0-9\(\)\-\s,]+?)(?=\s|,|\.|;|:|$)",
+            r"([A-Za-z0-9\(\)\-\s,]+?)\s+is\s+p-type",
+            r"([A-Za-z0-9\(\)\-\s,]+?)\s+exhibits\s+p-type",
+            r"p-type\s+([A-Za-z0-9\(\)\-\s,]+?)\s+thermoelectric",
+            r"p-type\s+doped\s+([A-Za-z0-9\(\)\-\s,]+?)",
+            r"([A-Za-z0-9\(\)\-\s,]+?)\s+doped\s+p-type"
         ]
         
         n_type_patterns = [
-            r"n-type\s+([A-Za-z0-9\(\)\-\s]+?)(?=\s|,|\.|;|:)",
-            r"n-type\s+material.*?([A-Za-z0-9\(\)\-\s]+?)(?=\s|,|\.|;|:)",
-            r"([A-Za-z0-9\(\)\-\s]+?)\s+is\s+n-type",
-            r"([A-Za-z0-9\(\)\-\s]+?)\s+exhibits\s+n-type"
+            r"n-type\s+([A-Za-z0-9\(\)\-\s,]+?)(?=\s|,|\.|;|:|$)",
+            r"n-type\s+material.*?([A-Za-z0-9\(\)\-\s,]+?)(?=\s|,|\.|;|:|$)",
+            r"([A-Za-z0-9\(\)\-\s,]+?)\s+is\s+n-type",
+            r"([A-Za-z0-9\(\)\-\s,]+?)\s+exhibits\s+n-type",
+            r"n-type\s+([A-Za-z0-9\(\)\-\s,]+?)\s+thermoelectric",
+            r"n-type\s+doped\s+([A-Za-z0-9\(\)\-\s,]+?)",
+            r"([A-Za-z0-9\(\)\-\s,]+?)\s+doped\s+n-type"
+        ]
+        
+        # Common thermoelectric materials to look for
+        common_te_materials = [
+            "Bi2Te3", "PbTe", "SnSe", "CoSb3", "SiGe", "Skutterudite", 
+            "Half-Heusler", "Clathrate", "Zn4Sb3", "Mg2Si", "Cu2Se"
         ]
         
         progress_bar = st.progress(0)
         for i, row in df.iterrows():
-            content = row["content"].lower()
+            content = row["content"]
             
             # Extract p-type materials
             p_type_materials = set()
@@ -537,7 +605,9 @@ def extract_material_classifications(db_file):
                 for match in matches:
                     material = match.group(1).strip()
                     if material and len(material) > 2:  # Basic validation
-                        p_type_materials.add(material)
+                        standardized_material = standardize_material_formula(material)
+                        if standardized_material:  # Only add if valid
+                            p_type_materials.add(standardized_material)
             
             # Extract n-type materials
             n_type_materials = set()
@@ -546,7 +616,27 @@ def extract_material_classifications(db_file):
                 for match in matches:
                     material = match.group(1).strip()
                     if material and len(material) > 2:  # Basic validation
-                        n_type_materials.add(material)
+                        standardized_material = standardize_material_formula(material)
+                        if standardized_material:  # Only add if valid
+                            n_type_materials.add(standardized_material)
+            
+            # Also look for common thermoelectric materials in proximity to p-type/n-type mentions
+            p_type_context = re.search(r"p-type[^\.]{0,500}", content, re.IGNORECASE)
+            n_type_context = re.search(r"n-type[^\.]{0,500}", content, re.IGNORECASE)
+            
+            if p_type_context:
+                for material in common_te_materials:
+                    if material.lower() in p_type_context.group(0).lower():
+                        standardized_material = standardize_material_formula(material)
+                        if standardized_material:
+                            p_type_materials.add(standardized_material)
+            
+            if n_type_context:
+                for material in common_te_materials:
+                    if material.lower() in n_type_context.group(0).lower():
+                        standardized_material = standardize_material_formula(material)
+                        if standardized_material:
+                            n_type_materials.add(standardized_material)
             
             # Add to results
             for material in p_type_materials:
@@ -572,8 +662,9 @@ def extract_material_classifications(db_file):
             progress_value = min((i + 1) / len(df), 1.0)
             progress_bar.progress(progress_value)
         
-        update_log(f"Extracted {len(material_classifications)} material classifications")
-        return pd.DataFrame(material_classifications)
+        material_df = pd.DataFrame(material_classifications)
+        update_log(f"Extracted {len(material_df)} material classifications")
+        return material_df
     
     except Exception as e:
         update_log(f"Error in material classification: {str(e)}")
@@ -589,16 +680,23 @@ def classify_formula(formula):
             return None, "Please enter a valid chemical formula."
         
         # Normalize formula using pymatgen
-        try:
-            comp = Composition(formula)
-            if not comp.valid:
+        if PYMAGEN_AVAILABLE:
+            try:
+                comp = Composition(formula)
+                if not comp.valid:
+                    update_log(f"Invalid chemical formula: {formula}")
+                    return None, f"'{formula}' is not a valid chemical formula."
+                normalized_formula = comp.reduced_formula
+                update_log(f"Normalized formula '{formula}' to '{normalized_formula}'")
+            except ValueError as e:
+                update_log(f"Failed to parse formula '{formula}': {str(e)}")
+                return None, f"Invalid chemical formula: {str(e)}"
+        else:
+            normalized_formula = standardize_material_formula(formula)
+            if not normalized_formula:
                 update_log(f"Invalid chemical formula: {formula}")
                 return None, f"'{formula}' is not a valid chemical formula."
-            normalized_formula = comp.reduced_formula  # e.g., Bi₂Te₃ -> Bi2Te3
-            update_log(f"Normalized formula '{formula}' to '{normalized_formula}'")
-        except ValueError as e:
-            update_log(f"Failed to parse formula '{formula}': {str(e)}")
-            return None, f"Invalid chemical formula: {str(e)}"
+            update_log(f"Normalized formula '{formula}' to '{normalized_formula}' using basic standardization")
         
         # Check classifications
         if st.session_state.material_classifications is None:
@@ -1182,6 +1280,9 @@ if st.session_state.db_file:
         with st.sidebar:
             st.subheader("Material Classification Parameters")
             material_top_n = st.slider("Number of Top Materials to Show", min_value=5, max_value=30, value=10, key="material_top_n")
+            enable_pymatgen = st.checkbox("Use pymatgen for formula standardization", value=PYMAGEN_AVAILABLE, 
+                                         disabled=not PYMAGEN_AVAILABLE,
+                                         help="Requires pymatgen installation", key="enable_pymatgen")
         
         if st.button("Extract Material Classifications", key="extract_materials"):
             with st.spinner("Extracting p-type and n-type material classifications..."):
@@ -1204,6 +1305,12 @@ if st.session_state.db_file:
                 with col3:
                     n_type_count = len(material_df[material_df["classification"] == "n-type"])
                     st.metric("n-type Materials", n_type_count)
+                
+                # Show material formula standardization info
+                if PYMAGEN_AVAILABLE and enable_pymatgen:
+                    st.info("Material formulas have been standardized using pymatgen")
+                else:
+                    st.warning("pymatgen not available or disabled. Using basic formula standardization.")
                 
                 # Show visualizations
                 st.subheader("Visualizations")
