@@ -27,7 +27,7 @@ seaborn
 pymatgen
 scikit-learn
 fuzzywuzzy
-cleantext
+cleantext==1.1.4
 
 
 
