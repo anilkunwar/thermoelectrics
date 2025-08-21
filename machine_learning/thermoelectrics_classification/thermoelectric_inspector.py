@@ -1,3 +1,4 @@
+```python
 import os
 import sqlite3
 import streamlit as st
@@ -12,7 +13,6 @@ import torch
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import plotly.graph_objects as go
-import plotly.express as px
 import logging
 import networkx as nx
 from wordcloud import WordCloud
@@ -23,14 +23,6 @@ import glob
 import uuid
 import seaborn as sns
 import psutil
-
-# Try to import pymatgen for material formula parsing
-try:
-    from pymatgen.core.composition import Composition
-    PYMAGEN_AVAILABLE = True
-except ImportError:
-    PYMAGEN_AVAILABLE = False
-    st.warning("pymatgen is not installed. Material formula standardization will be limited. Install with: `pip install pymatgen`")
 
 # Matplotlib configuration
 plt.rcParams.update({
@@ -51,17 +43,19 @@ plt.rcParams.update({
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(filename=os.path.join(DB_DIR, 'thermoelectric_ner_analysis.log'), level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Streamlit configuration
-st.set_page_config(page_title="Thermoelectric Material Classification Tool", layout="wide")
-st.title("Thermoelectric Material Classification and Analysis Tool")
-st.markdown("""
-This tool inspects SQLite databases, extracts common terms and phrases related to thermoelectric materials, 
-performs rule-based NER analysis using SciBERT, classifies materials as p-type or n-type, and allows users to input a chemical formula to check its classification.
 
-**Date and Time**: 10:39 AM CEST, Thursday, August 21, 2025
+# Streamlit configuration
+st.set_page_config(page_title="Thermoelectric Term and NER Analysis Tool (SciBERT)", layout="wide")
+st.title("Common Term and Rule-Based NER Analysis for Thermoelectric Materials (SciBERT)")
+st.markdown("""
+This tool inspects SQLite databases, extracts common terms and phrases related to thermoelectric materials, and performs rule-based NER analysis using SciBERT.
+Select or upload a database, then use the tabs to inspect the database, analyze terms, or extract entities associated with numerical values.
+All papers are processed without sampling for comprehensive analysis.
+
+**Date and Time**: 03:50 AM CEST, Thursday, August 21, 2025
 
 **Dependencies**:
-- `pip install streamlit pandas sqlite3 spacy transformers torch nltk networkx wordcloud seaborn matplotlib psutil plotly pymatgen`
+- `pip install streamlit pandas sqlite3 spacy transformers torch nltk networkx wordcloud seaborn matplotlib psutil plotly`
 - `python -m spacy download en_core_web_lg` (or `en_core_web_sm` as fallback)
 """)
 
@@ -123,8 +117,6 @@ if "csv_data" not in st.session_state:
     st.session_state.csv_data = None
 if "csv_filename" not in st.session_state:
     st.session_state.csv_filename = None
-if "material_classifications" not in st.session_state:
-    st.session_state.material_classifications = None
 
 def update_log(message):
     from datetime import datetime
@@ -135,54 +127,6 @@ def update_log(message):
     if len(st.session_state.log_buffer) > 30:
         st.session_state.log_buffer.pop(0)
     logging.info(log_message)
-
-def standardize_material_formula(formula):
-    """
-    Standardize material formula using pymatgen if available, otherwise use basic normalization
-    """
-    if not formula or not isinstance(formula, str):
-        return None
-    
-    # Basic cleaning
-    formula = re.sub(r'\s+', '', formula)  # Remove whitespace
-    formula = re.sub(r'[\(\)\[\]\{\}]', '', formula)  # Remove brackets
-    
-    # Pre-validation to filter out obvious non-chemical terms
-    invalid_terms = [
-        'p-type', 'n-type', 'doping', 'doped', 'thermoelectric', 'material', 'the', 'and',
-        'is', 'exhibits', 'type', 'based', 'sample', 'compound', 'system', 'properties'
-    ]
-    if any(term.lower() in formula.lower() for term in invalid_terms) or not re.search(r'[A-Z][a-z]?\d*', formula):
-        update_log(f"Skipped non-chemical term '{formula}'")
-        return None
-    
-    # If pymatgen is available and enabled, use it to standardize the formula
-    if PYMAGEN_AVAILABLE and st.session_state.get('enable_pymatgen', False):
-        try:
-            comp = Composition(formula)
-            reduced_formula = comp.reduced_formula
-            update_log(f"Standardized formula '{formula}' to '{reduced_formula}' using pymatgen")
-            return reduced_formula
-        except Exception as e:
-            update_log(f"pymatgen could not parse formula '{formula}': {str(e)}")
-            # Fall back to basic normalization
-            pass
-    
-    # Basic normalization for common patterns
-    formula = re.sub(r'([A-Z][a-z]?)(\d*\.?\d*)', lambda m: m.group(1) + (m.group(2) if m.group(2) else ""), formula)
-    
-    # Handle common substitutions
-    formula = re.sub(r'Bi2Te3|Bi2Te3-based', 'Bi2Te3', formula)
-    formula = re.sub(r'PbTe|PbTe-based', 'PbTe', formula)
-    formula = re.sub(r'SnSe|SnSe-based', 'SnSe', formula)
-    formula = re.sub(r'CoSb3|CoSb3-based', 'CoSb3', formula)
-    formula = re.sub(r'SiGe|SiGe-based', 'SiGe', formula)
-    
-    # Convert numbers to subscripts for better readability
-    subscript_map = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
-    formula = formula.translate(subscript_map)
-    
-    return formula
 
 @st.cache_data
 def get_scibert_embedding(text):
@@ -547,240 +491,6 @@ def perform_ner_on_terms(db_file, selected_terms):
         st.error(f"NER analysis failed: {str(e)}")
         return pd.DataFrame()
 
-def extract_material_classifications(db_file):
-    """
-    Extract and classify materials as p-type or n-type with more focused analysis
-    """
-    try:
-        update_log("Starting focused p-type/n-type material classification")
-        conn = sqlite3.connect(db_file)
-        query = "SELECT id, title, year, content FROM papers WHERE content IS NOT NULL AND content NOT LIKE 'Error%'"
-        df = pd.read_sql_query(query, conn)
-        conn.close()
-        
-        if df.empty:
-            update_log("No valid papers found for material classification")
-            return pd.DataFrame()
-        
-        material_classifications = []
-        
-        # Enhanced patterns for material extraction
-        p_type_patterns = [
-            r"p-type\s+([A-Za-z0-9\(\)\-\s,]+?)(?=\s|,|\.|;|:|$)",
-            r"p-type\s+material.*?([A-Za-z0-9\(\)\-\s,]+?)(?=\s|,|\.|;|:|$)",
-            r"([A-Za-z0-9\(\)\-\s,]+?)\s+is\s+p-type",
-            r"([A-Za-z0-9\(\)\-\s,]+?)\s+exhibits\s+p-type",
-            r"p-type\s+([A-Za-z0-9\(\)\-\s,]+?)\s+thermoelectric",
-            r"p-type\s+doped\s+([A-Za-z0-9\(\)\-\s,]+?)",
-            r"([A-Za-z0-9\(\)\-\s,]+?)\s+doped\s+p-type"
-        ]
-        
-        n_type_patterns = [
-            r"n-type\s+([A-Za-z0-9\(\)\-\s,]+?)(?=\s|,|\.|;|:|$)",
-            r"n-type\s+material.*?([A-Za-z0-9\(\)\-\s,]+?)(?=\s|,|\.|;|:|$)",
-            r"([A-Za-z0-9\(\)\-\s,]+?)\s+is\s+n-type",
-            r"([A-Za-z0-9\(\)\-\s,]+?)\s+exhibits\s+n-type",
-            r"n-type\s+([A-Za-z0-9\(\)\-\s,]+?)\s+thermoelectric",
-            r"n-type\s+doped\s+([A-Za-z0-9\(\)\-\s,]+?)",
-            r"([A-Za-z0-9\(\)\-\s,]+?)\s+doped\s+n-type"
-        ]
-        
-        # Common thermoelectric materials to look for
-        common_te_materials = [
-            "Bi2Te3", "PbTe", "SnSe", "CoSb3", "SiGe", "Skutterudite", 
-            "Half-Heusler", "Clathrate", "Zn4Sb3", "Mg2Si", "Cu2Se"
-        ]
-        
-        progress_bar = st.progress(0)
-        for i, row in df.iterrows():
-            content = row["content"]
-            
-            # Extract p-type materials
-            p_type_materials = set()
-            for pattern in p_type_patterns:
-                matches = re.finditer(pattern, content, re.IGNORECASE)
-                for match in matches:
-                    material = match.group(1).strip()
-                    if material and len(material) > 2:  # Basic validation
-                        standardized_material = standardize_material_formula(material)
-                        if standardized_material:  # Only add if valid
-                            p_type_materials.add(standardized_material)
-            
-            # Extract n-type materials
-            n_type_materials = set()
-            for pattern in n_type_patterns:
-                matches = re.finditer(pattern, content, re.IGNORECASE)
-                for match in matches:
-                    material = match.group(1).strip()
-                    if material and len(material) > 2:  # Basic validation
-                        standardized_material = standardize_material_formula(material)
-                        if standardized_material:  # Only add if valid
-                            n_type_materials.add(standardized_material)
-            
-            # Also look for common thermoelectric materials in proximity to p-type/n-type mentions
-            p_type_context = re.search(r"p-type[^\.]{0,500}", content, re.IGNORECASE)
-            n_type_context = re.search(r"n-type[^\.]{0,500}", content, re.IGNORECASE)
-            
-            if p_type_context:
-                for material in common_te_materials:
-                    if material.lower() in p_type_context.group(0).lower():
-                        standardized_material = standardize_material_formula(material)
-                        if standardized_material:
-                            p_type_materials.add(standardized_material)
-            
-            if n_type_context:
-                for material in common_te_materials:
-                    if material.lower() in n_type_context.group(0).lower():
-                        standardized_material = standardize_material_formula(material)
-                        if standardized_material:
-                            n_type_materials.add(standardized_material)
-            
-            # Add to results
-            for material in p_type_materials:
-                material_classifications.append({
-                    "paper_id": row["id"],
-                    "title": row["title"],
-                    "year": row["year"],
-                    "material": material,
-                    "classification": "p-type",
-                    "context": f"Found in context: {content[max(0, match.start()-50):min(len(content), match.end()+50)]}..."
-                })
-            
-            for material in n_type_materials:
-                material_classifications.append({
-                    "paper_id": row["id"],
-                    "title": row["title"],
-                    "year": row["year"],
-                    "material": material,
-                    "classification": "n-type",
-                    "context": f"Found in context: {content[max(0, match.start()-50):min(len(content), match.end()+50)]}..."
-                })
-            
-            progress_value = min((i + 1) / len(df), 1.0)
-            progress_bar.progress(progress_value)
-        
-        material_df = pd.DataFrame(material_classifications)
-        update_log(f"Extracted {len(material_df)} material classifications")
-        return material_df
-    
-    except Exception as e:
-        update_log(f"Error in material classification: {str(e)}")
-        return pd.DataFrame()
-
-def classify_formula(formula):
-    """
-    Classify a user-input chemical formula as p-type or n-type based on material classifications
-    """
-    try:
-        if not formula.strip():
-            update_log("Empty formula input provided")
-            return None, "Please enter a valid chemical formula."
-        
-        # Normalize formula using pymatgen
-        if PYMAGEN_AVAILABLE:
-            try:
-                comp = Composition(formula)
-                if not comp.valid:
-                    update_log(f"Invalid chemical formula: {formula}")
-                    return None, f"'{formula}' is not a valid chemical formula."
-                normalized_formula = comp.reduced_formula
-                update_log(f"Normalized formula '{formula}' to '{normalized_formula}'")
-            except ValueError as e:
-                update_log(f"Failed to parse formula '{formula}': {str(e)}")
-                return None, f"Invalid chemical formula: {str(e)}"
-        else:
-            normalized_formula = standardize_material_formula(formula)
-            if not normalized_formula:
-                update_log(f"Invalid chemical formula: {formula}")
-                return None, f"'{formula}' is not a valid chemical formula."
-            update_log(f"Normalized formula '{formula}' to '{normalized_formula}' using basic standardization")
-        
-        # Check classifications
-        if st.session_state.material_classifications is None:
-            update_log("No material classifications available for formula lookup")
-            return None, "Please run Material Classification Analysis first (in the Material Classification tab)."
-        
-        material_df = st.session_state.material_classifications
-        formula_matches = material_df[material_df["material"].str.lower() == normalized_formula.lower()]
-        
-        if formula_matches.empty:
-            update_log(f"No classification found for formula '{normalized_formula}'")
-            return None, f"No p-type or n-type classification found for '{normalized_formula}'."
-        
-        classifications = formula_matches["classification"].unique()
-        paper_ids = formula_matches["paper_id"].unique()
-        
-        if len(classifications) == 1:
-            classification = classifications[0]
-            update_log(f"Formula '{normalized_formula}' classified as {classification}")
-            return {
-                "formula": normalized_formula,
-                "classification": classification,
-                "paper_ids": paper_ids.tolist(),
-                "count": len(formula_matches)
-            }, None
-        else:
-            update_log(f"Formula '{normalized_formula}' has multiple classifications: {', '.join(classifications)}")
-            return {
-                "formula": normalized_formula,
-                "classification": "Multiple (p-type and n-type)",
-                "paper_ids": paper_ids.tolist(),
-                "count": len(formula_matches)
-            }, None
-    
-    except Exception as e:
-        update_log(f"Error classifying formula '{formula}': {str(e)}")
-        return None, f"Error classifying formula: {str(e)}"
-
-def plot_material_classifications(df, top_n=20):
-    """
-    Create visualizations for p-type and n-type material classifications
-    """
-    if df.empty:
-        return None, None, None
-    
-    # Count materials by classification
-    material_counts = df.groupby(["material", "classification"]).size().reset_index(name="count")
-    
-    # Get top materials
-    top_materials = material_counts.groupby("material")["count"].sum().nlargest(top_n).index
-    filtered_df = material_counts[material_counts["material"].isin(top_materials)]
-    
-    # Create bar chart
-    fig_bar = px.bar(
-        filtered_df, 
-        x="material", 
-        y="count", 
-        color="classification",
-        title=f"Top {top_n} Materials by p-type/n-type Classification",
-        labels={"material": "Material", "count": "Frequency", "classification": "Type"}
-    )
-    fig_bar.update_layout(xaxis_tickangle=-45)
-    
-    # Create pie chart for classification distribution
-    class_dist = df["classification"].value_counts()
-    fig_pie = px.pie(
-        values=class_dist.values,
-        names=class_dist.index,
-        title="Distribution of p-type vs n-type Classifications"
-    )
-    
-    # Create timeline of classifications by year
-    if "year" in df.columns and df["year"].notna().any():
-        yearly_data = df.groupby(["year", "classification"]).size().reset_index(name="count")
-        fig_timeline = px.line(
-            yearly_data,
-            x="year",
-            y="count",
-            color="classification",
-            title="Trend of p-type and n-type Classifications Over Time",
-            labels={"year": "Year", "count": "Number of Mentions", "classification": "Type"}
-        )
-    else:
-        fig_timeline = None
-    
-    return fig_bar, fig_pie, fig_timeline
-
 @st.cache_data
 def plot_word_cloud(terms, top_n, font_size, font_type, colormap):
     term_dict = dict(terms[:top_n])
@@ -1107,7 +817,7 @@ else:
         st.session_state.db_file = os.path.join(DB_DIR, db_selection)
         update_log(f"Selected database: {db_selection}")
 if st.session_state.db_file:
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Database Inspection", "Common Terms Analysis", "NER Analysis", "Material Classification", "Formula Classification"])
+    tab1, tab2, tab3 = st.tabs(["Database Inspection", "Common Terms Analysis", "NER Analysis"])
     with tab1:
         st.header("Database Inspection")
         if st.button("Inspect Database", key="inspect_button"):
@@ -1271,99 +981,6 @@ if st.session_state.db_file:
                         else:
                             st.warning("No numerical values for box plot.")
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="ner_logs")
-    with tab4:
-        st.header("Material Classification Analysis (p-type vs n-type)")
-        
-        with st.sidebar:
-            st.subheader("Material Classification Parameters")
-            material_top_n = st.slider("Number of Top Materials to Show", min_value=5, max_value=30, value=10, key="material_top_n")
-            enable_pymatgen = st.checkbox("Use pymatgen for formula standardization", value=PYMAGEN_AVAILABLE, 
-                                         disabled=not PYMAGEN_AVAILABLE,
-                                         help="Requires pymatgen installation", key="enable_pymatgen")
-        
-        if st.button("Extract Material Classifications", key="extract_materials"):
-            with st.spinner("Extracting p-type and n-type material classifications..."):
-                material_df = extract_material_classifications(st.session_state.db_file)
-                st.session_state.material_classifications = material_df
-                
-            if material_df.empty:
-                st.warning("No material classifications found. Try adjusting extraction patterns.")
-            else:
-                st.success(f"Extracted {len(material_df)} material classifications!")
-                
-                # Show summary statistics
-                st.subheader("Classification Summary")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Classifications", len(material_df))
-                with col2:
-                    p_type_count = len(material_df[material_df["classification"] == "p-type"])
-                    st.metric("p-type Materials", p_type_count)
-                with col3:
-                    n_type_count = len(material_df[material_df["classification"] == "n-type"])
-                    st.metric("n-type Materials", n_type_count)
-                
-                # Show material formula standardization info
-                if PYMAGEN_AVAILABLE and enable_pymatgen:
-                    st.info("Material formulas have been standardized using pymatgen")
-                else:
-                    st.warning("pymatgen not available or disabled. Using basic formula standardization.")
-                
-                # Show visualizations
-                st.subheader("Visualizations")
-                fig_bar, fig_pie, fig_timeline = plot_material_classifications(material_df, material_top_n)
-                
-                if fig_bar:
-                    st.plotly_chart(fig_bar, use_container_width=True)
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if fig_pie:
-                        st.plotly_chart(fig_pie, use_container_width=True)
-                with col2:
-                    if fig_timeline:
-                        st.plotly_chart(fig_timeline, use_container_width=True)
-                
-                # Show data table
-                st.subheader("Extracted Material Classifications")
-                st.dataframe(
-                    material_df[["paper_id", "title", "year", "material", "classification", "context"]].head(100),
-                    use_container_width=True
-                )
-                
-                # Download button
-                material_csv = material_df.to_csv(index=False)
-                st.download_button(
-                    "Download Material Classifications CSV", 
-                    material_csv, 
-                    "material_classifications.csv", 
-                    "text/csv", 
-                    key="download_materials"
-                )
-    
-        st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="material_logs")
-    with tab5:
-        st.header("Formula Classification")
-        st.markdown("""
-        Enter a chemical formula (e.g., `Bi2Te3`, `PbTe`, `SnSe`) to check if it is classified as p-type or n-type based on the database analysis.
-        **Note**: You must run the Material Classification Analysis (in the Material Classification tab) first to populate the classification data.
-        """)
-        
-        formula_input = st.text_input("Enter Chemical Formula", key="formula_input")
-        if st.button("Classify Formula", key="classify_formula"):
-            if not formula_input:
-                st.error("Please enter a chemical formula.")
-            else:
-                with st.spinner(f"Classifying formula '{formula_input}'..."):
-                    result, error = classify_formula(formula_input)
-                    if error:
-                        st.error(error)
-                    else:
-                        st.success(f"Formula: **{result['formula']}**")
-                        st.write(f"Classification: **{result['classification']}**")
-                        st.write(f"Found in {result['count']} paper(s): {', '.join(result['paper_ids'])}")
-                        update_log(f"Displayed classification for '{result['formula']}': {result['classification']}")
-        
-        st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="formula_logs")
 else:
     st.warning("Select or upload a database file.")
+```
