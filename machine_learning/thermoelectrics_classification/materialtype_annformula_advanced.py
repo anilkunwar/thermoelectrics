@@ -202,7 +202,7 @@ st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases and allows classification of user-input chemical formulas using NLP and ANN.
 
-**Date and Time**: 04:11 AM CEST, Friday, August 22, 2025
+**Date and Time**: 04:24 AM CEST, Friday, August 22, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen scikit-learn joblib torch h5py`
@@ -233,6 +233,8 @@ if "scaler" not in st.session_state:
     st.session_state.scaler = None
 if "save_formats" not in st.session_state:
     st.session_state.save_formats = ["pkl", "db", "pt", "h5"]
+if "model_files" not in st.session_state:
+    st.session_state.model_files = {}
 
 def update_log(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -367,29 +369,26 @@ def featurize_formulas(formulas, labels=None):
     
     return np.array(features), valid_formulas, valid_labels if labels is not None else None
 
-# -----------------------------
-# Updated train_ann function with multi-format saving
-# -----------------------------
 def train_ann(formulas, labels):
     if not formulas or not labels:
         update_log("No valid data for ANN training")
-        return None, None
+        return None, None, {}
     
     X, valid_formulas, valid_labels = featurize_formulas(formulas, labels)
     if len(X) < 2:
         update_log("Insufficient data for ANN training")
-        return None, None
+        return None, None, {}
     
     if np.any(np.isnan(X)):
         update_log("NaN values detected in feature matrix, skipping ANN training")
-        return None, None
+        return None, None, {}
     
     scaler = StandardScaler()
     try:
         X_scaled = scaler.fit_transform(X)
     except ValueError as e:
         update_log(f"Scaler error: {str(e)}")
-        return None, None
+        return None, None, {}
     
     label_map = {"p-type": 1, "n-type": 0}
     y = np.array([label_map[l] for l in valid_labels])
@@ -399,10 +398,9 @@ def train_ann(formulas, labels):
         model.fit(X_scaled, y)
     except ValueError as e:
         update_log(f"ANN training failed: {str(e)}")
-        return None, None
+        return None, None, {}
     
-    # Save models in specified formats
-    save_formats = st.session_state.save_formats
+    save_formats = st.session_state.get('save_formats', ["pkl", "db", "pt", "h5"])
     model_files = {}
     
     # SQLite Database (.db)
@@ -447,7 +445,6 @@ def train_ann(formulas, labels):
     # PyTorch (.pt)
     if "pt" in save_formats:
         try:
-            # Convert MLPClassifier to PyTorch model
             class MLP(nn.Module):
                 def __init__(self, input_size, hidden_sizes, output_size):
                     super(MLP, self).__init__()
@@ -465,11 +462,9 @@ def train_ann(formulas, labels):
                 def forward(self, x):
                     return self.layers(x)
             
-            # Initialize PyTorch model
             pytorch_model = MLP(input_size=5, hidden_sizes=[100, 50], output_size=2)
             state_dict = pytorch_model.state_dict()
             
-            # Copy weights from sklearn MLPClassifier
             state_dict['layers.0.weight'] = torch.tensor(model.coefs_[0].T)
             state_dict['layers.0.bias'] = torch.tensor(model.intercepts_[0])
             state_dict['layers.2.weight'] = torch.tensor(model.coefs_[1].T)
@@ -478,12 +473,10 @@ def train_ann(formulas, labels):
             state_dict['layers.4.bias'] = torch.tensor(model.intercepts_[2])
             pytorch_model.load_state_dict(state_dict)
             
-            # Save PyTorch model
             model_path = os.path.join(DB_DIR, "ann_model.pt")
             torch.save(pytorch_model.state_dict(), model_path)
             model_files["ann_model.pt"] = model_path
             
-            # Save scaler parameters
             scaler_params = {
                 'mean': torch.tensor(scaler.mean_),
                 'scale': torch.tensor(scaler.scale_)
@@ -501,13 +494,11 @@ def train_ann(formulas, labels):
         try:
             h5_path = os.path.join(DB_DIR, "models.h5")
             with h5py.File(h5_path, 'w') as f:
-                # Save MLPClassifier weights
                 model_group = f.create_group('ann_model')
                 for i, (coef, intercept) in enumerate(zip(model.coefs_, model.intercepts_)):
                     model_group.create_dataset(f'coef_{i}', data=coef)
                     model_group.create_dataset(f'intercept_{i}', data=intercept)
                 
-                # Save scaler parameters
                 scaler_group = f.create_group('scaler')
                 scaler_group.create_dataset('mean', data=scaler.mean_)
                 scaler_group.create_dataset('scale', data=scaler.scale_)
@@ -736,7 +727,6 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             conn.close()
             update_log("Cached standardized formulas in database")
             
-            # Train ANN and save models
             formulas = material_df["material"].tolist()
             labels = material_df["classification"].tolist()
             model, scaler, model_files = train_ann(formulas, labels)
@@ -1016,11 +1006,14 @@ if st.session_state.db_file:
             save_formats = st.multiselect(
                 "Select formats to save models",
                 options=["db", "pkl", "pt", "h5"],
-                default=["pkl", "db", "pt", "h5"],
-                key="save_formats"
+                default=st.session_state.get('save_formats', ["pkl", "db", "pt", "h5"]),
+                key="save_formats_selector"
             )
-            st.session_state.save_formats = save_formats
-            st.write("Models will be saved in:", ", ".join(save_formats) if save_formats else "None")
+            # Update save_formats safely
+            if save_formats != st.session_state.get('save_formats', []):
+                st.session_state['save_formats'] = save_formats
+                update_log(f"Updated save formats to: {save_formats}")
+            st.write("Models will be saved in:", ", ".join(st.session_state.save_formats) if st.session_state.save_formats else "None")
             
             st.subheader("Synonym Settings")
             with st.form("add_synonym_form"):
@@ -1111,7 +1104,6 @@ if st.session_state.db_file:
                     key="download_materials"
                 )
                 
-                # Provide download buttons for saved model files
                 if hasattr(st.session_state, 'model_files'):
                     st.subheader("Download Saved Models")
                     for model_file, file_path in st.session_state.model_files.items():
