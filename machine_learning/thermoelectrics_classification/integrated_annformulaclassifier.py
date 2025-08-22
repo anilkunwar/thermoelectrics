@@ -24,6 +24,7 @@ import joblib
 import torch
 import torch.nn as nn
 import h5py
+import base64
 
 # Try to import pymatgen for material formula parsing
 try:
@@ -62,7 +63,7 @@ st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases and allows classification of user-input chemical formulas using NLP and ANN.
 
-**Date and Time**: 07:17 AM CEST, Friday, August 22, 2025
+**Date and Time**: 07:29 AM CEST, Friday, August 22, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen scikit-learn joblib torch h5py`
@@ -95,6 +96,8 @@ if "save_formats" not in st.session_state:
     st.session_state.save_formats = ["pkl", "pt", "h5"]
 if "model_files" not in st.session_state:
     st.session_state.model_files = {}
+if "download_files" not in st.session_state:
+    st.session_state.download_files = {}  # Store base64-encoded file contents
 
 def update_log(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -109,6 +112,27 @@ def update_progress(message):
     st.session_state.progress_log.append(message)
     if len(st.session_state.progress_log) > 10:
         st.session_state.progress_log.pop(0)
+
+def encode_file_to_base64(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        return base64.b64encode(file_content).decode('utf-8')
+    except Exception as e:
+        update_log(f"Failed to encode file {file_path}: {str(e)}")
+        return None
+
+def javascript_download_button(label, file_content_base64, file_name, mime_type):
+    if not file_content_base64:
+        st.error(f"Cannot provide download for {file_name}: File content is missing.")
+        return
+    js_code = f"""
+    <a id="download_{file_name}" href="data:{mime_type};base64,{file_content_base64}" download="{file_name}">{label}</a>
+    <script>
+        document.getElementById('download_{file_name}').click();
+    </script>
+    """
+    st.markdown(js_code, unsafe_allow_html=True)
 
 def standardize_material_formula(formula, preserve_stoichiometry=False, canonical_order=True):
     if not formula or not isinstance(formula, str):
@@ -383,6 +407,7 @@ def train_ann(formulas, labels):
     
     save_formats = st.session_state.get('save_formats', ["pkl", "pt", "h5"])
     model_files = {}
+    download_files = {}
     
     # Pickle (.pkl)
     if "pkl" in save_formats:
@@ -393,6 +418,8 @@ def train_ann(formulas, labels):
             joblib.dump(scaler, scaler_path)
             model_files["ann_model.pkl"] = model_path
             model_files["scaler.pkl"] = scaler_path
+            download_files["ann_model.pkl"] = encode_file_to_base64(model_path)
+            download_files["scaler.pkl"] = encode_file_to_base64(scaler_path)
             update_log(f"Saved ANN model to {model_path} and scaler to {scaler_path}")
         except Exception as e:
             update_log(f"Failed to save .pkl files: {str(e)}")
@@ -432,6 +459,7 @@ def train_ann(formulas, labels):
             model_path = os.path.join(DB_DIR, "ann_model.pt")
             torch.save(pytorch_model.state_dict(), model_path)
             model_files["ann_model.pt"] = model_path
+            download_files["ann_model.pt"] = encode_file_to_base64(model_path)
             
             scaler_params = {
                 'mean': torch.tensor(scaler.mean_, dtype=torch.float32),
@@ -440,6 +468,7 @@ def train_ann(formulas, labels):
             scaler_path = os.path.join(DB_DIR, "scaler.pt")
             torch.save(scaler_params, scaler_path)
             model_files["scaler.pt"] = scaler_path
+            download_files["scaler.pt"] = encode_file_to_base64(scaler_path)
             update_log(f"Saved PyTorch model to {model_path} and scaler to {scaler_path}")
         except Exception as e:
             update_log(f"Failed to save .pt files: {str(e)}")
@@ -460,13 +489,14 @@ def train_ann(formulas, labels):
                 scaler_group.create_dataset('scale', data=scaler.scale_, compression='gzip')
             
             model_files["models.h5"] = h5_path
+            download_files["models.h5"] = encode_file_to_base64(h5_path)
             update_log(f"Saved models to HDF5 file {h5_path}")
         except Exception as e:
             update_log(f"Failed to save .h5 file: {str(e)}")
             st.session_state.error_summary.append(f"HDF5 save error: {str(e)}")
     
     update_log(f"Trained ANN with {len(valid_formulas)} samples")
-    return model, scaler, model_files
+    return model, scaler, model_files, download_files
 
 def detect_text_column(conn):
     cursor = conn.cursor()
@@ -682,6 +712,8 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             csv_df = material_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
             csv_path = os.path.join(DB_DIR, "formula_classifications.csv")
             csv_df.to_csv(csv_path, index=False)
+            material_csv = csv_df.to_csv(index=False)
+            st.session_state.download_files["formula_classifications.csv"] = base64.b64encode(material_csv.encode()).decode('utf-8')
             update_log(f"Saved formula classifications to {csv_path}")
             
             conn = sqlite3.connect(db_file)
@@ -691,10 +723,11 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             
             formulas = material_df["material"].tolist()
             labels = material_df["classification"].tolist()
-            model, scaler, model_files = train_ann(formulas, labels)
+            model, scaler, model_files, download_files = train_ann(formulas, labels)
             st.session_state.ann_model = model
             st.session_state.scaler = scaler
-            st.session_state.model_files = model_files
+            st.session_state.model_files.update(model_files)
+            st.session_state.download_files.update(download_files)
         
         update_log(f"Extracted {len(material_df)} material classifications")
         return material_df
@@ -1002,12 +1035,6 @@ if st.session_state.db_file:
                 
                 if not material_df.empty:
                     st.session_state.material_filter_options = sorted(material_df["material"].unique())
-                    # Prepare CSV for download
-                    csv_df = material_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
-                    material_csv = csv_df.to_csv(index=False)
-                    csv_path = os.path.join(DB_DIR, "formula_classifications.csv")
-                    if os.path.exists(csv_path):
-                        st.session_state.model_files["formula_classifications.csv"] = csv_path
             
             if material_df.empty:
                 st.warning("No material classifications found. Check logs for details.")
@@ -1062,30 +1089,26 @@ if st.session_state.db_file:
                 )
                 
                 st.subheader("Download Formula Classifications")
-                if "formula_classifications.csv" in st.session_state.model_files:
-                    with open(st.session_state.model_files["formula_classifications.csv"], 'rb') as f:
-                        st.download_button(
-                            "Download Formula Classifications CSV", 
-                            f, 
-                            "formula_classifications.csv", 
-                            "text/csv", 
-                            key="download_materials"
+                if "formula_classifications.csv" in st.session_state.download_files:
+                    if st.button("Download Formula Classifications CSV", key="download_materials"):
+                        javascript_download_button(
+                            "Download Formula Classifications CSV",
+                            st.session_state.download_files["formula_classifications.csv"],
+                            "formula_classifications.csv",
+                            "text/csv"
                         )
                 
                 st.subheader("Download Saved Models")
-                for model_file, file_path in st.session_state.model_files.items():
-                    if model_file != "formula_classifications.csv" and os.path.exists(file_path):
-                        try:
-                            with open(file_path, 'rb') as f:
-                                st.download_button(
-                                    f"Download {model_file}",
-                                    f,
-                                    model_file,
-                                    key=f"download_{model_file}"
-                                )
-                        except Exception as e:
-                            st.error(f"Failed to provide download for {model_file}: {str(e)}")
-                            update_log(f"Failed to provide download for {model_file}: {str(e)}")
+                for model_file in st.session_state.download_files:
+                    if model_file != "formula_classifications.csv" and model_file in st.session_state.download_files:
+                        mime_type = "application/octet-stream" if model_file.endswith((".pkl", ".pt", ".h5")) else "text/csv"
+                        if st.button(f"Download {model_file}", key=f"download_{model_file}"):
+                            javascript_download_button(
+                                f"Download {model_file}",
+                                st.session_state.download_files[model_file],
+                                model_file,
+                                mime_type
+                            )
                 
                 st.subheader("Extraction Progress")
                 progress_log_display = "\n".join(st.session_state.progress_log) if st.session_state.progress_log else "No progress messages yet."
@@ -1176,13 +1199,16 @@ if st.session_state.db_file:
                             st.dataframe(batch_df, use_container_width=True)
                             
                             batch_csv = batch_df.to_csv(index=False)
-                            st.download_button(
-                                "Download Batch Classification Results", 
-                                batch_csv, 
-                                "batch_formula_classifications.csv", 
-                                "text/csv", 
-                                key="download_batch"
-                            )
+                            batch_csv_base64 = base64.b64encode(batch_csv.encode()).decode('utf-8')
+                            st.session_state.download_files["batch_formula_classifications.csv"] = batch_csv_base64
+                            
+                            if st.button("Download Batch Classification Results", key="download_batch"):
+                                javascript_download_button(
+                                    "Download Batch Classification Results",
+                                    batch_csv_base64,
+                                    "batch_formula_classifications.csv",
+                                    "text/csv"
+                                )
         
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="formula_logs")
 else:
