@@ -1,3 +1,4 @@
+```python
 import os
 import sqlite3
 import streamlit as st
@@ -32,19 +33,94 @@ except ImportError:
     st.error("pymatgen is required for formula standardization and featurization. Install with: `pip install pymatgen`")
     st.stop()
 
+# Define valid chemical elements
+VALID_ELEMENTS = set(Element.__members__.keys())  # All valid element symbols (e.g., 'H', 'He', 'Bi')
+
 # -----------------------------
-# Regex NER for formulas
+# Regex NER for formulas with stricter validation
 # -----------------------------
 @Language.component("formula_ner")
 def formula_ner(doc):
-    formula_pattern = r'\b(?:[A-Z][a-z]?(?:\d*\.?\d*)?)+(?:-[A-Z][a-z]?(?:\d*\.?\d*)?)*\b'
+    # Stricter regex: requires at least one valid element, allows stoichiometry, excludes invalid patterns
+    formula_pattern = r'\b(?:[A-Z][a-z]?[0-9]*\.?[0-9]*)+(?::[A-Z][a-z]?[0-9]*\.?[0-9]*)?(?<![\w\d-:])\b'
     spans = []
     for match in re.finditer(formula_pattern, doc.text):
-        span = doc.char_span(match.start(), match.end(), label="FORMULA")
-        if span:
-            spans.append(span)
+        formula = match.group(0)
+        # Pre-validate to ensure at least one valid element
+        if validate_formula(formula):
+            span = doc.char_span(match.start(), match.end(), label="FORMULA")
+            if span:
+                spans.append(span)
     doc.ents = filter_spans(list(doc.ents) + spans)
     return doc
+
+# -----------------------------
+# Validate formula before processing
+# -----------------------------
+def validate_formula(formula):
+    """Validate if a string is a plausible chemical formula."""
+    if not formula or not isinstance(formula, str):
+        return False
+    
+    # Remove doping part for validation
+    base_formula = re.sub(r':.+', '', formula)
+    
+    # Check for invalid terms
+    invalid_terms = [
+        'p-type', 'n-type', 'doping', 'doped', 'thermoelectric', 'material', 'the', 'and',
+        'is', 'exhibits', 'type', 'based', 'sample', 'compound', 'system', 'properties',
+        'REFERENCES', 'ACKNOWLEDGMENTS', 'DATA', 'MATRIX', 'EXPERIMENTAL', 'NOTE', 'LEVEL',
+        'CONFLICT', 'RESULT', 'CAPTIONS', 'AVERAGE', 'TEG', 'TEGs', 'MARCO', 'SKEAF'
+    ]
+    if any(term.lower() in formula.lower() for term in invalid_terms):
+        return False
+    
+    # Ensure at least one valid element
+    element_pattern = r'[A-Z][a-z]?[0-9]*\.?[0-9]*'
+    elements = re.findall(element_pattern, base_formula)
+    has_valid_element = False
+    for el in elements:
+        # Extract element symbol (before numbers or decimals)
+        el_symbol = re.match(r'[A-Z][a-z]?', el).group(0)
+        if el_symbol in VALID_ELEMENTS:
+            has_valid_element = True
+            break
+    
+    # Exclude patterns like 'A1-A6', 'C.-I', or single letters
+    if not has_valid_element or re.match(r'^[A-Z](?:-[A-Z]|\.\d+)$', formula) or len(formula) <= 2:
+        return False
+    
+    return True
+
+# -----------------------------
+# Attention-based formula scoring
+# -----------------------------
+def score_formula_context(formula, text, synonyms):
+    """Score a formula based on its context to determine if it's a valid chemical formula."""
+    score = 0.0
+    context_window = 100  # Characters before/after formula to check
+    
+    # Extract context around formula
+    start_idx = max(0, text.lower().find(formula.lower()) - context_window)
+    end_idx = min(len(text), text.lower().find(formula.lower()) + len(formula) + context_window)
+    context = text[start_idx:end_idx].lower()
+    
+    # Positive signals: proximity to thermoelectric terms or known materials
+    positive_terms = ['thermoelectric', 'p-type', 'n-type', 'material', 'compound', 'semiconductor']
+    positive_terms += [syn for syn_list in synonyms.values() for syn in syn_list]
+    common_materials = ['Bi2Te3', 'PbTe', 'SnSe', 'CoSb3', 'SiGe', 'Skutterudite', 'Half-Heusler']
+    
+    for term in positive_terms + common_materials:
+        if term.lower() in context:
+            score += 0.2  # Increase score for relevant terms
+    
+    # Negative signals: proximity to non-chemical terms
+    negative_terms = ['figure', 'table', 'references', 'acknowledgments', 'section', 'equation']
+    for term in negative_terms:
+        if term.lower() in context:
+            score -= 0.3  # Decrease score for non-chemical context
+    
+    return max(0.0, min(score, 1.0))  # Normalize to [0, 1]
 
 # -----------------------------
 # Material matcher with synonyms
@@ -96,7 +172,10 @@ def load_spacy_model(synonyms):
 # Link formulas to nearest material type
 # -----------------------------
 def link_formula_to_material(doc):
-    formulas = [ent for ent in doc.ents if ent.label_ == "FORMULA"]
+    formulas = [(ent, score_formula_context(ent.text, doc.text, st.session_state.synonyms)) 
+                for ent in doc.ents if ent.label_ == "FORMULA"]
+    # Filter formulas with low context scores
+    formulas = [f for f, score in formulas if score > 0.3]  # Attention threshold
     materials = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
     pairs = []
     for f in formulas:
@@ -127,7 +206,7 @@ st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases (e.g., thermoelectric_universe.db) and allows classification of user-input chemical formulas using NLP and ANN.
 
-**Date and Time**: 03:18 AM CEST, Friday, August 22, 2025
+**Date and Time**: 03:44 AM CEST, Friday, August 22, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen scikit-learn joblib`
@@ -180,19 +259,9 @@ def standardize_material_formula(formula, preserve_stoichiometry=False, canonica
     formula = re.sub(r'\s+', '', formula)
     formula = re.sub(r'[\[\]\{\}]', '', formula)
     
-    element_pattern = r'[A-Z][a-z]?\d*'
-    if not re.search(element_pattern, formula):
-        update_log(f"Skipped non-chemical term '{formula}': no valid elements")
-        st.session_state.error_summary.append(f"Skipped '{formula}': no valid elements")
-        return None
-    
-    invalid_terms = [
-        'p-type', 'n-type', 'doping', 'doped', 'thermoelectric', 'material', 'the', 'and',
-        'is', 'exhibits', 'type', 'based', 'sample', 'compound', 'system', 'properties'
-    ]
-    if any(term.lower() in formula.lower() for term in invalid_terms):
-        update_log(f"Skipped non-chemical term '{formula}': contains invalid term")
-        st.session_state.error_summary.append(f"Skipped '{formula}': contains invalid term")
+    if not validate_formula(formula):
+        update_log(f"Invalid formula '{formula}': failed validation")
+        st.session_state.error_summary.append(f"Invalid formula '{formula}'")
         return None
     
     doping_pattern = r'(.+?)(?::|doped\s+)([A-Za-z0-9,\.]+)'
@@ -261,6 +330,11 @@ def featurize_formulas(formulas, labels=None):
     }
     
     for i, formula in enumerate(formulas):
+        if not validate_formula(formula):
+            update_log(f"Skipped featurization for invalid formula '{formula}'")
+            st.session_state.error_summary.append(f"Invalid formula '{formula}' for featurization")
+            continue
+        
         try:
             comp = Composition(formula)
             el_amt_dict = comp.get_el_amt_dict()
@@ -438,7 +512,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                     matches = re.finditer(pattern, chunk, re.IGNORECASE)
                     for match in matches:
                         material = match.group(1).strip()
-                        if material and len(material) > 2 and material in formula_entities:
+                        if material and len(material) > 2 and material in formula_entities and validate_formula(material):
                             standardized_material = standardize_material_formula(material, preserve_stoichiometry)
                             if standardized_material:
                                 p_type_materials.add((standardized_material, match.start()))
@@ -448,7 +522,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                     matches = re.finditer(pattern, chunk, re.IGNORECASE)
                     for match in matches:
                         material = match.group(1).strip()
-                        if material and len(material) > 2 and material in formula_entities:
+                        if material and len(material) > 2 and material in formula_entities and validate_formula(material):
                             standardized_material = standardize_material_formula(material, preserve_stoichiometry)
                             if standardized_material:
                                 n_type_materials.add((standardized_material, match.start()))
@@ -459,7 +533,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                 if p_type_context:
                     context_doc = nlp(p_type_context.group(0))
                     for ent in context_doc.ents:
-                        if ent.label_ == "FORMULA":
+                        if ent.label_ == "FORMULA" and validate_formula(ent.text):
                             standardized_material = standardize_material_formula(ent.text, preserve_stoichiometry)
                             if standardized_material:
                                 p_type_materials.add((standardized_material, ent.start_char))
@@ -467,7 +541,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                 if n_type_context:
                     context_doc = nlp(n_type_context.group(0))
                     for ent in context_doc.ents:
-                        if ent.label_ == "FORMULA":
+                        if ent.label_ == "FORMULA" and validate_formula(ent.text):
                             standardized_material = standardize_material_formula(ent.text, preserve_stoichiometry)
                             if standardized_material:
                                 n_type_materials.add((standardized_material, ent.start_char))
@@ -475,7 +549,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                 for material in common_te_materials:
                     if material.lower() in chunk.lower():
                         doc = nlp(material)
-                        if any(ent.label_ == "FORMULA" for ent in doc.ents):
+                        if any(ent.label_ == "FORMULA" for ent in doc.ents) and validate_formula(material):
                             standardized_material = standardize_material_formula(material, preserve_stoichiometry)
                             if standardized_material:
                                 if p_type_context and material.lower() in p_type_context.group(0).lower():
@@ -878,7 +952,6 @@ if st.session_state.db_file:
                     use_container_width=True
                 )
                 
-                # Modified CSV with formula and material_type
                 csv_df = filtered_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
                 material_csv = csv_df.to_csv(index=False)
                 st.download_button(
@@ -989,3 +1062,4 @@ if st.session_state.db_file:
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="formula_logs")
 else:
     st.warning("Select or upload a database file.")
+```
