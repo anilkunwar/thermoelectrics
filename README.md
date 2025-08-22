@@ -84,9 +84,6 @@ Basic Illustrative Tutorials
 [![machinelearningthermoelectricity](https://img.shields.io/badge/featurizableformulatutorial-streamlit-red)](https://featurizable-thermoelectricmaterialclassifier.streamlit.app/)
 
 
-
-
-
 Querying the Abstracts on the Materials Science, Applied Physics and Condensed Matter Physics on Keyterms Specific to Thermoelectrics
 [![machinelearningthermoelectricity](https://img.shields.io/badge/querythermoinformatics-streamlit-red)](https://thermoelectrics-queryinterface.streamlit.app/)
 
@@ -97,7 +94,7 @@ NER analysis for material type classification
 
 
 [![machinelearningthermoelectricity](https://img.shields.io/badge/formulacategorization-streamlit-red)](https://thermoelectric-materialtype-formula.streamlit.app/)
-
+[![machinelearningthermoelectricity](https://img.shields.io/badge/annformulacategorization-streamlit-red)](https://materialtype-annformula.streamlit.app/)
 
 
 # Basic Models
