@@ -1269,5 +1269,5 @@ if st.button("Generate Ternary Diagram"):
 
 # Footer
 st.markdown("---")
-st.markdown("**Ternary Seebeck Coefficient Predictor** - Developed with Streamlit, PyTorch, and Plotly. Powered by xAI.")
+st.markdown("**Ternary Seebeck Coefficient Predictor** ")
 st.markdown(f"**Last Updated**: 06:47 PM CEST, Friday, August 22, 2025")
