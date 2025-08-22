@@ -61,9 +61,8 @@ st.set_page_config(page_title="Thermoelectric Material Classification Tool", lay
 st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases and allows classification of user-input chemical formulas using NLP and ANN.
-The extracted classifications are saved as a CSV file, and the ANN model is saved in multiple formats (.pkl, .pt, .h5) for use in the Seebeck coefficient prediction pipeline.
 
-**Date and Time**: 07:09 AM CEST, Friday, August 22, 2025
+**Date and Time**: 07:17 AM CEST, Friday, August 22, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen scikit-learn joblib torch h5py`
@@ -648,7 +647,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                     material_classifications.append({
                         "paper_id": row["id"],
                         "title": row["title"],
-                        "year": row<Double>["year"],
+                        "year": row["year"],
                         "material": material,
                         "classification": "p-type",
                         "context": f"Found in context: {context}..."
@@ -678,6 +677,12 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             material_df = material_df.drop_duplicates(subset=["paper_id", "material", "classification"])
             material_df = material_df.sort_values(by=["material", "classification"])
             update_log(f"Cleaned and sorted DataFrame: {len(material_df)} unique classifications")
+            
+            # Save classifications to CSV
+            csv_df = material_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
+            csv_path = os.path.join(DB_DIR, "formula_classifications.csv")
+            csv_df.to_csv(csv_path, index=False)
+            update_log(f"Saved formula classifications to {csv_path}")
             
             conn = sqlite3.connect(db_file)
             material_df[["material", "classification"]].to_sql("standardized_formulas", conn, if_exists="replace", index=False)
@@ -938,11 +943,10 @@ if st.session_state.db_file:
             conn = sqlite3.connect(st.session_state.db_file)
             cursor = conn.cursor()
             cursor.execute("DROP TABLE IF EXISTS standardized_formulas")
-            cursor.execute("DROP TABLE IF EXISTS models")
             conn.commit()
             conn.close()
-            update_log("Cleared cached standardized formulas and models")
-            st.success("Cached formulas and models cleared. Run extraction again to refresh.")
+            update_log("Cleared cached standardized formulas")
+            st.success("Cached formulas cleared. Run extraction again to refresh.")
     
     except sqlite3.OperationalError as e:
         st.error(f"Database error: {str(e)}")
@@ -998,13 +1002,12 @@ if st.session_state.db_file:
                 
                 if not material_df.empty:
                     st.session_state.material_filter_options = sorted(material_df["material"].unique())
-                    # Save classifications as CSV
+                    # Prepare CSV for download
                     csv_df = material_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
                     material_csv = csv_df.to_csv(index=False)
                     csv_path = os.path.join(DB_DIR, "formula_classifications.csv")
-                    with open(csv_path, 'w', encoding='utf-8') as f:
-                        f.write(material_csv)
-                    update_log(f"Saved formula classifications to {csv_path}")
+                    if os.path.exists(csv_path):
+                        st.session_state.model_files["formula_classifications.csv"] = csv_path
             
             if material_df.empty:
                 st.warning("No material classifications found. Check logs for details.")
@@ -1059,27 +1062,30 @@ if st.session_state.db_file:
                 )
                 
                 st.subheader("Download Formula Classifications")
-                st.download_button(
-                    "Download Formula Classifications CSV", 
-                    material_csv, 
-                    "formula_classifications.csv", 
-                    "text/csv", 
-                    key="download_materials"
-                )
+                if "formula_classifications.csv" in st.session_state.model_files:
+                    with open(st.session_state.model_files["formula_classifications.csv"], 'rb') as f:
+                        st.download_button(
+                            "Download Formula Classifications CSV", 
+                            f, 
+                            "formula_classifications.csv", 
+                            "text/csv", 
+                            key="download_materials"
+                        )
                 
                 st.subheader("Download Saved Models")
                 for model_file, file_path in st.session_state.model_files.items():
-                    try:
-                        with open(file_path, 'rb') as f:
-                            st.download_button(
-                                f"Download {model_file}",
-                                f,
-                                model_file,
-                                key=f"download_{model_file}"
-                            )
-                    except Exception as e:
-                        st.error(f"Failed to provide download for {model_file}: {str(e)}")
-                        update_log(f"Failed to provide download for {model_file}: {str(e)}")
+                    if model_file != "formula_classifications.csv" and os.path.exists(file_path):
+                        try:
+                            with open(file_path, 'rb') as f:
+                                st.download_button(
+                                    f"Download {model_file}",
+                                    f,
+                                    model_file,
+                                    key=f"download_{model_file}"
+                                )
+                        except Exception as e:
+                            st.error(f"Failed to provide download for {model_file}: {str(e)}")
+                            update_log(f"Failed to provide download for {model_file}: {str(e)}")
                 
                 st.subheader("Extraction Progress")
                 progress_log_display = "\n".join(st.session_state.progress_log) if st.session_state.progress_log else "No progress messages yet."
@@ -1093,7 +1099,6 @@ if st.session_state.db_file:
         Enter a chemical formula or upload a CSV file with formulas to check their p-type or n-type classification.
         Classifications are based on extracted data or ANN predictions for unseen formulas.
         **Note**: Run Material Classification Analysis first to populate the classification data and train the ANN.
-        The classifications can be used to inform the bias vector in the Seebeck coefficient prediction pipeline.
         """)
         
         with st.sidebar:
