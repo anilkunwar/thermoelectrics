@@ -1001,6 +1001,7 @@ def plot_temperature_variance(elements, user_composition, max_comp, literature_c
     return fig, temps, user_seebeck, max_seebeck
 
 # Generate ternary diagram and temperature variance plot
+# Generate ternary diagram and temperature variance plot
 if st.button("Generate Ternary Diagram"):
     if len(st.session_state.selected_elements) > 0:
         elements, proportions, compositions = complete_to_three_elements(
@@ -1153,4 +1154,120 @@ if st.button("Generate Ternary Diagram"):
             if fig_ternary:
                 st.plotly_chart(fig_ternary, use_container_width=True)
             else:
-                st.warning("Unable to generate
+                st.warning("Unable to generate ternary diagram due to insufficient data.")
+
+            # Plot temperature variance
+            st.subheader("Temperature Variance of |Seebeck Coefficient|")
+            temp_range = (300, 1200)  # Default temperature range
+            try:
+                fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(
+                    elements, user_composition, max_comp, literature_compositions, literature_seebeck,
+                    temp_range, available_elements, scaler, vae, regressor, y_scaler,
+                    sign_bias, bias_vector, bias_magnitude, st.session_state.summary_dict,
+                    font_size, axes_line_width, grid_width, user_point_color, max_point_color,
+                    literature_point_color, point_size, axes_box_thickness
+                )
+                st.plotly_chart(fig_temp, use_container_width=True)
+                
+                # Save temperature variance data
+                temp_df = pd.DataFrame({
+                    'Temperature (K)': temps,
+                    'User |Seebeck| (μV/K)': user_seebeck_vals,
+                    'Max |Seebeck| (μV/K)': max_seebeck_vals
+                })
+                for idx, lit_vals in enumerate(np.array(literature_seebeck_vals).T):
+                    temp_df[f'Literature Comp {idx+1} |Seebeck| (μV/K)'] = lit_vals
+                csv = temp_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Temperature Variance Data as CSV",
+                    data=csv,
+                    file_name="temperature_variance.csv",
+                    mime="text/csv"
+                )
+            except Exception as e:
+                st.error(f"Failed to generate temperature variance plot: {e}")
+
+            # Additional visualizations from physics_attention module
+            if st.session_state.verbatim_matches and not st.session_state.use_manual_material_type:
+                st.subheader("Material Type Distribution")
+                fig_material_hist = plot_material_type_histogram(
+                    st.session_state.verbatim_matches, font_size=font_size
+                )
+                if fig_material_hist:
+                    st.plotly_chart(fig_material_hist, use_container_width=True)
+                else:
+                    st.write("No material type histogram available.")
+
+                st.subheader("Material Type Probabilities")
+                fig_probs = plot_material_probabilities(
+                    st.session_state.summary_dict, font_size=font_size
+                )
+                if fig_probs:
+                    st.plotly_chart(fig_probs, use_container_width=True)
+                else:
+                    st.write("No material type probabilities available.")
+
+                st.subheader("Relevance Score Box Plot")
+                fig_relevance = plot_relevance_box_plot(
+                    st.session_state.verbatim_matches, font_size=font_size
+                )
+                if fig_relevance:
+                    st.plotly_chart(fig_relevance, use_container_width=True)
+                else:
+                    st.write("No relevance box plot available.")
+
+                st.subheader("PMI Network")
+                fig_pmi = plot_pmi_network(
+                    st.session_state.summary_dict, pmi_threshold=pmi_threshold, font_size=font_size
+                )
+                if fig_pmi:
+                    st.plotly_chart(fig_pmi, use_container_width=True)
+                else:
+                    st.write("No PMI network available.")
+
+            # Save ternary data as CSV
+            if len(compositions_array) > 0:
+                ternary_df['Signed Seebeck (μV/K)'] = [
+                    predict_seebeck(
+                        {elements[i]: comp[i] for i in range(3)},
+                        st.session_state.temperature,
+                        available_elements,
+                        scaler,
+                        vae,
+                        regressor,
+                        y_scaler,
+                        sign_bias=sign_bias,
+                        bias_vector=bias_vector,
+                        bias_magnitude=bias_magnitude,
+                        summary_dict=st.session_state.summary_dict
+                    )[0] or 0.0 for comp in compositions_array
+                ]
+                csv = ternary_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Ternary Data as CSV",
+                    data=csv,
+                    file_name="ternary_data.csv",
+                    mime="text/csv"
+                )
+
+                # Save ternary data as SQLite
+                output = BytesIO()
+                with sqlite3.connect(':memory:') as conn:
+                    ternary_df.to_sql('ternary_data', conn, index=False, if_exists='replace')
+                    conn.commit()
+                    with output:
+                        output.write(conn.backup(conn).read())
+                        sqlite_data = output.getvalue()
+                st.download_button(
+                    label="Download Ternary Data as SQLite DB",
+                    data=sqlite_data,
+                    file_name="ternary_data.db",
+                    mime="application/x-sqlite3"
+                )
+    else:
+        st.error("Please select at least one element to generate the ternary diagram.")
+
+# Footer
+st.markdown("---")
+st.markdown("**Ternary Seebeck Coefficient Predictor** - Developed with Streamlit, PyTorch, and Plotly. Powered by xAI.")
+st.markdown(f"**Last Updated**: 06:47 PM CEST, Friday, August 22, 2025")
