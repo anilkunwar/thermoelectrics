@@ -1,4 +1,3 @@
-```python
 import os
 import sqlite3
 import streamlit as st
@@ -1062,4 +1061,4 @@ if st.session_state.db_file:
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="formula_logs")
 else:
     st.warning("Select or upload a database file.")
-```
+
