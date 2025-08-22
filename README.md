@@ -95,6 +95,8 @@ NER analysis for material type classification
 
 [![machinelearningthermoelectricity](https://img.shields.io/badge/formulacategorization-streamlit-red)](https://thermoelectric-materialtype-formula.streamlit.app/)
 [![machinelearningthermoelectricity](https://img.shields.io/badge/annformulacategorization-streamlit-red)](https://materialtype-annformula.streamlit.app/)
+[![machinelearningthermoelectricity](https://img.shields.io/badge/advancedannformulacategorization-streamlit-red)](https://materialtype-annformula-advanced.streamlit.app/)
+
 
 
 # Basic Models
