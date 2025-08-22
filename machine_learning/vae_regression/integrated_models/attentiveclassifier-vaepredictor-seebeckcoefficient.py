@@ -1035,6 +1035,8 @@ def plot_temperature_variance(elements, user_composition, max_comp, literature_c
     )
     return fig, temps, user_seebeck, max_seebeck
 
+# ... (previous code remains unchanged until the section below)
+
 # Generate ternary diagram and temperature variance plot
 if st.button("Generate Ternary Diagram"):
     if len(st.session_state.selected_elements) > 0:
@@ -1166,4 +1168,119 @@ if st.button("Generate Ternary Diagram"):
             st.write(f"**Material Type Used**: {st.session_state.sign_bias} ({'Manual' if st.session_state.use_manual_material_type else 'Database/CSV/ANN/SciBERT'})")
             st.write(f"**User |Seebeck Coefficient| (Biased)**: {abs(user_seebeck):.2f} μV/K")
             st.write(f"**User Signed Seebeck Coefficient (Biased)**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
-            st.write(f"**User |Seebeck Coefficient
+            st.write(f"**User |Seebeck Coefficient| (Unbiased)**: {abs(user_seebeck_unbiased):.2f} μV/K")
+            st.write(f"**User Signed Seebeck Coefficient (Unbiased)**: {user_seebeck_unbiased:.2f} μV/K ({'p-type' if user_seebeck_unbiased > 0 else 'n-type' if user_seebeck_unbiased < 0 else 'neutral'})")
+            st.write(f"**Max |Seebeck Coefficient| Composition**: {elements[0]}: {max_comp[0]:.2f}, {elements[1]}: {max_comp[1]:.2f}, {elements[2]}: {max_comp[2]:.2f}")
+            st.write(f"**Max |Seebeck Coefficient| (Biased)**: {max_seebeck_abs:.2f} μV/K")
+            st.write(f"**Max Signed Seebeck Coefficient (Biased)**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
+
+            # Generate ternary diagram
+            st.subheader("Ternary Diagram")
+            fig_ternary = plot_ternary_diagram(
+                compositions_array, seebeck_values, elements, user_composition, user_seebeck, 
+                max_comp, max_seebeck_abs, literature_compositions, literature_seebeck, 
+                color_scale, font_size, axes_line_width, point_size, axes_box_thickness, 
+                legend_spacing, user_point_color, max_point_color, literature_point_color, 
+                ternary_grid_color, ternary_axes_color
+            )
+            if fig_ternary:
+                st.plotly_chart(fig_ternary, use_container_width=True)
+            else:
+                st.warning("Unable to generate ternary diagram due to insufficient data.")
+
+            # Generate temperature variance plot
+            st.subheader("Seebeck Coefficient vs Temperature")
+            temp_range = (300, 1000)  # Default temperature range
+            fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(
+                elements, user_composition, max_comp, literature_compositions, literature_seebeck, 
+                temp_range, available_elements, scaler_vae, vae, regressor, y_scaler, 
+                sign_bias, bias_vector, bias_magnitude, st.session_state.summary_dict, 
+                font_size, axes_line_width, grid_width, user_point_color, max_point_color, 
+                literature_point_color, point_size, axes_box_thickness
+            )
+            if fig_temp:
+                st.plotly_chart(fig_temp, use_container_width=True)
+                
+                # Provide downloadable data for temperature variance
+                temp_df = pd.DataFrame({
+                    'Temperature (K)': temps,
+                    'User |Seebeck| (μV/K)': user_seebeck_vals,
+                    'Max |Seebeck| (μV/K)': max_seebeck_vals
+                })
+                for idx, lit_vals in enumerate(np.array(literature_seebeck_vals).T):
+                    temp_df[f'Literature Comp {idx+1} |Seebeck| (μV/K)'] = lit_vals
+                csv = temp_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Temperature Variance Data as CSV",
+                    data=csv,
+                    file_name="temperature_variance.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.warning("Unable to generate temperature variance plot due to insufficient data.")
+
+            # Physics attention visualizations
+            if st.session_state.summary_dict and not st.session_state.use_manual_material_type:
+                st.subheader("Physics Attention Visualizations")
+                
+                # Material type histogram
+                fig_material_hist = plot_material_type_histogram(st.session_state.summary_dict, font_size)
+                if fig_material_hist:
+                    st.plotly_chart(fig_material_hist, use_container_width=True)
+                
+                # Material probabilities
+                fig_probs = plot_material_probabilities(st.session_state.summary_dict, font_size)
+                if fig_probs:
+                    st.plotly_chart(fig_probs, use_container_width=True)
+                
+                # Relevance box plot
+                fig_box = plot_relevance_box_plot(st.session_state.verbatim_matches, font_size)
+                if fig_box:
+                    st.plotly_chart(fig_box, use_container_width=True)
+                
+                # PMI network
+                fig_network = plot_pmi_network(st.session_state.summary_dict['pmi_scores'], pmi_threshold, font_size)
+                if fig_network:
+                    st.plotly_chart(fig_network, use_container_width=True)
+
+            # Download ternary data as CSV
+            if len(compositions_array) > 0:
+                ternary_df['Signed Seebeck (μV/K)'] = [
+                    predict_seebeck(
+                        {elements[i]: comp[i] for i in range(3)},
+                        st.session_state.temperature,
+                        available_elements,
+                        scaler_vae,
+                        vae,
+                        regressor,
+                        y_scaler,
+                        sign_bias=sign_bias,
+                        bias_vector=bias_vector,
+                        bias_magnitude=bias_magnitude,
+                        summary_dict=st.session_state.summary_dict
+                    )[0] or 0.0 for comp in compositions_array
+                ]
+                csv = ternary_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Ternary Data as CSV",
+                    data=csv,
+                    file_name="ternary_data.csv",
+                    mime="text/csv"
+                )
+
+                # Save ternary data to SQLite
+                output = BytesIO()
+                with sqlite3.connect(':memory:') as conn:
+                    ternary_df.to_sql('ternary_data', conn, index=False, if_exists='replace')
+                    conn.commit()
+                    with output:
+                        output.write(conn.backup(conn).read())
+                        sqlite_data = output.getvalue()
+                st.download_button(
+                    label="Download Ternary Data as SQLite DB",
+                    data=sqlite_data,
+                    file_name="ternary_data.db",
+                    mime="application/x-sqlite3"
+                )
+    else:
+        st.error("Please select at least one element to generate the ternary diagram.")
