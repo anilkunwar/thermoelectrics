@@ -128,7 +128,7 @@ st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases (e.g., thermoelectric_universe.db) and allows classification of user-input chemical formulas.
 
-**Date and Time**: 09:06 PM CEST, Thursday, August 21, 2025
+**Date and Time**: 02:10 AM CEST, Friday, August 22, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen`
@@ -817,17 +817,25 @@ if st.session_state.db_file:
                 
                 if fig_bar:
                     st.plotly_chart(fig_bar, use_container_width=True)
+                else:
+                    st.warning("No data available for bar chart.")
                 
                 col1, col2 = st.columns(2)
                 with col1:
                     if fig_pie:
                         st.plotly_chart(fig_pie, use_container_width=True)
+                    else:
+                        st.warning("No data available for pie chart.")
                 with col2:
                     if fig_timeline:
                         st.plotly_chart(fig_timeline, use_container_width=True)
+                    else:
+                        st.warning("No data available for timeline chart.")
                 
                 if fig_heatmap:
                     st.plotly_chart(fig_heatmap, use_container_width=True)
+                else:
+                    st.warning("No data available for co-occurrence heatmap.")
                 
                 st.subheader("Extracted Material Classifications")
                 st.dataframe(
@@ -845,7 +853,8 @@ if st.session_state.db_file:
                 )
                 
                 st.subheader("Extraction Progress")
-                st.text_area("Progress Log", "\n".join(st.session_state.progress_log), height=100, key="progress_log")
+                progress_log_display = "\n".join(st.session_state.progress_log) if st.session_state.progress_log else "No progress messages yet."
+                st.text(progress_log_display)
         
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="material_logs")
     
