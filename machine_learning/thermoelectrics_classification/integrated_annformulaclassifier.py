@@ -47,149 +47,9 @@ INVALID_TERMS = {
     'equation', 'figure', 'table', 'section', 'method', 'results', 'discussion'
 }
 
-# -----------------------------
-# Regex NER for formulas with fixed pattern
-# -----------------------------
-@Language.component("formula_ner")
-def formula_ner(doc):
-    formula_pattern = r'\b(?:[A-Z][a-z]?[0-9]*\.?[0-9]*)+(?::[A-Z][a-z]?[0-9]*\.?[0-9]*)?\b'
-    spans = []
-    for match in re.finditer(formula_pattern, doc.text):
-        formula = match.group(0)
-        if validate_formula(formula):
-            span = doc.char_span(match.start(), match.end(), label="FORMULA")
-            if span:
-                spans.append(span)
-    doc.ents = filter_spans(list(doc.ents) + spans)
-    return doc
-
-# -----------------------------
-# Enhanced formula validation
-# -----------------------------
-def validate_formula(formula):
-    """Validate if a string is a plausible chemical formula."""
-    if not formula or not isinstance(formula, str):
-        return False
-    
-    base_formula = re.sub(r':.+', '', formula)
-    
-    if any(term.lower() in formula.lower() for term in INVALID_TERMS):
-        return False
-    if re.match(r'^[A-Z](?:-[A-Z]|\.\d+|)$', formula) or len(formula) <= 2:
-        return False
-    
-    element_pattern = r'[A-Z][a-z]?[0-9]*\.?[0-9]*'
-    elements = re.findall(element_pattern, base_formula)
-    if not elements:
-        return False
-    
-    for el in elements:
-        el_symbol = re.match(r'[A-Z][a-z]?', el).group(0)
-        if el_symbol not in VALID_ELEMENTS:
-            return False
-    
-    if re.search(r'\b[X-Z][0-9]*\b', formula) and not re.match(r'^[A-Z][a-z]?[0-9]*$', formula):
-        return False
-    
-    return True
-
-# -----------------------------
-# Attention-based formula scoring
-# -----------------------------
-def score_formula_context(formula, text, synonyms):
-    """Score a formula based on its context to determine if it's a valid chemical formula."""
-    score = 0.0
-    context_window = 100
-    start_idx = max(0, text.lower().find(formula.lower()) - context_window)
-    end_idx = min(len(text), text.lower().find(formula.lower()) + len(formula) + context_window)
-    context = text[start_idx:end_idx].lower()
-    
-    positive_terms = ['thermoelectric', 'p-type', 'n-type', 'material', 'compound', 'semiconductor']
-    positive_terms += [syn for syn_list in synonyms.values() for syn in syn_list]
-    common_materials = ['Bi2Te3', 'PbTe', 'SnSe', 'CoSb3', 'SiGe', 'Skutterudite', 'Half-Heusler']
-    
-    for term in positive_terms + common_materials:
-        if term.lower() in context:
-            score += 0.2
-    
-    negative_terms = ['figure', 'table', 'references', 'acknowledgments', 'section', 'equation']
-    for term in negative_terms:
-        if term.lower() in context:
-            score -= 0.3
-    
-    return max(0.0, min(score, 1.0))
-
-# -----------------------------
-# Material matcher with synonyms
-# -----------------------------
-def build_material_matcher(nlp, synonyms):
-    matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
-    for canonical, variants in synonyms.items():
-        patterns = [nlp.make_doc(v) for v in variants]
-        matcher.add(canonical, patterns)
-    return matcher
-
-@Language.component("material_matcher")
-def material_matcher(doc):
-    matcher = doc._.material_matcher
-    matches = matcher(doc)
-    spans = []
-    for match_id, start, end in matches:
-        canonical = doc.vocab.strings[match_id]
-        span = Span(doc, start, end, label="MATERIAL_TYPE")
-        span._.norm = canonical
-        spans.append(span)
-    doc.ents = filter_spans(list(doc.ents) + spans)
-    return doc
-
-# -----------------------------
-# Load spaCy model
-# -----------------------------
-def load_spacy_model(synonyms):
-    try:
-        nlp = spacy.load("en_core_web_sm", disable=["ner"])
-    except Exception as e:
-        st.error(f"Failed to load spaCy: {e}. Install: `python -m spacy download en_core_web_sm`")
-        st.stop()
-    
-    nlp.add_pipe("formula_ner", last=True)
-    matcher = build_material_matcher(nlp, synonyms)
-    nlp.add_pipe("material_matcher", last=True)
-    
-    if not Doc.has_extension("material_matcher"):
-        Doc.set_extension("material_matcher", default=None)
-    Doc.set_extension("material_matcher", default=matcher, force=True)
-    
-    if not Span.has_extension("norm"):
-        Span.set_extension("norm", default=None)
-    
-    return nlp
-
-# -----------------------------
-# Link formulas to material type
-# -----------------------------
-def link_formula_to_material(doc):
-    formulas = [(ent, score_formula_context(ent.text, doc.text, st.session_state.synonyms)) 
-                for ent in doc.ents if ent.label_ == "FORMULA"]
-    formulas = [f for f, score in formulas if score > 0.3]
-    materials = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
-    pairs = []
-    for f in formulas:
-        nearest_material = None
-        min_distance = float("inf")
-        for m in materials:
-            distance = abs(f.start_char - m.start_char)
-            if distance < min_distance:
-                min_distance = distance
-                nearest_material = m
-        pairs.append({
-            "Formula": f.text,
-            "Material_Type": nearest_material._.norm if nearest_material else "-"
-        })
-    return pairs
-
 # Directory and logging setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
+os.makedirs(DB_DIR, exist_ok=True)
 logging.basicConfig(
     filename=os.path.join(DB_DIR, 'thermoelectric_ner_analysis.log'),
     level=logging.INFO,
@@ -201,8 +61,9 @@ st.set_page_config(page_title="Thermoelectric Material Classification Tool", lay
 st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases and allows classification of user-input chemical formulas using NLP and ANN.
+The extracted classifications are saved as a CSV file, and the ANN model is saved in multiple formats (.pkl, .pt, .h5) for use in the Seebeck coefficient prediction pipeline.
 
-**Date and Time**: 06:35 AM CEST, Friday, August 22, 2025
+**Date and Time**: 07:09 AM CEST, Friday, August 22, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen scikit-learn joblib torch h5py`
@@ -232,7 +93,7 @@ if "ann_model" not in st.session_state:
 if "scaler" not in st.session_state:
     st.session_state.scaler = None
 if "save_formats" not in st.session_state:
-    st.session_state.save_formats = ["pkl", "db", "pt", "h5"]
+    st.session_state.save_formats = ["pkl", "pt", "h5"]
 if "model_files" not in st.session_state:
     st.session_state.model_files = {}
 
@@ -318,6 +179,127 @@ def standardize_material_formula(formula, preserve_stoichiometry=False, canonica
         st.session_state.error_summary.append(f"pymatgen failed for '{formula}': {str(e)}")
         return None
 
+def validate_formula(formula):
+    if not formula or not isinstance(formula, str):
+        return False
+    
+    base_formula = re.sub(r':.+', '', formula)
+    
+    if any(term.lower() in formula.lower() for term in INVALID_TERMS):
+        return False
+    if re.match(r'^[A-Z](?:-[A-Z]|\.\d+|)$', formula) or len(formula) <= 2:
+        return False
+    
+    element_pattern = r'[A-Z][a-z]?[0-9]*\.?[0-9]*'
+    elements = re.findall(element_pattern, base_formula)
+    if not elements:
+        return False
+    
+    for el in elements:
+        el_symbol = re.match(r'[A-Z][a-z]?', el).group(0)
+        if el_symbol not in VALID_ELEMENTS:
+            return False
+    
+    if re.search(r'\b[X-Z][0-9]*\b', formula) and not re.match(r'^[A-Z][a-z]?[0-9]*$', formula):
+        return False
+    
+    return True
+
+def score_formula_context(formula, text, synonyms):
+    score = 0.0
+    context_window = 100
+    start_idx = max(0, text.lower().find(formula.lower()) - context_window)
+    end_idx = min(len(text), text.lower().find(formula.lower()) + len(formula) + context_window)
+    context = text[start_idx:end_idx].lower()
+    
+    positive_terms = ['thermoelectric', 'p-type', 'n-type', 'material', 'compound', 'semiconductor']
+    positive_terms += [syn for syn_list in synonyms.values() for syn in syn_list]
+    common_materials = ['Bi2Te3', 'PbTe', 'SnSe', 'CoSb3', 'SiGe', 'Skutterudite', 'Half-Heusler']
+    
+    for term in positive_terms + common_materials:
+        if term.lower() in context:
+            score += 0.2
+    
+    negative_terms = ['figure', 'table', 'references', 'acknowledgments', 'section', 'equation']
+    for term in negative_terms:
+        if term.lower() in context:
+            score -= 0.3
+    
+    return max(0.0, min(score, 1.0))
+
+def build_material_matcher(nlp, synonyms):
+    matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
+    for canonical, variants in synonyms.items():
+        patterns = [nlp.make_doc(v) for v in variants]
+        matcher.add(canonical, patterns)
+    return matcher
+
+@Language.component("material_matcher")
+def material_matcher(doc):
+    matcher = doc._.material_matcher
+    matches = matcher(doc)
+    spans = []
+    for match_id, start, end in matches:
+        canonical = doc.vocab.strings[match_id]
+        span = Span(doc, start, end, label="MATERIAL_TYPE")
+        span._.norm = canonical
+        spans.append(span)
+    doc.ents = filter_spans(list(doc.ents) + spans)
+    return doc
+
+@Language.component("formula_ner")
+def formula_ner(doc):
+    formula_pattern = r'\b(?:[A-Z][a-z]?[0-9]*\.?[0-9]*)+(?::[A-Z][a-z]?[0-9]*\.?[0-9]*)?\b'
+    spans = []
+    for match in re.finditer(formula_pattern, doc.text):
+        formula = match.group(0)
+        if validate_formula(formula):
+            span = doc.char_span(match.start(), match.end(), label="FORMULA")
+            if span:
+                spans.append(span)
+    doc.ents = filter_spans(list(doc.ents) + spans)
+    return doc
+
+def load_spacy_model(synonyms):
+    try:
+        nlp = spacy.load("en_core_web_sm", disable=["ner"])
+    except Exception as e:
+        st.error(f"Failed to load spaCy: {e}. Install: `python -m spacy download en_core_web_sm`")
+        st.stop()
+    
+    nlp.add_pipe("formula_ner", last=True)
+    matcher = build_material_matcher(nlp, synonyms)
+    nlp.add_pipe("material_matcher", last=True)
+    
+    if not Doc.has_extension("material_matcher"):
+        Doc.set_extension("material_matcher", default=None)
+    Doc.set_extension("material_matcher", default=matcher, force=True)
+    
+    if not Span.has_extension("norm"):
+        Span.set_extension("norm", default=None)
+    
+    return nlp
+
+def link_formula_to_material(doc):
+    formulas = [(ent, score_formula_context(ent.text, doc.text, st.session_state.synonyms)) 
+                for ent in doc.ents if ent.label_ == "FORMULA"]
+    formulas = [f for f, score in formulas if score > 0.3]
+    materials = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
+    pairs = []
+    for f in formulas:
+        nearest_material = None
+        min_distance = float("inf")
+        for m in materials:
+            distance = abs(f.start_char - m.start_char)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_material = m
+        pairs.append({
+            "Formula": f.text,
+            "Material_Type": nearest_material._.norm if nearest_material else "-"
+        })
+    return pairs
+
 def featurize_formulas(formulas, labels=None):
     features = []
     valid_formulas = []
@@ -369,198 +351,6 @@ def featurize_formulas(formulas, labels=None):
     
     return np.array(features), valid_formulas, valid_labels if labels is not None else None
 
-def generate_model_usage_script(model_files, db_file):
-    """Generate a Python script demonstrating how to load and use the saved models."""
-    script_content = """\
-import sqlite3
-import joblib
-import io
-import torch
-import torch.nn as nn
-import h5py
-import numpy as np
-from pymatgen.core.composition import Composition
-
-# Element properties for featurization (partial example; extend as needed)
-element_properties = {
-    'H': [1, 2.20, 1, 1, 1.008],  # [atomic number, electronegativity, group, row, atomic mass]
-    # Add properties for all relevant elements used in training
-}
-
-def featurize_formula(formula):
-    try:
-        comp = Composition(formula)
-        el_amt_dict = comp.get_el_amt_dict()
-        total_atoms = sum(el_amt_dict.values())
-        feature_vector = np.zeros(5)
-        for el, amt in el_amt_dict.items():
-            weight = amt / total_atoms
-            props = element_properties.get(el, [0.0] * 5)
-            feature_vector += np.array(props) * weight
-        if np.any(np.isnan(feature_vector)):
-            raise ValueError(f"NaN features for formula '{formula}'")
-        return feature_vector
-    except Exception as e:
-        print(f"Failed to featurize formula '{formula}': {str(e)}")
-        return None
-
-def load_pkl_model(model_path, scaler_path):
-    try:
-        model = joblib.load(model_path)
-        scaler = joblib.load(scaler_path)
-        return model, scaler
-    except Exception as e:
-        print(f"Failed to load .pkl models: {str(e)}")
-        return None, None
-
-def load_pt_model(model_path, scaler_path):
-    try:
-        class MLP(nn.Module):
-            def __init__(self, input_size=5, hidden_sizes=[100, 50], output_size=2):
-                super(MLP, self).__init__()
-                layers = []
-                prev_size = input_size
-                for size in hidden_sizes:
-                    layers.extend([nn.Linear(prev_size, size), nn.ReLU()])
-                    prev_size = size
-                layers.append(nn.Linear(prev_size, output_size))
-                self.layers = nn.Sequential(*layers)
-            
-            def forward(self, x):
-                return self.layers(x)
-
-        model = MLP()
-        model.load_state_dict(torch.load(model_path))
-        model.eval()
-        scaler_params = torch.load(scaler_path)
-        scaler_mean = scaler_params['mean'].numpy()
-        scaler_scale = scaler_params['scale'].numpy()
-        return model, (scaler_mean, scaler_scale)
-    except Exception as e:
-        print(f"Failed to load .pt models: {str(e)}")
-        return None, None
-
-def load_h5_model(h5_path):
-    try:
-        from sklearn.neural_network import MLPClassifier
-        from sklearn.preprocessing import StandardScaler
-        with h5py.File(h5_path, 'r') as f:
-            coefs = [f['ann_model'][f'coef_{i}'][:] for i in range(3)]
-            intercepts = [f['ann_model'][f'intercept_{i}'][:] for i in range(3)]
-            scaler_mean = f['scaler']['mean'][:]
-            scaler_scale = f['scaler']['scale'][:]
-        
-        model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000)
-        model.coefs_ = coefs
-        model.intercepts_ = intercepts
-        model.n_layers_ = 4
-        model.n_outputs_ = 2
-        model.out_activation_ = 'softmax'
-        model.classes_ = np.array([0, 1])
-        
-        scaler = StandardScaler()
-        scaler.mean_ = scaler_mean
-        scaler.scale_ = scaler_scale
-        scaler.n_features_in_ = len(scaler_mean)
-        return model, scaler
-    except Exception as e:
-        print(f"Failed to load .h5 model: {str(e)}")
-        return None, None
-
-def load_db_model(db_path):
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT model_data FROM models WHERE model_type = 'ann_model' AND format = 'pkl'")
-        model_data = cursor.fetchone()
-        if not model_data:
-            raise ValueError("ANN model not found in database")
-        
-        cursor.execute("SELECT model_data FROM models WHERE model_type = 'scaler' AND format = 'pkl'")
-        scaler_data = cursor.fetchone()
-        if not scaler_data:
-            raise ValueError("Scaler not found in database")
-        
-        model = joblib.load(io.BytesIO(model_data[0]))
-        scaler = joblib.load(io.BytesIO(scaler_data[0]))
-        conn.close()
-        return model, scaler
-    except Exception as e:
-        print(f"Failed to load .db models: {str(e)}")
-        return None, None
-
-# Example usage
-def classify_formula(formula, model, scaler, model_type='pkl'):
-    features = featurize_formula(formula)
-    if features is None:
-        return None, None
-    
-    if model_type in ['pkl', 'h5', 'db']:
-        scaled_features = scaler.transform([features])
-        prediction = model.predict(scaled_features)[0]
-        probabilities = model.predict_proba(scaled_features)[0]
-    elif model_type == 'pt':
-        scaler_mean, scaler_scale = scaler
-        scaled_features = (features - scaler_mean) / scaler_scale
-        inputs = torch.tensor(scaled_features, dtype=torch.float32).unsqueeze(0)
-        with torch.no_grad():
-            outputs = model(inputs)
-            probabilities = torch.softmax(outputs, dim=1).numpy()[0]
-            prediction = np.argmax(probabilities)
-    
-    label = 'p-type' if prediction == 1 else 'n-type'
-    return label, {'p-type': probabilities[1], 'n-type': probabilities[0]}
-
-# Example: Load and classify using each format
-formula = "Bi2Te3"
-
-# Pickle
-model, scaler = load_pkl_model("{ann_model_pkl}", "{scaler_pkl}")
-if model and scaler:
-    label, probs = classify_formula(formula, model, scaler, 'pkl')
-    print(f"Pickle: {formula} -> {label}, Probabilities: p-type={probs['p-type']:.2%}, n-type={probs['n-type']:.2%}")
-
-# PyTorch
-model, scaler = load_pt_model("{ann_model_pt}", "{scaler_pt}")
-if model and scaler:
-    label, probs = classify_formula(formula, model, scaler, 'pt')
-    print(f"PyTorch: {formula} -> {label}, Probabilities: p-type={probs['p-type']:.2%}, n-type={probs['n-type']:.2%}")
-
-# HDF5
-model, scaler = load_h5_model("{models_h5}")
-if model and scaler:
-    label, probs = classify_formula(formula, model, scaler, 'h5')
-    print(f"HDF5: {formula} -> {label}, Probabilities: p-type={probs['p-type']:.2%}, n-type={probs['n-type']:.2%}")
-
-# SQLite
-model, scaler = load_db_model("{db_file}")
-if model and scaler:
-    label, probs = classify_formula(formula, model, scaler, 'db')
-    print(f"SQLite: {formula} -> {label}, Probabilities: p-type={probs['p-type']:.2%}, n-type={probs['n-type']:.2%}")
-"""
-    # Fill in the paths for the script
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    script_content = script_content.format(
-        ann_model_pkl=model_files.get("ann_model.pkl", "path/to/ann_model.pkl"),
-        scaler_pkl=model_files.get("scaler.pkl", "path/to/scaler.pkl"),
-        ann_model_pt=model_files.get("ann_model.pt", "path/to/ann_model.pt"),
-        scaler_pt=model_files.get("scaler.pt", "path/to/scaler.pt"),
-        models_h5=model_files.get("models.h5", "path/to/models.h5"),
-        db_file=db_file or "path/to/database.db"
-    )
-    
-    # Save the script
-    script_path = os.path.join(DB_DIR, f"model_usage_example_{timestamp}.py")
-    try:
-        with open(script_path, 'w') as f:
-            f.write(script_content)
-        update_log(f"Saved model usage script to {script_path}")
-        return script_path
-    except Exception as e:
-        update_log(f"Failed to save model usage script: {str(e)}")
-        st.session_state.error_summary.append(f"Model usage script save error: {str(e)}")
-        return None
-
 def train_ann(formulas, labels):
     if not formulas or not labels:
         update_log("No valid data for ANN training")
@@ -592,46 +382,18 @@ def train_ann(formulas, labels):
         update_log(f"ANN training failed: {str(e)}")
         return None, None, {}
     
-    save_formats = st.session_state.get('save_formats', ["pkl", "db", "pt", "h5"])
+    save_formats = st.session_state.get('save_formats', ["pkl", "pt", "h5"])
     model_files = {}
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # Unique identifier for files
-    
-    # SQLite Database (.db)
-    if "db" in save_formats:
-        try:
-            conn = sqlite3.connect(st.session_state.db_file)
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS models (
-                    model_type TEXT,
-                    format TEXT,
-                    model_data BLOB,
-                    timestamp TEXT
-                )
-            """)
-            for model_type, obj in [("ann_model", model), ("scaler", scaler)]:
-                model_bytes = joblib.dumps(obj)
-                cursor.execute(
-                    "INSERT INTO models (model_type, format, model_data, timestamp) VALUES (?, ?, ?, ?)",
-                    (model_type, "pkl", model_bytes, timestamp)
-                )
-            conn.commit()
-            conn.close()
-            update_log("Saved models to SQLite database")
-            model_files["database.db"] = st.session_state.db_file
-        except Exception as e:
-            update_log(f"Failed to save models to SQLite database: {str(e)}")
-            st.session_state.error_summary.append(f"SQLite save error: {str(e)}")
     
     # Pickle (.pkl)
     if "pkl" in save_formats:
         try:
-            model_path = os.path.join(DB_DIR, f"ann_model_{timestamp}.pkl")
-            scaler_path = os.path.join(DB_DIR, f"scaler_{timestamp}.pkl")
+            model_path = os.path.join(DB_DIR, "ann_model.pkl")
+            scaler_path = os.path.join(DB_DIR, "scaler.pkl")
             joblib.dump(model, model_path)
             joblib.dump(scaler, scaler_path)
-            model_files[f"ann_model_{timestamp}.pkl"] = model_path
-            model_files[f"scaler_{timestamp}.pkl"] = scaler_path
+            model_files["ann_model.pkl"] = model_path
+            model_files["scaler.pkl"] = scaler_path
             update_log(f"Saved ANN model to {model_path} and scaler to {scaler_path}")
         except Exception as e:
             update_log(f"Failed to save .pkl files: {str(e)}")
@@ -641,7 +403,7 @@ def train_ann(formulas, labels):
     if "pt" in save_formats:
         try:
             class MLP(nn.Module):
-                def __init__(self, input_size, hidden_sizes, output_size):
+                def __init__(self, input_size=5, hidden_sizes=[100, 50], output_size=2):
                     super(MLP, self).__init__()
                     layers = []
                     prev_size = input_size
@@ -657,28 +419,28 @@ def train_ann(formulas, labels):
                 def forward(self, x):
                     return self.layers(x)
             
-            pytorch_model = MLP(input_size=5, hidden_sizes=[100, 50], output_size=2)
+            pytorch_model = MLP()
             state_dict = pytorch_model.state_dict()
             
-            state_dict['layers.0.weight'] = torch.tensor(model.coefs_[0].T)
-            state_dict['layers.0.bias'] = torch.tensor(model.intercepts_[0])
-            state_dict['layers.2.weight'] = torch.tensor(model.coefs_[1].T)
-            state_dict['layers.2.bias'] = torch.tensor(model.intercepts_[1])
-            state_dict['layers.4.weight'] = torch.tensor(model.coefs_[2].T)
-            state_dict['layers.4.bias'] = torch.tensor(model.intercepts_[2])
+            state_dict['layers.0.weight'] = torch.tensor(model.coefs_[0].T, dtype=torch.float32)
+            state_dict['layers.0.bias'] = torch.tensor(model.intercepts_[0], dtype=torch.float32)
+            state_dict['layers.2.weight'] = torch.tensor(model.coefs_[1].T, dtype=torch.float32)
+            state_dict['layers.2.bias'] = torch.tensor(model.intercepts_[1], dtype=torch.float32)
+            state_dict['layers.4.weight'] = torch.tensor(model.coefs_[2].T, dtype=torch.float32)
+            state_dict['layers.4.bias'] = torch.tensor(model.intercepts_[2], dtype=torch.float32)
             pytorch_model.load_state_dict(state_dict)
             
-            model_path = os.path.join(DB_DIR, f"ann_model_{timestamp}.pt")
+            model_path = os.path.join(DB_DIR, "ann_model.pt")
             torch.save(pytorch_model.state_dict(), model_path)
-            model_files[f"ann_model_{timestamp}.pt"] = model_path
+            model_files["ann_model.pt"] = model_path
             
             scaler_params = {
-                'mean': torch.tensor(scaler.mean_),
-                'scale': torch.tensor(scaler.scale_)
+                'mean': torch.tensor(scaler.mean_, dtype=torch.float32),
+                'scale': torch.tensor(scaler.scale_, dtype=torch.float32)
             }
-            scaler_path = os.path.join(DB_DIR, f"scaler_{timestamp}.pt")
+            scaler_path = os.path.join(DB_DIR, "scaler.pt")
             torch.save(scaler_params, scaler_path)
-            model_files[f"scaler_{timestamp}.pt"] = scaler_path
+            model_files["scaler.pt"] = scaler_path
             update_log(f"Saved PyTorch model to {model_path} and scaler to {scaler_path}")
         except Exception as e:
             update_log(f"Failed to save .pt files: {str(e)}")
@@ -687,27 +449,22 @@ def train_ann(formulas, labels):
     # HDF5 (.h5)
     if "h5" in save_formats:
         try:
-            h5_path = os.path.join(DB_DIR, f"models_{timestamp}.h5")
+            h5_path = os.path.join(DB_DIR, "models.h5")
             with h5py.File(h5_path, 'w') as f:
                 model_group = f.create_group('ann_model')
                 for i, (coef, intercept) in enumerate(zip(model.coefs_, model.intercepts_)):
-                    model_group.create_dataset(f'coef_{i}', data=coef)
-                    model_group.create_dataset(f'intercept_{i}', data=intercept)
+                    model_group.create_dataset(f'coef_{i}', data=coef, compression='gzip')
+                    model_group.create_dataset(f'intercept_{i}', data=intercept, compression='gzip')
                 
                 scaler_group = f.create_group('scaler')
-                scaler_group.create_dataset('mean', data=scaler.mean_)
-                scaler_group.create_dataset('scale', data=scaler.scale_)
+                scaler_group.create_dataset('mean', data=scaler.mean_, compression='gzip')
+                scaler_group.create_dataset('scale', data=scaler.scale_, compression='gzip')
             
-            model_files[f"models_{timestamp}.h5"] = h5_path
+            model_files["models.h5"] = h5_path
             update_log(f"Saved models to HDF5 file {h5_path}")
         except Exception as e:
             update_log(f"Failed to save .h5 file: {str(e)}")
             st.session_state.error_summary.append(f"HDF5 save error: {str(e)}")
-    
-    # Generate model usage script
-    usage_script_path = generate_model_usage_script(model_files, st.session_state.db_file)
-    if usage_script_path:
-        model_files[f"model_usage_example_{timestamp}.py"] = usage_script_path
     
     update_log(f"Trained ANN with {len(valid_formulas)} samples")
     return model, scaler, model_files
@@ -891,7 +648,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                     material_classifications.append({
                         "paper_id": row["id"],
                         "title": row["title"],
-                        "year": row["year"],
+                        "year": row<Double>["year"],
                         "material": material,
                         "classification": "p-type",
                         "context": f"Found in context: {context}..."
@@ -903,7 +660,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                         "paper_id": row["id"],
                         "title": row["title"],
                         "year": row["year"],
-                        "material": model,
+                        "material": material,
                         "classification": "n-type",
                         "context": f"Found in context: {context}..."
                     })
@@ -1098,7 +855,6 @@ def plot_material_classifications(df, top_n=20, year_range=None):
     valid_materials = [m for m in top_materials if m in co_occurrence.index and m in co_occurrence.columns]
     update_log(f"Top materials: {list(top_materials)}")
     update_log(f"Valid materials for co-occurrence: {valid_materials}")
-    update_log(f"Co-occurrence index: {list(co_occurrence.index)}")
     
     if not valid_materials:
         update_log("No valid materials for co-occurrence heatmap")
@@ -1129,7 +885,9 @@ def plot_material_classifications(df, top_n=20, year_range=None):
 st.header("Select or Upload Database")
 db_files = glob.glob(os.path.join(DB_DIR, "*.db"))
 db_options = [os.path.basename(f) for f in db_files] + ["Upload a new .db file"]
-db_selection = st.selectbox("Select Database", db_options, index=db_options.index("thermoelectric_universe.db") if "thermoelectric_universe.db" in db_options else 0, key="db_select")
+db_selection = st.selectbox("Select Database", db_options, 
+                            index=db_options.index("thermoelectric_universe.db") if "thermoelectric_universe.db" in db_options else 0, 
+                            key="db_select")
 uploaded_file = None
 if db_selection == "Upload a new .db file":
     uploaded_file = st.file_uploader("Upload SQLite Database (.db)", type=["db"], key="db_upload")
@@ -1205,11 +963,10 @@ if st.session_state.db_file:
             st.subheader("Model Save Formats")
             save_formats = st.multiselect(
                 "Select formats to save models",
-                options=["db", "pkl", "pt", "h5"],
-                default=st.session_state.get('save_formats', ["pkl", "db", "pt", "h5"]),
+                options=["pkl", "pt", "h5"],
+                default=st.session_state.get('save_formats', ["pkl", "pt", "h5"]),
                 key="save_formats_selector"
             )
-            # Update save_formats safely
             if save_formats != st.session_state.get('save_formats', []):
                 st.session_state['save_formats'] = save_formats
                 update_log(f"Updated save formats to: {save_formats}")
@@ -1241,6 +998,13 @@ if st.session_state.db_file:
                 
                 if not material_df.empty:
                     st.session_state.material_filter_options = sorted(material_df["material"].unique())
+                    # Save classifications as CSV
+                    csv_df = material_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
+                    material_csv = csv_df.to_csv(index=False)
+                    csv_path = os.path.join(DB_DIR, "formula_classifications.csv")
+                    with open(csv_path, 'w', encoding='utf-8') as f:
+                        f.write(material_csv)
+                    update_log(f"Saved formula classifications to {csv_path}")
             
             if material_df.empty:
                 st.warning("No material classifications found. Check logs for details.")
@@ -1294,8 +1058,7 @@ if st.session_state.db_file:
                     use_container_width=True
                 )
                 
-                csv_df = filtered_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
-                material_csv = csv_df.to_csv(index=False)
+                st.subheader("Download Formula Classifications")
                 st.download_button(
                     "Download Formula Classifications CSV", 
                     material_csv, 
@@ -1304,32 +1067,19 @@ if st.session_state.db_file:
                     key="download_materials"
                 )
                 
-                if hasattr(st.session_state, 'model_files') and st.session_state.model_files:
-                    st.subheader("Download Saved Models")
-                    st.write("The following model files were saved:")
-                    for model_file, file_path in st.session_state.model_files.items():
-                        try:
-                            with open(file_path, 'rb') as f:
-                                st.download_button(
-                                    f"Download {model_file}",
-                                    f,
-                                    model_file,
-                                    key=f"download_{model_file}"
-                                )
-                        except Exception as e:
-                            st.error(f"Failed to provide download for {model_file}: {str(e)}")
-                    st.write("**Note**: To use these models in another script, download the usage example script below.")
-                    usage_script_key = [k for k in st.session_state.model_files.keys() if k.startswith("model_usage_example")]
-                    if usage_script_key:
-                        usage_script_path = st.session_state.model_files[usage_script_key[0]]
-                        with open(usage_script_path, 'rb') as f:
+                st.subheader("Download Saved Models")
+                for model_file, file_path in st.session_state.model_files.items():
+                    try:
+                        with open(file_path, 'rb') as f:
                             st.download_button(
-                                "Download Model Usage Example Script",
+                                f"Download {model_file}",
                                 f,
-                                usage_script_key[0],
-                                "text/python",
-                                key="download_usage_script"
+                                model_file,
+                                key=f"download_{model_file}"
                             )
+                    except Exception as e:
+                        st.error(f"Failed to provide download for {model_file}: {str(e)}")
+                        update_log(f"Failed to provide download for {model_file}: {str(e)}")
                 
                 st.subheader("Extraction Progress")
                 progress_log_display = "\n".join(st.session_state.progress_log) if st.session_state.progress_log else "No progress messages yet."
@@ -1343,6 +1093,7 @@ if st.session_state.db_file:
         Enter a chemical formula or upload a CSV file with formulas to check their p-type or n-type classification.
         Classifications are based on extracted data or ANN predictions for unseen formulas.
         **Note**: Run Material Classification Analysis first to populate the classification data and train the ANN.
+        The classifications can be used to inform the bias vector in the Seebeck coefficient prediction pipeline.
         """)
         
         with st.sidebar:
