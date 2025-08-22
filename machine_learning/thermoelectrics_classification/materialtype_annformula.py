@@ -35,17 +35,25 @@ except ImportError:
 # Define valid chemical elements
 VALID_ELEMENTS = set(Element.__members__.keys())  # All valid element symbols (e.g., 'H', 'He', 'Bi')
 
+# Invalid terms to exclude from formula detection
+INVALID_TERMS = {
+    'p-type', 'n-type', 'doping', 'doped', 'thermoelectric', 'material', 'the', 'and',
+    'is', 'exhibits', 'type', 'based', 'sample', 'compound', 'system', 'properties',
+    'references', 'acknowledgments', 'data', 'matrix', 'experimental', 'note', 'level',
+    'conflict', 'result', 'captions', 'average', 'teg', 'tegs', 'marco', 'skeaf',
+    'equation', 'figure', 'table', 'section', 'method', 'results', 'discussion'
+}
+
 # -----------------------------
-# Regex NER for formulas with stricter validation
+# Regex NER for formulas with fixed pattern
 # -----------------------------
 @Language.component("formula_ner")
 def formula_ner(doc):
-    # Stricter regex: requires at least one valid element, allows stoichiometry, excludes invalid patterns
-    formula_pattern = r'\b(?:[A-Z][a-z]?[0-9]*\.?[0-9]*)+(?::[A-Z][a-z]?[0-9]*\.?[0-9]*)?(?<![\w\d-:])\b'
+    # Fixed regex: requires valid elements, supports doping, avoids invalid patterns
+    formula_pattern = r'\b(?:[A-Z][a-z]?[0-9]*\.?[0-9]*)+(?::[A-Z][a-z]?[0-9]*\.?[0-9]*)?\b'
     spans = []
     for match in re.finditer(formula_pattern, doc.text):
         formula = match.group(0)
-        # Pre-validate to ensure at least one valid element
         if validate_formula(formula):
             span = doc.char_span(match.start(), match.end(), label="FORMULA")
             if span:
@@ -54,7 +62,7 @@ def formula_ner(doc):
     return doc
 
 # -----------------------------
-# Validate formula before processing
+# Enhanced formula validation
 # -----------------------------
 def validate_formula(formula):
     """Validate if a string is a plausible chemical formula."""
@@ -64,29 +72,26 @@ def validate_formula(formula):
     # Remove doping part for validation
     base_formula = re.sub(r':.+', '', formula)
     
-    # Check for invalid terms
-    invalid_terms = [
-        'p-type', 'n-type', 'doping', 'doped', 'thermoelectric', 'material', 'the', 'and',
-        'is', 'exhibits', 'type', 'based', 'sample', 'compound', 'system', 'properties',
-        'REFERENCES', 'ACKNOWLEDGMENTS', 'DATA', 'MATRIX', 'EXPERIMENTAL', 'NOTE', 'LEVEL',
-        'CONFLICT', 'RESULT', 'CAPTIONS', 'AVERAGE', 'TEG', 'TEGs', 'MARCO', 'SKEAF'
-    ]
-    if any(term.lower() in formula.lower() for term in invalid_terms):
+    # Check for invalid terms or patterns
+    if any(term.lower() in formula.lower() for term in INVALID_TERMS):
+        return False
+    if re.match(r'^[A-Z](?:-[A-Z]|\.\d+|)$', formula) or len(formula) <= 2:
         return False
     
-    # Ensure at least one valid element
+    # Extract elements using regex
     element_pattern = r'[A-Z][a-z]?[0-9]*\.?[0-9]*'
     elements = re.findall(element_pattern, base_formula)
-    has_valid_element = False
-    for el in elements:
-        # Extract element symbol (before numbers or decimals)
-        el_symbol = re.match(r'[A-Z][a-z]?', el).group(0)
-        if el_symbol in VALID_ELEMENTS:
-            has_valid_element = True
-            break
+    if not elements:
+        return False
     
-    # Exclude patterns like 'A1-A6', 'C.-I', or single letters
-    if not has_valid_element or re.match(r'^[A-Z](?:-[A-Z]|\.\d+)$', formula) or len(formula) <= 2:
+    # Check if all elements are valid
+    for el in elements:
+        el_symbol = re.match(r'[A-Z][a-z]?', el).group(0)
+        if el_symbol not in VALID_ELEMENTS:
+            return False
+    
+    # Additional check for placeholder elements (e.g., 'X', 'Y')
+    if re.search(r'\b[X-Z][0-9]*\b', formula) and not re.match(r'^[A-Z][a-z]?[0-9]*$', formula):
         return False
     
     return True
@@ -97,27 +102,23 @@ def validate_formula(formula):
 def score_formula_context(formula, text, synonyms):
     """Score a formula based on its context to determine if it's a valid chemical formula."""
     score = 0.0
-    context_window = 100  # Characters before/after formula to check
-    
-    # Extract context around formula
+    context_window = 100  # Characters before/after formula
     start_idx = max(0, text.lower().find(formula.lower()) - context_window)
     end_idx = min(len(text), text.lower().find(formula.lower()) + len(formula) + context_window)
     context = text[start_idx:end_idx].lower()
     
-    # Positive signals: proximity to thermoelectric terms or known materials
     positive_terms = ['thermoelectric', 'p-type', 'n-type', 'material', 'compound', 'semiconductor']
     positive_terms += [syn for syn_list in synonyms.values() for syn in syn_list]
     common_materials = ['Bi2Te3', 'PbTe', 'SnSe', 'CoSb3', 'SiGe', 'Skutterudite', 'Half-Heusler']
     
     for term in positive_terms + common_materials:
         if term.lower() in context:
-            score += 0.2  # Increase score for relevant terms
+            score += 0.2
     
-    # Negative signals: proximity to non-chemical terms
     negative_terms = ['figure', 'table', 'references', 'acknowledgments', 'section', 'equation']
     for term in negative_terms:
         if term.lower() in context:
-            score -= 0.3  # Decrease score for non-chemical context
+            score -= 0.3
     
     return max(0.0, min(score, 1.0))  # Normalize to [0, 1]
 
@@ -145,7 +146,7 @@ def material_matcher(doc):
     return doc
 
 # -----------------------------
-# Load spaCy model with improved NER
+# Load spaCy model
 # -----------------------------
 def load_spacy_model(synonyms):
     try:
@@ -168,12 +169,11 @@ def load_spacy_model(synonyms):
     return nlp
 
 # -----------------------------
-# Link formulas to nearest material type
+# Link formulas to material type
 # -----------------------------
 def link_formula_to_material(doc):
     formulas = [(ent, score_formula_context(ent.text, doc.text, st.session_state.synonyms)) 
                 for ent in doc.ents if ent.label_ == "FORMULA"]
-    # Filter formulas with low context scores
     formulas = [f for f, score in formulas if score > 0.3]  # Attention threshold
     materials = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
     pairs = []
@@ -205,7 +205,7 @@ st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases (e.g., thermoelectric_universe.db) and allows classification of user-input chemical formulas using NLP and ANN.
 
-**Date and Time**: 03:44 AM CEST, Friday, August 22, 2025
+**Date and Time**: 03:49 AM CEST, Friday, August 22, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen scikit-learn joblib`
@@ -297,6 +297,10 @@ def standardize_material_formula(formula, preserve_stoichiometry=False, canonica
         if dopants:
             valid_dopants = []
             for dopant in dopants:
+                if not validate_formula(dopant):
+                    update_log(f"Invalid dopant '{dopant}' in '{formula}'")
+                    st.session_state.error_summary.append(f"Invalid dopant '{dopant}' in '{formula}'")
+                    continue
                 try:
                     dopant_comp = Composition(dopant.strip())
                     valid_dopants.append(dopant_comp.reduced_formula)
@@ -320,11 +324,11 @@ def featurize_formulas(formulas, labels=None):
     
     element_properties = {
         el.symbol: [
-            el.Z,  # Atomic number
-            el.X,  # Electronegativity
-            el.group,  # Group number
-            el.row,  # Period number
-            el.atomic_mass  # Atomic mass
+            float(el.Z or 0),  # Atomic number
+            float(el.X or 0),  # Electronegativity (0 if None)
+            float(el.group or 0),  # Group number
+            float(el.row or 0),  # Period number
+            float(el.atomic_mass or 0)  # Atomic mass
         ] for el in Element
     }
     
@@ -340,10 +344,16 @@ def featurize_formulas(formulas, labels=None):
             total_atoms = sum(el_amt_dict.values())
             
             # Weighted average of element properties
-            feature_vector = np.zeros(5)  # For Z, X, group, row, mass
+            feature_vector = np.zeros(5)
             for el, amt in el_amt_dict.items():
                 weight = amt / total_atoms
-                feature_vector += np.array(element_properties[el]) * weight
+                props = element_properties.get(el, [0.0] * 5)  # Fallback for unknown elements
+                feature_vector += np.array(props) * weight
+            
+            if np.any(np.isnan(feature_vector)):
+                update_log(f"NaN features for formula '{formula}'")
+                st.session_state.error_summary.append(f"NaN features for formula '{formula}'")
+                continue
             
             features.append(feature_vector)
             valid_formulas.append(formula)
@@ -352,6 +362,10 @@ def featurize_formulas(formulas, labels=None):
         except Exception as e:
             update_log(f"Failed to featurize formula '{formula}': {str(e)}")
             st.session_state.error_summary.append(f"Featurization failed for '{formula}': {str(e)}")
+    
+    if not features:
+        update_log("No valid features generated for ANN training")
+        return np.array([]), [], [] if labels is not None else None
     
     return np.array(features), valid_formulas, valid_labels if labels is not None else None
 
@@ -365,14 +379,27 @@ def train_ann(formulas, labels):
         update_log("Insufficient data for ANN training")
         return None, None
     
+    # Handle potential NaNs
+    if np.any(np.isnan(X)):
+        update_log("NaN values detected in feature matrix, skipping ANN training")
+        return None, None
+    
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    try:
+        X_scaled = scaler.fit_transform(X)
+    except ValueError as e:
+        update_log(f"Scaler error: {str(e)}")
+        return None, None
     
     label_map = {"p-type": 1, "n-type": 0}
     y = np.array([label_map[l] for l in valid_labels])
     
     model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42)
-    model.fit(X_scaled, y)
+    try:
+        model.fit(X_scaled, y)
+    except ValueError as e:
+        update_log(f"ANN training failed: {str(e)}")
+        return None, None
     
     model_path = os.path.join(DB_DIR, "ann_model.pkl")
     scaler_path = os.path.join(DB_DIR, "scaler.pkl")
@@ -1061,4 +1088,3 @@ if st.session_state.db_file:
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="formula_logs")
 else:
     st.warning("Select or upload a database file.")
-
