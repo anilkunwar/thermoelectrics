@@ -952,10 +952,10 @@ def batch_classify_formulas(formulas, material_df, fuzzy_match=False):
             results.append(result)
     return results, errors, suggestions
 
-def plot_material_classifications(df, top_n=20, year_range=None):
+def plot_material_classifications(df, top_n=20, year_range=None, display_columns=None):
     if df.empty:
         update_log("Empty DataFrame provided to plot_material_classifications")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     
     update_log(f"DataFrame columns: {df.columns.tolist()}")
     
@@ -974,7 +974,7 @@ def plot_material_classifications(df, top_n=20, year_range=None):
     
     if df.empty:
         update_log("No data after filtering")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     
     # Material counts for top_n selection
     material_counts = df.groupby(["material", "classification"]).size().reset_index(name="count")
@@ -1088,7 +1088,19 @@ def plot_material_classifications(df, top_n=20, year_range=None):
         )
         fig_sunburst.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
-    return fig_bar, fig_pie, fig_timeline, fig_heatmap, fig_sunburst
+    # --- Safe preview table ---
+    preview_df = None
+    if display_columns:
+        existing_cols = [c for c in display_columns if c in filtered_df.columns]
+        if not existing_cols:
+            update_log("No valid display columns found in DataFrame")
+            st.session_state.error_summary.append("No valid display columns to show in table")
+            preview_df = filtered_df.head(100)
+        else:
+            preview_df = filtered_df[existing_cols].head(100)
+    
+    return fig_bar, fig_pie, fig_timeline, fig_heatmap, fig_sunburst, preview_df
+
 
 
 # Main app
