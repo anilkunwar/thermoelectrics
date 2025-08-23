@@ -976,11 +976,12 @@ def plot_material_classifications(df, top_n=20, year_range=None):
         update_log("No data after filtering")
         return None, None, None, None, None
     
+    # Material counts for top_n selection
     material_counts = df.groupby(["material", "classification"]).size().reset_index(name="count")
     top_materials = material_counts.groupby("material")["count"].sum().nlargest(top_n).index
     filtered_df = material_counts[material_counts["material"].isin(top_materials)]
     
-    # Bar chart
+    # --- Bar chart ---
     fig_bar = px.bar(
         filtered_df, 
         x="material", 
@@ -992,7 +993,7 @@ def plot_material_classifications(df, top_n=20, year_range=None):
     )
     fig_bar.update_layout(xaxis_tickangle=-45, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
-    # Pie chart
+    # --- Pie chart ---
     class_dist = df["classification"].value_counts()
     fig_pie = px.pie(
         values=class_dist.values,
@@ -1002,7 +1003,7 @@ def plot_material_classifications(df, top_n=20, year_range=None):
     )
     fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
-    # Timeline chart
+    # --- Timeline chart ---
     fig_timeline = None
     if 'year' in df.columns and df["year"].notna().any():
         yearly_data = df.groupby(["year", "classification"]).size().reset_index(name="count")
@@ -1019,40 +1020,48 @@ def plot_material_classifications(df, top_n=20, year_range=None):
     else:
         update_log("No valid year data for timeline plot")
     
-    # Co-occurrence heatmap
-    material_papers = df.groupby(["material", "paper_id"]).size().unstack(fill_value=0)
-    co_occurrence = material_papers.T.dot(material_papers)
-    np.fill_diagonal(co_occurrence.values, 0)
-    
-    valid_materials = [m for m in top_materials if m in co_occurrence.index and m in co_occurrence.columns]
-    update_log(f"Top materials: {list(top_materials)}")
-    update_log(f"Valid materials for co-occurrence: {valid_materials}")
-    update_log(f"Co-occurrence index: {list(co_occurrence.index)}")
-    
-    if not valid_materials:
-        update_log("No valid materials for co-occurrence heatmap")
-        fig_heatmap = None
+    # --- Co-occurrence heatmap ---
+    fig_heatmap = None
+    if {"material", "paper_id"}.issubset(df.columns):
+        try:
+            material_papers = df.groupby(["material", "paper_id"]).size().unstack(fill_value=0)
+            co_occurrence = material_papers.T.dot(material_papers)
+            np.fill_diagonal(co_occurrence.values, 0)
+
+            valid_materials = [m for m in top_materials if m in co_occurrence.index and m in co_occurrence.columns]
+            update_log(f"Top materials: {list(top_materials)}")
+            update_log(f"Valid materials for co-occurrence: {valid_materials}")
+            update_log(f"Co-occurrence index: {list(co_occurrence.index)}")
+
+            if valid_materials:
+                co_occurrence = co_occurrence.loc[valid_materials, valid_materials]
+                fig_heatmap = go.Figure(data=go.Heatmap(
+                    z=co_occurrence.values,
+                    x=co_occurrence.columns,
+                    y=co_occurrence.index,
+                    colorscale="Viridis",
+                    text=co_occurrence.values,
+                    texttemplate="%{text}",
+                    textfont={"size": 10}
+                ))
+                fig_heatmap.update_layout(
+                    title="Material Co-occurrence Heatmap",
+                    xaxis_title="Formula",
+                    yaxis_title="Formula",
+                    xaxis_tickangle=-45,
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)"
+                )
+            else:
+                update_log("No valid materials for co-occurrence heatmap")
+        except Exception as e:
+            update_log(f"Error generating co-occurrence heatmap: {str(e)}")
+            st.session_state.error_summary.append(f"Heatmap error: {str(e)}")
     else:
-        co_occurrence = co_occurrence.loc[valid_materials, valid_materials]
-        fig_heatmap = go.Figure(data=go.Heatmap(
-            z=co_occurrence.values,
-            x=co_occurrence.columns,
-            y=co_occurrence.index,
-            colorscale="Viridis",
-            text=co_occurrence.values,
-            texttemplate="%{text}",
-            textfont={"size": 10}
-        ))
-        fig_heatmap.update_layout(
-            title="Material Co-occurrence Heatmap",
-            xaxis_title="Formula",
-            yaxis_title="Formula",
-            xaxis_tickangle=-45,
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)"
-        )
+        update_log("Skipping co-occurrence heatmap: 'material' or 'paper_id' column missing")
+        st.session_state.error_summary.append("Heatmap skipped: missing 'material' or 'paper_id'")
     
-    # Sunburst chart
+    # --- Sunburst chart ---
     fig_sunburst = None
     if 'year' in df.columns:
         sunburst_data = df.groupby(['year', 'material', 'classification']).size().reset_index(name='count')
@@ -1080,6 +1089,7 @@ def plot_material_classifications(df, top_n=20, year_range=None):
         fig_sunburst.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
     return fig_bar, fig_pie, fig_timeline, fig_heatmap, fig_sunburst
+
 
 # Main app
 st.header("Select or Upload Database")
