@@ -568,6 +568,7 @@ def detect_year_column(conn):
     update_log("No year column found in 'papers' table")
     return None
 
+# Updated extract_material_classifications to ensure all required columns
 def extract_material_classifications(db_file, preserve_stoichiometry=False, year_range=None):
     try:
         update_log("Starting p-type/n-type material classification with NER")
@@ -580,7 +581,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             update_log("Database does not contain 'papers' table")
             st.session_state.error_summary.append("Database does not contain 'papers' table")
             conn.close()
-            return pd.DataFrame()
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
         
         cursor.execute("PRAGMA table_info(papers)")
         columns = {col[1].lower() for col in cursor.fetchall()}
@@ -590,34 +591,39 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             update_log(f"Missing required columns: {missing}")
             st.session_state.error_summary.append(f"Missing required columns: {missing}")
             conn.close()
-            return pd.DataFrame()
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
         
         text_column = detect_text_column(conn)
         if not text_column:
             st.session_state.error_summary.append("No text column (content, text, abstract, body) found in database")
             conn.close()
-            return pd.DataFrame()
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
         st.session_state.text_column = text_column
         
         year_column = detect_year_column(conn)
-        select_columns = f"id, title, {text_column}"
+        select_columns = f"id AS paper_id, title, {text_column}"
         if year_column:
-            select_columns += f", {year_column}"
+            select_columns += f", {year_column} AS year"
         
         query = f"SELECT {select_columns} FROM papers WHERE {text_column} IS NOT NULL AND {text_column} NOT LIKE 'Error%'"
         if year_column and year_range:
             query += f" AND {year_column} BETWEEN {year_range[0]} AND {year_range[1]}"
         df = pd.read_sql_query(query, conn)
         
-        # Rename year_column to 'year' for consistency
-        if year_column and year_column.lower() != 'year':
-            df = df.rename(columns={year_column: 'year'})
-        
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='standardized_formulas'")
         if cursor.fetchone():
             cached_df = pd.read_sql_query("SELECT material, classification FROM standardized_formulas", conn)
             if year_column:
-                cached_df['year'] = pd.read_sql_query("SELECT year FROM papers", conn)['year']
+                try:
+                    cached_df['year'] = pd.read_sql_query("SELECT year FROM papers", conn)['year']
+                except Exception as e:
+                    update_log(f"Failed to load year from cached data: {str(e)}")
+            if 'paper_id' not in cached_df.columns:
+                cached_df['paper_id'] = pd.read_sql_query("SELECT id FROM papers", conn)['id']
+            if 'title' not in cached_df.columns:
+                cached_df['title'] = pd.read_sql_query("SELECT title FROM papers", conn)['title']
+            if 'context' not in cached_df.columns:
+                cached_df['context'] = ''
             update_log("Loaded cached standardized formulas")
             conn.close()
             return cached_df
@@ -627,7 +633,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
         if df.empty:
             update_log("No valid papers found for material classification")
             st.session_state.error_summary.append("No valid papers found in database")
-            return pd.DataFrame()
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
         
         nlp = load_spacy_model(st.session_state.synonyms)
         
@@ -669,7 +675,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
         
         progress_bar = st.progress(0)
         for i, row in df.iterrows():
-            update_progress(f"Processing paper {row['id']} ({i+1}/{len(df)})")
+            update_progress(f"Processing paper {row['paper_id']} ({i+1}/{len(df)})")
             content = row[text_column]
             chunks = chunk_text(content)
             
@@ -683,7 +689,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                 for pair in linked_pairs:
                     if pair["Material_Type"] in ["p-type", "n-type"]:
                         classification_entry = {
-                            "paper_id": row["id"],
+                            "paper_id": row["paper_id"],
                             "title": row["title"],
                             "material": pair["Formula"],
                             "classification": pair["Material_Type"],
@@ -746,7 +752,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                 for material, start_pos in p_type_materials:
                     context = chunk[max(0, start_pos-50):min(len(chunk), start_pos+50)]
                     classification_entry = {
-                        "paper_id": row["id"],
+                        "paper_id": row["paper_id"],
                         "title": row["title"],
                         "material": material,
                         "classification": "p-type",
@@ -759,7 +765,7 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
                 for material, start_pos in n_type_materials:
                     context = chunk[max(0, start_pos-50):min(len(chunk), start_pos+50)]
                     classification_entry = {
-                        "paper_id": row["id"],
+                        "paper_id": row["paper_id"],
                         "title": row["title"],
                         "material": material,
                         "classification": "n-type",
@@ -778,22 +784,27 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
         
         material_df = pd.DataFrame(material_classifications)
         
-        if not material_df.empty:
-            material_df = material_df.drop_duplicates(subset=["paper_id", "material", "classification"])
-            material_df = material_df.sort_values(by=["material", "classification"])
-            update_log(f"Cleaned and sorted DataFrame: {len(material_df)} unique classifications")
-            
-            conn = sqlite3.connect(db_file)
-            material_df[["material", "classification"] + (["year"] if 'year' in material_df.columns else [])].to_sql("standardized_formulas", conn, if_exists="replace", index=False)
-            conn.close()
-            update_log("Cached standardized formulas in database")
-            
-            formulas = material_df["material"].tolist()
-            labels = material_df["classification"].tolist()
-            model, scaler, model_files = train_ann(formulas, labels)
-            st.session_state.ann_model = model
-            st.session_state.scaler = scaler
-            st.session_state.model_files = model_files
+        if material_df.empty:
+            update_log("No material classifications extracted")
+            st.session_state.error_summary.append("No material classifications found")
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
+        
+        material_df = material_df.drop_duplicates(subset=["paper_id", "material", "classification"])
+        material_df = material_df.sort_values(by=["material", "classification"])
+        update_log(f"Cleaned and sorted DataFrame: {len(material_df)} unique classifications")
+        update_log(f"material_df columns: {material_df.columns.tolist()}")
+        
+        conn = sqlite3.connect(db_file)
+        material_df[["material", "classification"] + (["year"] if 'year' in material_df.columns else [])].to_sql("standardized_formulas", conn, if_exists="replace", index=False)
+        conn.close()
+        update_log("Cached standardized formulas in database")
+        
+        formulas = material_df["material"].tolist()
+        labels = material_df["classification"].tolist()
+        model, scaler, model_files = train_ann(formulas, labels)
+        st.session_state.ann_model = model
+        st.session_state.scaler = scaler
+        st.session_state.model_files = model_files
         
         update_log(f"Extracted {len(material_df)} material classifications")
         return material_df
@@ -801,11 +812,11 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
     except sqlite3.OperationalError as e:
         update_log(f"SQLite error: {str(e)}")
         st.session_state.error_summary.append(f"SQLite error: {str(e)}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
     except Exception as e:
         update_log(f"Error in material classification: {str(e)}")
         st.session_state.error_summary.append(f"Extraction error: {str(e)}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
 
 def classify_formula(formula, material_df, fuzzy_match=False):
     try:
@@ -1094,6 +1105,7 @@ def plot_material_classifications(df, top_n=20, year_range=None):
 
 
 # Main app
+# Main app
 st.header("Select or Upload Database")
 db_files = glob.glob(os.path.join(DB_DIR, "*.db"))
 db_options = [os.path.basename(f) for f in db_files] + ["Upload a new .db file"]
@@ -1116,6 +1128,11 @@ if st.session_state.db_file:
     try:
         conn = sqlite3.connect(st.session_state.db_file)
         cursor = conn.cursor()
+        
+        # Inspect database schema
+        cursor.execute("PRAGMA table_info(papers)")
+        db_columns = [col[1].lower() for col in cursor.fetchall()]
+        update_log(f"Database 'papers' table columns: {db_columns}")
         
         text_column = detect_text_column(conn)
         if not text_column:
@@ -1182,7 +1199,6 @@ if st.session_state.db_file:
                 default=st.session_state.get('save_formats', ["pkl", "db", "pt", "h5"]),
                 key="save_formats_selector"
             )
-            # Update save_formats safely
             if save_formats != st.session_state.get('save_formats', []):
                 st.session_state['save_formats'] = save_formats
                 update_log(f"Updated save formats to: {save_formats}")
@@ -1239,8 +1255,24 @@ if st.session_state.db_file:
             else:
                 st.success(f"Extracted {len(material_df)} unique material classifications!")
                 
-                filtered_df = material_df if not material_filter else \
-                             material_df[material_df["material"].isin(material_filter)]
+                filtered_df = material_df if not material_filter else material_df[material_df["material"].isin(material_filter)]
+                
+                # Check if material_filter resulted in empty DataFrame
+                if material_filter and not material_df["material"].isin(material_filter).any():
+                    update_log("Material filter resulted in empty DataFrame")
+                    st.warning("Selected materials not found in extracted data. Showing all classifications.")
+                    filtered_df = material_df
+                
+                # Validate display_columns
+                display_columns = ["paper_id", "title", "material", "classification", "context"]
+                if 'year' in filtered_df.columns:
+                    display_columns.insert(2, "year")
+                
+                available_columns = [col for col in display_columns if col in filtered_df.columns]
+                if len(available_columns) < len(display_columns):
+                    missing_columns = [col for col in display_columns if col not in filtered_df.columns]
+                    update_log(f"Missing columns in filtered_df: {missing_columns}")
+                    st.warning(f"Some expected columns are missing: {', '.join(missing_columns)}. Displaying available columns: {', '.join(available_columns)}")
                 
                 st.subheader("Classification Summary")
                 col1, col2, col3 = st.columns(3)
@@ -1284,13 +1316,14 @@ if st.session_state.db_file:
                     st.warning("No data available for sunburst chart.")
                 
                 st.subheader("Extracted Material Classifications")
-                display_columns = ["paper_id", "title", "material", "classification", "context"]
-                if 'year' in filtered_df.columns:
-                    display_columns.insert(2, "year")
-                st.dataframe(
-                    filtered_df[display_columns].head(100),
-                    use_container_width=True
-                )
+                update_log(f"Attempting to display columns: {available_columns}")
+                if available_columns:
+                    st.dataframe(
+                        filtered_df[available_columns].head(100),
+                        use_container_width=True
+                    )
+                else:
+                    st.error("No valid columns available to display classifications.")
                 
                 csv_df = filtered_df[["material", "classification"] + (["year"] if 'year' in filtered_df.columns else [])].rename(
                     columns={"material": "Formula", "classification": "Material Type", "year": "Year"}
@@ -1418,3 +1451,5 @@ if st.session_state.db_file:
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="formula_logs")
 else:
     st.warning("Select or upload a database file.")
+
+
