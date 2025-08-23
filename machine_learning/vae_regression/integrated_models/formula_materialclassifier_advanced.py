@@ -61,7 +61,7 @@ st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases and allows classification of user-input chemical formulas using NLP and ANN.
 
-**Date and Time**: 06:07 PM CEST, Saturday, August 23, 2025
+**Date and Time**: 06:14 PM CEST, Saturday, August 23, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen scikit-learn joblib torch h5py tensorflow`
@@ -106,6 +106,31 @@ def update_progress(message):
     st.session_state.progress_log.append(message)
     if len(st.session_state.progress_log) > 10:
         st.session_state.progress_log.pop(0)
+
+# Reintroduce missing functions
+def detect_text_column(conn):
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(papers)")
+    columns = {col[1].lower() for col in cursor.fetchall()}  # Case-insensitive
+    possible_text_columns = ['content', 'text', 'abstract', 'body']
+    for col in possible_text_columns:
+        if col.lower() in columns:
+            update_log(f"Detected text column: {col}")
+            return col
+    update_log("No text column found in 'papers' table")
+    return None
+
+def detect_year_column(conn):
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(papers)")
+    columns = {col[1].lower() for col in cursor.fetchall()}  # Case-insensitive
+    possible_year_columns = ['year', 'publication_year', 'date']
+    for col in possible_year_columns:
+        if col.lower() in columns:
+            update_log(f"Detected year column: {col}")
+            return col
+    update_log("No year column found in 'papers' table")
+    return None
 
 # Call initialization at the start of the app
 initialize_session_state()
@@ -484,3 +509,253 @@ if st.session_state.db_file:
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="formula_logs")
 else:
     st.warning("Select or upload a database file.")
+
+# Keep the extract_material_classifications from the previous fix
+def extract_material_classifications(db_file, preserve_stoichiometry=False, year_range=None):
+    try:
+        update_log("Starting p-type/n-type material classification with NER")
+        update_progress("Connecting to database...")
+        
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='papers'")
+        if not cursor.fetchone():
+            update_log("Database does not contain 'papers' table")
+            st.session_state.error_summary.append("Database does not contain 'papers' table")
+            conn.close()
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
+        
+        cursor.execute("PRAGMA table_info(papers)")
+        columns = {col[1].lower() for col in cursor.fetchall()}
+        required_columns = {'id', 'title'}
+        if not required_columns.issubset(columns):
+            missing = required_columns - columns
+            update_log(f"Missing required columns: {missing}")
+            st.session_state.error_summary.append(f"Missing required columns: {missing}")
+            conn.close()
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
+        
+        text_column = detect_text_column(conn)
+        if not text_column:
+            st.session_state.error_summary.append("No text column (content, text, abstract, body) found in database")
+            conn.close()
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
+        st.session_state.text_column = text_column
+        
+        year_column = detect_year_column(conn)
+        select_columns = f"id AS paper_id, title, {text_column}"
+        if year_column:
+            select_columns += f", {year_column} AS year"
+        
+        query = f"SELECT {select_columns} FROM papers WHERE {text_column} IS NOT NULL AND {text_column} NOT LIKE 'Error%'"
+        if year_column and year_range:
+            query += f" AND {year_column} BETWEEN {year_range[0]} AND {year_range[1]}"
+        df = pd.read_sql_query(query, conn)
+        
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='standardized_formulas'")
+        if cursor.fetchone():
+            cached_df = pd.read_sql_query("SELECT material, classification FROM standardized_formulas", conn)
+            if year_column:
+                try:
+                    cached_df['year'] = pd.read_sql_query("SELECT year FROM papers", conn)['year']
+                except Exception as e:
+                    update_log(f"Failed to load year from cached data: {str(e)}")
+            if 'paper_id' not in cached_df.columns:
+                cached_df['paper_id'] = pd.read_sql_query("SELECT id FROM papers", conn)['id']
+            if 'title' not in cached_df.columns:
+                cached_df['title'] = pd.read_sql_query("SELECT title FROM papers", conn)['title']
+            if 'context' not in cached_df.columns:
+                cached_df['context'] = ''
+            update_log("Loaded cached standardized formulas")
+            conn.close()
+            return cached_df
+        
+        conn.close()
+        
+        if df.empty:
+            update_log("No valid papers found for material classification")
+            st.session_state.error_summary.append("No valid papers found in database")
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
+        
+        nlp = load_spacy_model(st.session_state.synonyms)
+        
+        material_classifications = []
+        p_type_patterns = [
+            r"p-type\s+([A-Za-z0-9\(\)\-\s,:]+?)(?=\s|,|\.|;|:|$)",
+            r"p-type\s+material.*?([A-Za-z0-9\(\)\-\s,:]+?)(?=\s|,|\.|;|:|$)",
+            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+is\s+p-type",
+            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+exhibits\s+p-type",
+            r"p-type\s+([A-Za-z0-9\(\)\-\s,:]+?)\s+thermoelectric",
+            r"p-type\s+doped\s+([A-Za-z0-9\(\)\-\s,:]+?)",
+            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+doped\s+p-type"
+        ]
+        n_type_patterns = [
+            r"n-type\s+([A-Za-z0-9\(\)\-\s,:]+?)(?=\s|,|\.|;|:|$)",
+            r"n-type\s+material.*?([A-Za-z0-9\(\)\-\s,:]+?)(?=\s|,|\.|;|:|$)",
+            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+is\s+n-type",
+            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+exhibits\s+n-type",
+            r"n-type\s+([A-Za-z0-9\(\)\-\s,:]+?)\s+thermoelectric",
+            r"n-type\s+doped\s+([A-Za-z0-9\(\)\-\s,:]+?)",
+            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+doped\s+n-type"
+        ]
+        common_te_materials = [
+            "Bi2Te3", "PbTe", "SnSe", "CoSb3", "SiGe", "Skutterudite",
+            "Half-Heusler", "Clathrate", "Zn4Sb3", "Mg2Si", "Cu2Se"
+        ]
+        
+        def chunk_text(text, max_length=200000):
+            chunks = []
+            start = 0
+            while start < len(text):
+                end = min(start + max_length, len(text))
+                if end < len(text):
+                    last_period = text.rfind('.', start, end)
+                    end = last_period + 1 if last_period > start else end
+                chunks.append(text[start:end])
+                start = end
+            return chunks
+        
+        progress_bar = st.progress(0)
+        for i, row in df.iterrows():
+            update_progress(f"Processing paper {row['paper_id']} ({i+1}/{len(df)})")
+            content = row[text_column]
+            chunks = chunk_text(content)
+            
+            for chunk_idx, chunk in enumerate(chunks):
+                doc = nlp(chunk)
+                formula_entities = [ent.text for ent in doc.ents if ent.label_ == "FORMULA"]
+                material_entities = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
+                
+                linked_pairs = link_formula_to_material(doc)
+                
+                for pair in linked_pairs:
+                    if pair["Material_Type"] in ["p-type", "n-type"]:
+                        classification_entry = {
+                            "paper_id": row["paper_id"],
+                            "title": row["title"],
+                            "material": pair["Formula"],
+                            "classification": pair["Material_Type"],
+                            "context": f"Found in context: {chunk[max(0, chunk.find(pair['Formula'])-50):min(len(chunk), chunk.find(pair['Formula'])+50)]}..."
+                        }
+                        if 'year' in row:
+                            classification_entry['year'] = row['year']
+                        material_classifications.append(classification_entry)
+                
+                p_type_materials = set()
+                for pattern in p_type_patterns:
+                    matches = re.finditer(pattern, chunk, re.IGNORECASE)
+                    for match in matches:
+                        material = match.group(1).strip()
+                        if material and len(material) > 2 and material in formula_entities and validate_formula(material):
+                            standardized_material = standardize_material_formula(material, preserve_stoichiometry)
+                            if standardized_material:
+                                p_type_materials.add((standardized_material, match.start()))
+                
+                n_type_materials = set()
+                for pattern in n_type_patterns:
+                    matches = re.finditer(pattern, chunk, re.IGNORECASE)
+                    for match in matches:
+                        material = match.group(1).strip()
+                        if material and len(material) > 2 and material in formula_entities and validate_formula(material):
+                            standardized_material = standardize_material_formula(material, preserve_stoichiometry)
+                            if standardized_material:
+                                n_type_materials.add((standardized_material, match.start()))
+                
+                p_type_context = re.search(r"p-type[^\.]{0,500}", chunk, re.IGNORECASE)
+                n_type_context = re.search(r"n-type[^\.]{0,500}", chunk, re.IGNORECASE)
+                
+                if p_type_context:
+                    context_doc = nlp(p_type_context.group(0))
+                    for ent in context_doc.ents:
+                        if ent.label_ == "FORMULA" and validate_formula(ent.text):
+                            standardized_material = standardize_material_formula(ent.text, preserve_stoichiometry)
+                            if standardized_material:
+                                p_type_materials.add((standardized_material, ent.start_char))
+                
+                if n_type_context:
+                    context_doc = nlp(n_type_context.group(0))
+                    for ent in context_doc.ents:
+                        if ent.label_ == "FORMULA" and validate_formula(ent.text):
+                            standardized_material = standardize_material_formula(ent.text, preserve_stoichiometry)
+                            if standardized_material:
+                                n_type_materials.add((standardized_material, ent.start_char))
+                
+                for material in common_te_materials:
+                    if material.lower() in chunk.lower():
+                        doc = nlp(material)
+                        if any(ent.label_ == "FORMULA" for ent in doc.ents) and validate_formula(material):
+                            standardized_material = standardize_material_formula(material, preserve_stoichiometry)
+                            if standardized_material:
+                                if p_type_context and material.lower() in p_type_context.group(0).lower():
+                                    p_type_materials.add((standardized_material, 0))
+                                if n_type_context and material.lower() in n_type_context.group(0).lower():
+                                    n_type_materials.add((standardized_material, 0))
+                
+                for material, start_pos in p_type_materials:
+                    context = chunk[max(0, start_pos-50):min(len(chunk), start_pos+50)]
+                    classification_entry = {
+                        "paper_id": row["paper_id"],
+                        "title": row["title"],
+                        "material": material,
+                        "classification": "p-type",
+                        "context": f"Found in context: {context}..."
+                    }
+                    if 'year' in row:
+                        classification_entry['year'] = row['year']
+                    material_classifications.append(classification_entry)
+                
+                for material, start_pos in n_type_materials:
+                    context = chunk[max(0, start_pos-50):min(len(chunk), start_pos+50)]
+                    classification_entry = {
+                        "paper_id": row["paper_id"],
+                        "title": row["title"],
+                        "material": material,
+                        "classification": "n-type",
+                        "context": f"Found in context: {context}..."
+                    }
+                    if 'year' in row:
+                        classification_entry['year'] = row['year']
+                    material_classifications.append(classification_entry)
+                
+                doc = None
+                import gc
+                gc.collect()
+            
+            progress_value = min((i + 1) / len(df), 1.0)
+            progress_bar.progress(progress_value)
+        
+        material_df = pd.DataFrame(material_classifications)
+        
+        if material_df.empty:
+            update_log("No material classifications extracted")
+            st.session_state.error_summary.append("No material classifications found")
+            return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
+        
+        material_df = material_df.drop_duplicates(subset=["paper_id", "material", "classification"])
+        material_df = material_df.sort_values(by=["material", "classification"])
+        update_log(f"Cleaned and sorted DataFrame: {len(material_df)} unique classifications")
+        update_log(f"material_df columns: {material_df.columns.tolist()}")
+        
+        conn = sqlite3.connect(db_file)
+        material_df[["material", "classification"] + (["year"] if 'year' in material_df.columns else [])].to_sql("standardized_formulas", conn, if_exists="replace", index=False)
+        conn.close()
+        update_log("Cached standardized formulas in database")
+        
+        formulas = material_df["material"].tolist()
+        labels = material_df["classification"].tolist()
+        model, scaler, model_files = train_ann(formulas, labels)
+        st.session_state.ann_model = model
+        st.session_state.scaler = scaler
+        st.session_state.model_files = model_files
+        
+        update_log(f"Extracted {len(material_df)} material classifications")
+        return material_df
+    
+    except sqlite3.OperationalError as e:
+        update_log(f"SQLite error: {str(e)}")
+        st.session_state.error_summary.append(f"SQLite error: {str(e)}")
+        return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
+    except Exception as e:
+        update_log(f"Error in material classification: {str(e)}")
+        st.session_state.error_summary.append(f"Extraction error: {str(e)}")
+        return pd.DataFrame(columns=["paper_id", "title", "material", "classification", "context"])
