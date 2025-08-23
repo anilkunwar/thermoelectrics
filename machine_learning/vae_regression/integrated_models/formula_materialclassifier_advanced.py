@@ -1286,6 +1286,8 @@ if st.session_state.db_file:
                 if 'year' in filtered_df.columns:
                     display_columns.insert(2, "year")
                 st.dataframe(
+                    update_log(f"display_columns: {display_columns}")
+                    update_log(f"available columns: {filtered_df.columns.tolist()}")
                     filtered_df[display_columns].head(100),
                     use_container_width=True
                 )
