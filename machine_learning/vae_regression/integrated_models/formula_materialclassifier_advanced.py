@@ -24,6 +24,7 @@ import joblib
 import torch
 import torch.nn as nn
 import h5py
+import base64
 
 # Try to import pymatgen for material formula parsing
 try:
@@ -47,149 +48,9 @@ INVALID_TERMS = {
     'equation', 'figure', 'table', 'section', 'method', 'results', 'discussion'
 }
 
-# -----------------------------
-# Regex NER for formulas with fixed pattern
-# -----------------------------
-@Language.component("formula_ner")
-def formula_ner(doc):
-    formula_pattern = r'\b(?:[A-Z][a-z]?[0-9]*\.?[0-9]*)+(?::[A-Z][a-z]?[0-9]*\.?[0-9]*)?\b'
-    spans = []
-    for match in re.finditer(formula_pattern, doc.text):
-        formula = match.group(0)
-        if validate_formula(formula):
-            span = doc.char_span(match.start(), match.end(), label="FORMULA")
-            if span:
-                spans.append(span)
-    doc.ents = filter_spans(list(doc.ents) + spans)
-    return doc
-
-# -----------------------------
-# Enhanced formula validation
-# -----------------------------
-def validate_formula(formula):
-    """Validate if a string is a plausible chemical formula."""
-    if not formula or not isinstance(formula, str):
-        return False
-    
-    base_formula = re.sub(r':.+', '', formula)
-    
-    if any(term.lower() in formula.lower() for term in INVALID_TERMS):
-        return False
-    if re.match(r'^[A-Z](?:-[A-Z]|\.\d+|)$', formula) or len(formula) <= 2:
-        return False
-    
-    element_pattern = r'[A-Z][a-z]?[0-9]*\.?[0-9]*'
-    elements = re.findall(element_pattern, base_formula)
-    if not elements:
-        return False
-    
-    for el in elements:
-        el_symbol = re.match(r'[A-Z][a-z]?', el).group(0)
-        if el_symbol not in VALID_ELEMENTS:
-            return False
-    
-    if re.search(r'\b[X-Z][0-9]*\b', formula) and not re.match(r'^[A-Z][a-z]?[0-9]*$', formula):
-        return False
-    
-    return True
-
-# -----------------------------
-# Attention-based formula scoring
-# -----------------------------
-def score_formula_context(formula, text, synonyms):
-    """Score a formula based on its context to determine if it's a valid chemical formula."""
-    score = 0.0
-    context_window = 100
-    start_idx = max(0, text.lower().find(formula.lower()) - context_window)
-    end_idx = min(len(text), text.lower().find(formula.lower()) + len(formula) + context_window)
-    context = text[start_idx:end_idx].lower()
-    
-    positive_terms = ['thermoelectric', 'p-type', 'n-type', 'material', 'compound', 'semiconductor']
-    positive_terms += [syn for syn_list in synonyms.values() for syn in syn_list]
-    common_materials = ['Bi2Te3', 'PbTe', 'SnSe', 'CoSb3', 'SiGe', 'Skutterudite', 'Half-Heusler']
-    
-    for term in positive_terms + common_materials:
-        if term.lower() in context:
-            score += 0.2
-    
-    negative_terms = ['figure', 'table', 'references', 'acknowledgments', 'section', 'equation']
-    for term in negative_terms:
-        if term.lower() in context:
-            score -= 0.3
-    
-    return max(0.0, min(score, 1.0))
-
-# -----------------------------
-# Material matcher with synonyms
-# -----------------------------
-def build_material_matcher(nlp, synonyms):
-    matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
-    for canonical, variants in synonyms.items():
-        patterns = [nlp.make_doc(v) for v in variants]
-        matcher.add(canonical, patterns)
-    return matcher
-
-@Language.component("material_matcher")
-def material_matcher(doc):
-    matcher = doc._.material_matcher
-    matches = matcher(doc)
-    spans = []
-    for match_id, start, end in matches:
-        canonical = doc.vocab.strings[match_id]
-        span = Span(doc, start, end, label="MATERIAL_TYPE")
-        span._.norm = canonical
-        spans.append(span)
-    doc.ents = filter_spans(list(doc.ents) + spans)
-    return doc
-
-# -----------------------------
-# Load spaCy model
-# -----------------------------
-def load_spacy_model(synonyms):
-    try:
-        nlp = spacy.load("en_core_web_sm", disable=["ner"])
-    except Exception as e:
-        st.error(f"Failed to load spaCy: {e}. Install: `python -m spacy download en_core_web_sm`")
-        st.stop()
-    
-    nlp.add_pipe("formula_ner", last=True)
-    matcher = build_material_matcher(nlp, synonyms)
-    nlp.add_pipe("material_matcher", last=True)
-    
-    if not Doc.has_extension("material_matcher"):
-        Doc.set_extension("material_matcher", default=None)
-    Doc.set_extension("material_matcher", default=matcher, force=True)
-    
-    if not Span.has_extension("norm"):
-        Span.set_extension("norm", default=None)
-    
-    return nlp
-
-# -----------------------------
-# Link formulas to material type
-# -----------------------------
-def link_formula_to_material(doc):
-    formulas = [(ent, score_formula_context(ent.text, doc.text, st.session_state.synonyms)) 
-                for ent in doc.ents if ent.label_ == "FORMULA"]
-    formulas = [f for f, score in formulas if score > 0.3]
-    materials = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
-    pairs = []
-    for f in formulas:
-        nearest_material = None
-        min_distance = float("inf")
-        for m in materials:
-            distance = abs(f.start_char - m.start_char)
-            if distance < min_distance:
-                min_distance = distance
-                nearest_material = m
-        pairs.append({
-            "Formula": f.text,
-            "Material_Type": nearest_material._.norm if nearest_material else "-"
-        })
-    return pairs
-
 # Directory and logging setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
+os.makedirs(DB_DIR, exist_ok=True)
 logging.basicConfig(
     filename=os.path.join(DB_DIR, 'thermoelectric_ner_analysis.log'),
     level=logging.INFO,
@@ -202,7 +63,7 @@ st.title("Thermoelectric Material Classification and Analysis Tool")
 st.markdown("""
 This tool extracts p-type and n-type material classifications from SQLite databases and allows classification of user-input chemical formulas using NLP and ANN.
 
-**Date and Time**: 03:18 PM CEST, Sunday, August 24, 2025
+**Date and Time**: 07:29 AM CEST, Friday, August 22, 2025
 
 **Dependencies**:
 - `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen scikit-learn joblib torch h5py`
@@ -232,9 +93,11 @@ if "ann_model" not in st.session_state:
 if "scaler" not in st.session_state:
     st.session_state.scaler = None
 if "save_formats" not in st.session_state:
-    st.session_state.save_formats = ["pkl", "db", "pt", "h5"]
+    st.session_state.save_formats = ["pkl", "pt", "h5"]
 if "model_files" not in st.session_state:
     st.session_state.model_files = {}
+if "download_files" not in st.session_state:
+    st.session_state.download_files = {}  # Store base64-encoded file contents
 
 def update_log(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -249,6 +112,27 @@ def update_progress(message):
     st.session_state.progress_log.append(message)
     if len(st.session_state.progress_log) > 10:
         st.session_state.progress_log.pop(0)
+
+def encode_file_to_base64(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        return base64.b64encode(file_content).decode('utf-8')
+    except Exception as e:
+        update_log(f"Failed to encode file {file_path}: {str(e)}")
+        return None
+
+def javascript_download_button(label, file_content_base64, file_name, mime_type):
+    if not file_content_base64:
+        st.error(f"Cannot provide download for {file_name}: File content is missing.")
+        return
+    js_code = f"""
+    <a id="download_{file_name}" href="data:{mime_type};base64,{file_content_base64}" download="{file_name}">{label}</a>
+    <script>
+        document.getElementById('download_{file_name}').click();
+    </script>
+    """
+    st.markdown(js_code, unsafe_allow_html=True)
 
 def standardize_material_formula(formula, preserve_stoichiometry=False, canonical_order=True):
     if not formula or not isinstance(formula, str):
@@ -317,6 +201,127 @@ def standardize_material_formula(formula, preserve_stoichiometry=False, canonica
         update_log(f"pymatgen could not parse formula '{formula}': {str(e)}")
         st.session_state.error_summary.append(f"pymatgen failed for '{formula}': {str(e)}")
         return None
+
+def validate_formula(formula):
+    if not formula or not isinstance(formula, str):
+        return False
+    
+    base_formula = re.sub(r':.+', '', formula)
+    
+    if any(term.lower() in formula.lower() for term in INVALID_TERMS):
+        return False
+    if re.match(r'^[A-Z](?:-[A-Z]|\.\d+|)$', formula) or len(formula) <= 2:
+        return False
+    
+    element_pattern = r'[A-Z][a-z]?[0-9]*\.?[0-9]*'
+    elements = re.findall(element_pattern, base_formula)
+    if not elements:
+        return False
+    
+    for el in elements:
+        el_symbol = re.match(r'[A-Z][a-z]?', el).group(0)
+        if el_symbol not in VALID_ELEMENTS:
+            return False
+    
+    if re.search(r'\b[X-Z][0-9]*\b', formula) and not re.match(r'^[A-Z][a-z]?[0-9]*$', formula):
+        return False
+    
+    return True
+
+def score_formula_context(formula, text, synonyms):
+    score = 0.0
+    context_window = 100
+    start_idx = max(0, text.lower().find(formula.lower()) - context_window)
+    end_idx = min(len(text), text.lower().find(formula.lower()) + len(formula) + context_window)
+    context = text[start_idx:end_idx].lower()
+    
+    positive_terms = ['thermoelectric', 'p-type', 'n-type', 'material', 'compound', 'semiconductor']
+    positive_terms += [syn for syn_list in synonyms.values() for syn in syn_list]
+    common_materials = ['Bi2Te3', 'PbTe', 'SnSe', 'CoSb3', 'SiGe', 'Skutterudite', 'Half-Heusler']
+    
+    for term in positive_terms + common_materials:
+        if term.lower() in context:
+            score += 0.2
+    
+    negative_terms = ['figure', 'table', 'references', 'acknowledgments', 'section', 'equation']
+    for term in negative_terms:
+        if term.lower() in context:
+            score -= 0.3
+    
+    return max(0.0, min(score, 1.0))
+
+def build_material_matcher(nlp, synonyms):
+    matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
+    for canonical, variants in synonyms.items():
+        patterns = [nlp.make_doc(v) for v in variants]
+        matcher.add(canonical, patterns)
+    return matcher
+
+@Language.component("material_matcher")
+def material_matcher(doc):
+    matcher = doc._.material_matcher
+    matches = matcher(doc)
+    spans = []
+    for match_id, start, end in matches:
+        canonical = doc.vocab.strings[match_id]
+        span = Span(doc, start, end, label="MATERIAL_TYPE")
+        span._.norm = canonical
+        spans.append(span)
+    doc.ents = filter_spans(list(doc.ents) + spans)
+    return doc
+
+@Language.component("formula_ner")
+def formula_ner(doc):
+    formula_pattern = r'\b(?:[A-Z][a-z]?[0-9]*\.?[0-9]*)+(?::[A-Z][a-z]?[0-9]*\.?[0-9]*)?\b'
+    spans = []
+    for match in re.finditer(formula_pattern, doc.text):
+        formula = match.group(0)
+        if validate_formula(formula):
+            span = doc.char_span(match.start(), match.end(), label="FORMULA")
+            if span:
+                spans.append(span)
+    doc.ents = filter_spans(list(doc.ents) + spans)
+    return doc
+
+def load_spacy_model(synonyms):
+    try:
+        nlp = spacy.load("en_core_web_sm", disable=["ner"])
+    except Exception as e:
+        st.error(f"Failed to load spaCy: {e}. Install: `python -m spacy download en_core_web_sm`")
+        st.stop()
+    
+    nlp.add_pipe("formula_ner", last=True)
+    matcher = build_material_matcher(nlp, synonyms)
+    nlp.add_pipe("material_matcher", last=True)
+    
+    if not Doc.has_extension("material_matcher"):
+        Doc.set_extension("material_matcher", default=None)
+    Doc.set_extension("material_matcher", default=matcher, force=True)
+    
+    if not Span.has_extension("norm"):
+        Span.set_extension("norm", default=None)
+    
+    return nlp
+
+def link_formula_to_material(doc):
+    formulas = [(ent, score_formula_context(ent.text, doc.text, st.session_state.synonyms)) 
+                for ent in doc.ents if ent.label_ == "FORMULA"]
+    formulas = [f for f, score in formulas if score > 0.3]
+    materials = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
+    pairs = []
+    for f in formulas:
+        nearest_material = None
+        min_distance = float("inf")
+        for m in materials:
+            distance = abs(f.start_char - m.start_char)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_material = m
+        pairs.append({
+            "Formula": f.text,
+            "Material_Type": nearest_material._.norm if nearest_material else "-"
+        })
+    return pairs
 
 def featurize_formulas(formulas, labels=None):
     features = []
@@ -400,43 +405,21 @@ def train_ann(formulas, labels):
         update_log(f"ANN training failed: {str(e)}")
         return None, None, {}
     
-    save_formats = st.session_state.get('save_formats', ["pkl", "db", "pt", "h5"])
+    save_formats = st.session_state.get('save_formats', ["pkl", "pt", "h5"])
     model_files = {}
-    
-    # SQLite Database (.db)
-    if "db" in save_formats:
-        try:
-            conn = sqlite3.connect(st.session_state.db_file)
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS models (
-                    model_type TEXT,
-                    format TEXT,
-                    model_data BLOB
-                )
-            """)
-            for model_type, obj in [("ann_model", model), ("scaler", scaler)]:
-                model_bytes = joblib.dumps(obj)
-                cursor.execute(
-                    "INSERT INTO models (model_type, format, model_data) VALUES (?, ?, ?)",
-                    (model_type, "pkl", model_bytes)
-                )
-            conn.commit()
-            conn.close()
-            update_log("Saved models to SQLite database")
-        except Exception as e:
-            update_log(f"Failed to save models to SQLite database: {str(e)}")
-            st.session_state.error_summary.append(f"SQLite save error: {str(e)}")
+    download_files = {}
     
     # Pickle (.pkl)
     if "pkl" in save_formats:
         try:
             model_path = os.path.join(DB_DIR, "ann_model.pkl")
-            scaler_path = os.path.join(DB_DIR, "scaler_classifier.pkl")
+            scaler_path = os.path.join(DB_DIR, "scaler.pkl")
             joblib.dump(model, model_path)
             joblib.dump(scaler, scaler_path)
             model_files["ann_model.pkl"] = model_path
-            model_files["scaler_classifier.pkl"] = scaler_path
+            model_files["scaler.pkl"] = scaler_path
+            download_files["ann_model.pkl"] = encode_file_to_base64(model_path)
+            download_files["scaler.pkl"] = encode_file_to_base64(scaler_path)
             update_log(f"Saved ANN model to {model_path} and scaler to {scaler_path}")
         except Exception as e:
             update_log(f"Failed to save .pkl files: {str(e)}")
@@ -446,7 +429,7 @@ def train_ann(formulas, labels):
     if "pt" in save_formats:
         try:
             class MLP(nn.Module):
-                def __init__(self, input_size, hidden_sizes, output_size):
+                def __init__(self, input_size=5, hidden_sizes=[100, 50], output_size=2):
                     super(MLP, self).__init__()
                     layers = []
                     prev_size = input_size
@@ -462,28 +445,30 @@ def train_ann(formulas, labels):
                 def forward(self, x):
                     return self.layers(x)
             
-            pytorch_model = MLP(input_size=5, hidden_sizes=[100, 50], output_size=2)
+            pytorch_model = MLP()
             state_dict = pytorch_model.state_dict()
             
-            state_dict['layers.0.weight'] = torch.tensor(model.coefs_[0].T)
-            state_dict['layers.0.bias'] = torch.tensor(model.intercepts_[0])
-            state_dict['layers.2.weight'] = torch.tensor(model.coefs_[1].T)
-            state_dict['layers.2.bias'] = torch.tensor(model.intercepts_[1])
-            state_dict['layers.4.weight'] = torch.tensor(model.coefs_[2].T)
-            state_dict['layers.4.bias'] = torch.tensor(model.intercepts_[2])
+            state_dict['layers.0.weight'] = torch.tensor(model.coefs_[0].T, dtype=torch.float32)
+            state_dict['layers.0.bias'] = torch.tensor(model.intercepts_[0], dtype=torch.float32)
+            state_dict['layers.2.weight'] = torch.tensor(model.coefs_[1].T, dtype=torch.float32)
+            state_dict['layers.2.bias'] = torch.tensor(model.intercepts_[1], dtype=torch.float32)
+            state_dict['layers.4.weight'] = torch.tensor(model.coefs_[2].T, dtype=torch.float32)
+            state_dict['layers.4.bias'] = torch.tensor(model.intercepts_[2], dtype=torch.float32)
             pytorch_model.load_state_dict(state_dict)
             
             model_path = os.path.join(DB_DIR, "ann_model.pt")
             torch.save(pytorch_model.state_dict(), model_path)
             model_files["ann_model.pt"] = model_path
+            download_files["ann_model.pt"] = encode_file_to_base64(model_path)
             
             scaler_params = {
-                'mean': torch.tensor(scaler.mean_),
-                'scale': torch.tensor(scaler.scale_)
+                'mean': torch.tensor(scaler.mean_, dtype=torch.float32),
+                'scale': torch.tensor(scaler.scale_, dtype=torch.float32)
             }
-            scaler_path = os.path.join(DB_DIR, "scaler_classifier.pt")
+            scaler_path = os.path.join(DB_DIR, "scaler.pt")
             torch.save(scaler_params, scaler_path)
-            model_files["scaler_classifier.pt"] = scaler_path
+            model_files["scaler.pt"] = scaler_path
+            download_files["scaler.pt"] = encode_file_to_base64(scaler_path)
             update_log(f"Saved PyTorch model to {model_path} and scaler to {scaler_path}")
         except Exception as e:
             update_log(f"Failed to save .pt files: {str(e)}")
@@ -496,21 +481,22 @@ def train_ann(formulas, labels):
             with h5py.File(h5_path, 'w') as f:
                 model_group = f.create_group('ann_model')
                 for i, (coef, intercept) in enumerate(zip(model.coefs_, model.intercepts_)):
-                    model_group.create_dataset(f'coef_{i}', data=coef)
-                    model_group.create_dataset(f'intercept_{i}', data=intercept)
+                    model_group.create_dataset(f'coef_{i}', data=coef, compression='gzip')
+                    model_group.create_dataset(f'intercept_{i}', data=intercept, compression='gzip')
                 
                 scaler_group = f.create_group('scaler')
-                scaler_group.create_dataset('mean', data=scaler.mean_)
-                scaler_group.create_dataset('scale', data=scaler.scale_)
+                scaler_group.create_dataset('mean', data=scaler.mean_, compression='gzip')
+                scaler_group.create_dataset('scale', data=scaler.scale_, compression='gzip')
             
             model_files["models.h5"] = h5_path
+            download_files["models.h5"] = encode_file_to_base64(h5_path)
             update_log(f"Saved models to HDF5 file {h5_path}")
         except Exception as e:
             update_log(f"Failed to save .h5 file: {str(e)}")
             st.session_state.error_summary.append(f"HDF5 save error: {str(e)}")
     
     update_log(f"Trained ANN with {len(valid_formulas)} samples")
-    return model, scaler, model_files
+    return model, scaler, model_files, download_files
 
 def detect_text_column(conn):
     cursor = conn.cursor()
@@ -722,6 +708,14 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             material_df = material_df.sort_values(by=["material", "classification"])
             update_log(f"Cleaned and sorted DataFrame: {len(material_df)} unique classifications")
             
+            # Save classifications to CSV
+            csv_df = material_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
+            csv_path = os.path.join(DB_DIR, "formula_classifications.csv")
+            csv_df.to_csv(csv_path, index=False)
+            material_csv = csv_df.to_csv(index=False)
+            st.session_state.download_files["formula_classifications.csv"] = base64.b64encode(material_csv.encode()).decode('utf-8')
+            update_log(f"Saved formula classifications to {csv_path}")
+            
             conn = sqlite3.connect(db_file)
             material_df[["material", "classification"]].to_sql("standardized_formulas", conn, if_exists="replace", index=False)
             conn.close()
@@ -729,10 +723,11 @@ def extract_material_classifications(db_file, preserve_stoichiometry=False, year
             
             formulas = material_df["material"].tolist()
             labels = material_df["classification"].tolist()
-            model, scaler, model_files = train_ann(formulas, labels)
+            model, scaler, model_files, download_files = train_ann(formulas, labels)
             st.session_state.ann_model = model
             st.session_state.scaler = scaler
-            st.session_state.model_files = model_files
+            st.session_state.model_files.update(model_files)
+            st.session_state.download_files.update(download_files)
         
         update_log(f"Extracted {len(material_df)} material classifications")
         return material_df
@@ -840,29 +835,21 @@ def batch_classify_formulas(formulas, material_df, fuzzy_match=False):
             results.append(result)
     return results, errors, suggestions
 
-def plot_material_classifications(df, top_n=20, year_range=None, font_size=12, exclude_labels=None, color_map='Viridis'):
+def plot_material_classifications(df, top_n=20, year_range=None):
     if df.empty:
         update_log("Empty DataFrame provided to plot_material_classifications")
-        return None, None, None, None, None
+        return None, None, None, None
     
     if year_range:
         df = df[(df["year"] >= year_range[0]) & (df["year"] <= year_range[1])]
         if df.empty:
             update_log("No data after year range filtering")
-            return None, None, None, None, None
-    
-    # Apply label exclusion
-    if exclude_labels:
-        df = df[~df["material"].isin(exclude_labels)]
-        if df.empty:
-            update_log("No data after excluding specified labels")
-            return None, None, None, None, None
+            return None, None, None, None
     
     material_counts = df.groupby(["material", "classification"]).size().reset_index(name="count")
     top_materials = material_counts.groupby("material")["count"].sum().nlargest(top_n).index
     filtered_df = material_counts[material_counts["material"].isin(top_materials)]
     
-    # Bar Chart
     fig_bar = px.bar(
         filtered_df, 
         x="material", 
@@ -872,14 +859,8 @@ def plot_material_classifications(df, top_n=20, year_range=None, font_size=12, e
         labels={"material": "Material", "count": "Frequency", "classification": "Type"},
         color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"}
     )
-    fig_bar.update_layout(
-        xaxis_tickangle=-45,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(size=font_size)
-    )
+    fig_bar.update_layout(xaxis_tickangle=-45, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
-    # Pie Chart
     class_dist = df["classification"].value_counts()
     fig_pie = px.pie(
         values=class_dist.values,
@@ -887,13 +868,8 @@ def plot_material_classifications(df, top_n=20, year_range=None, font_size=12, e
         title="Distribution of p-type vs n-type Classifications",
         color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"}
     )
-    fig_pie.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(size=font_size)
-    )
+    fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     
-    # Timeline Chart
     if "year" in df.columns and df["year"].notna().any():
         yearly_data = df.groupby(["year", "classification"]).size().reset_index(name="count")
         fig_timeline = px.line(
@@ -905,16 +881,11 @@ def plot_material_classifications(df, top_n=20, year_range=None, font_size=12, e
             labels={"year": "Year", "count": "Number of Mentions", "classification": "Type"},
             color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"}
         )
-        fig_timeline.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(size=font_size)
-        )
+        fig_timeline.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
     else:
         fig_timeline = None
-        update_log("No valid year data for timeline chart")
+        update_log("No valid year data for timeline plot")
     
-    # Co-occurrence Heatmap
     material_papers = df.groupby(["material", "paper_id"]).size().unstack(fill_value=0)
     co_occurrence = material_papers.T.dot(material_papers)
     np.fill_diagonal(co_occurrence.values, 0)
@@ -922,7 +893,6 @@ def plot_material_classifications(df, top_n=20, year_range=None, font_size=12, e
     valid_materials = [m for m in top_materials if m in co_occurrence.index and m in co_occurrence.columns]
     update_log(f"Top materials: {list(top_materials)}")
     update_log(f"Valid materials for co-occurrence: {valid_materials}")
-    update_log(f"Co-occurrence index: {list(co_occurrence.index)}")
     
     if not valid_materials:
         update_log("No valid materials for co-occurrence heatmap")
@@ -933,10 +903,10 @@ def plot_material_classifications(df, top_n=20, year_range=None, font_size=12, e
             z=co_occurrence.values,
             x=co_occurrence.columns,
             y=co_occurrence.index,
-            colorscale=color_map,
+            colorscale="Viridis",
             text=co_occurrence.values,
             texttemplate="%{text}",
-            textfont={"size": font_size}
+            textfont={"size": 10}
         ))
         fig_heatmap.update_layout(
             title="Material Co-occurrence Heatmap",
@@ -944,36 +914,18 @@ def plot_material_classifications(df, top_n=20, year_range=None, font_size=12, e
             yaxis_title="Material",
             xaxis_tickangle=-45,
             plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(size=font_size)
+            paper_bgcolor="rgba(0,0,0,0)"
         )
     
-    # Sunburst Chart
-    sunburst_df = filtered_df.copy()
-    sunburst_df['root'] = 'Materials'
-    fig_sunburst = px.sunburst(
-        sunburst_df,
-        path=['root', 'classification', 'material'],
-        values='count',
-        title="Material Classifications Sunburst",
-        color='classification',
-        color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"},
-        branchvalues='total'
-    )
-    fig_sunburst.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(size=font_size),
-        margin=dict(t=50, l=25, r=25, b=25)
-    )
-    
-    return fig_bar, fig_pie, fig_timeline, fig_heatmap, fig_sunburst
+    return fig_bar, fig_pie, fig_timeline, fig_heatmap
 
 # Main app
 st.header("Select or Upload Database")
 db_files = glob.glob(os.path.join(DB_DIR, "*.db"))
 db_options = [os.path.basename(f) for f in db_files] + ["Upload a new .db file"]
-db_selection = st.selectbox("Select Database", db_options, index=db_options.index("thermoelectric_universe.db") if "thermoelectric_universe.db" in db_options else 0, key="db_select")
+db_selection = st.selectbox("Select Database", db_options, 
+                            index=db_options.index("thermoelectric_universe.db") if "thermoelectric_universe.db" in db_options else 0, 
+                            key="db_select")
 uploaded_file = None
 if db_selection == "Upload a new .db file":
     uploaded_file = st.file_uploader("Upload SQLite Database (.db)", type=["db"], key="db_upload")
@@ -1024,11 +976,10 @@ if st.session_state.db_file:
             conn = sqlite3.connect(st.session_state.db_file)
             cursor = conn.cursor()
             cursor.execute("DROP TABLE IF EXISTS standardized_formulas")
-            cursor.execute("DROP TABLE IF EXISTS models")
             conn.commit()
             conn.close()
-            update_log("Cleared cached standardized formulas and models")
-            st.success("Cached formulas and models cleared. Run extraction again to refresh.")
+            update_log("Cleared cached standardized formulas")
+            st.success("Cached formulas cleared. Run extraction again to refresh.")
     
     except sqlite3.OperationalError as e:
         st.error(f"Database error: {str(e)}")
@@ -1046,28 +997,13 @@ if st.session_state.db_file:
             preserve_stoichiometry = st.checkbox("Preserve Exact Stoichiometry", value=False, key="preserve_stoichiometry")
             year_range = st.slider("Year Range", min_value=1980, max_value=2025, value=(2000, 2025), key="year_range")
             
-            st.subheader("Visualization Settings")
-            font_size = st.slider("Font Size for Plots", min_value=8, max_value=20, value=12, key="font_size")
-            exclude_labels = st.multiselect(
-                "Exclude Materials from Sunburst",
-                options=st.session_state.get("material_filter_options", []),
-                key="exclude_labels"
-            )
-            color_map = st.selectbox(
-                "Sunburst Color Map",
-                options=["Viridis", "Plasma", "Inferno", "Magma", "Cividis", "Blues", "Reds"],
-                index=0,
-                key="color_map"
-            )
-            
             st.subheader("Model Save Formats")
             save_formats = st.multiselect(
                 "Select formats to save models",
-                options=["db", "pkl", "pt", "h5"],
-                default=st.session_state.get('save_formats', ["pkl", "db", "pt", "h5"]),
+                options=["pkl", "pt", "h5"],
+                default=st.session_state.get('save_formats', ["pkl", "pt", "h5"]),
                 key="save_formats_selector"
             )
-            # Update save_formats safely
             if save_formats != st.session_state.get('save_formats', []):
                 st.session_state['save_formats'] = save_formats
                 update_log(f"Updated save formats to: {save_formats}")
@@ -1122,9 +1058,7 @@ if st.session_state.db_file:
                     st.metric("n-type Materials", n_type_count)
                 
                 st.subheader("Visualizations")
-                fig_bar, fig_pie, fig_timeline, fig_heatmap, fig_sunburst = plot_material_classifications(
-                    filtered_df, material_top_n, year_range, font_size, exclude_labels, color_map
-                )
+                fig_bar, fig_pie, fig_timeline, fig_heatmap = plot_material_classifications(filtered_df, material_top_n, year_range)
                 
                 if fig_bar:
                     st.plotly_chart(fig_bar, use_container_width=True)
@@ -1148,40 +1082,33 @@ if st.session_state.db_file:
                 else:
                     st.warning("No data available for co-occurrence heatmap.")
                 
-                if fig_sunburst:
-                    st.plotly_chart(fig_sunburst, use_container_width=True)
-                else:
-                    st.warning("No data available for sunburst chart.")
-                
                 st.subheader("Extracted Material Classifications")
                 st.dataframe(
                     filtered_df[["paper_id", "title", "year", "material", "classification", "context"]].head(100),
                     use_container_width=True
                 )
                 
-                csv_df = filtered_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
-                material_csv = csv_df.to_csv(index=False)
-                st.download_button(
-                    "Download Formula Classifications CSV", 
-                    material_csv, 
-                    "formula_classifications.csv", 
-                    "text/csv", 
-                    key="download_materials"
-                )
+                st.subheader("Download Formula Classifications")
+                if "formula_classifications.csv" in st.session_state.download_files:
+                    if st.button("Download Formula Classifications CSV", key="download_materials"):
+                        javascript_download_button(
+                            "Download Formula Classifications CSV",
+                            st.session_state.download_files["formula_classifications.csv"],
+                            "formula_classifications.csv",
+                            "text/csv"
+                        )
                 
-                if hasattr(st.session_state, 'model_files'):
-                    st.subheader("Download Saved Models")
-                    for model_file, file_path in st.session_state.model_files.items():
-                        try:
-                            with open(file_path, 'rb') as f:
-                                st.download_button(
-                                    f"Download {model_file}",
-                                    f,
-                                    model_file,
-                                    key=f"download_{model_file}"
-                                )
-                        except Exception as e:
-                            st.error(f"Failed to provide download for {model_file}: {str(e)}")
+                st.subheader("Download Saved Models")
+                for model_file in st.session_state.download_files:
+                    if model_file != "formula_classifications.csv" and model_file in st.session_state.download_files:
+                        mime_type = "application/octet-stream" if model_file.endswith((".pkl", ".pt", ".h5")) else "text/csv"
+                        if st.button(f"Download {model_file}", key=f"download_{model_file}"):
+                            javascript_download_button(
+                                f"Download {model_file}",
+                                st.session_state.download_files[model_file],
+                                model_file,
+                                mime_type
+                            )
                 
                 st.subheader("Extraction Progress")
                 progress_log_display = "\n".join(st.session_state.progress_log) if st.session_state.progress_log else "No progress messages yet."
@@ -1272,13 +1199,16 @@ if st.session_state.db_file:
                             st.dataframe(batch_df, use_container_width=True)
                             
                             batch_csv = batch_df.to_csv(index=False)
-                            st.download_button(
-                                "Download Batch Classification Results", 
-                                batch_csv, 
-                                "batch_formula_classifications.csv", 
-                                "text/csv", 
-                                key="download_batch"
-                            )
+                            batch_csv_base64 = base64.b64encode(batch_csv.encode()).decode('utf-8')
+                            st.session_state.download_files["batch_formula_classifications.csv"] = batch_csv_base64
+                            
+                            if st.button("Download Batch Classification Results", key="download_batch"):
+                                javascript_download_button(
+                                    "Download Batch Classification Results",
+                                    batch_csv_base64,
+                                    "batch_formula_classifications.csv",
+                                    "text/csv"
+                                )
         
         st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="formula_logs")
 else:
