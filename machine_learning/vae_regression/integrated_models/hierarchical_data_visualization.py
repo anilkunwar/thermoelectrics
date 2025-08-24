@@ -14,7 +14,8 @@ def create_sunburst_chart(csv_path, colormap_choice, show_labels, label_fontsize
         
         df = pd.read_csv(csv_path)
 
-        required_columns = ["Formula", "Material Type"]
+        #required_columns = ["Formula", "Material Type"]
+        required_columns = ["formula", "material_type"]
         if not all(col in df.columns for col in required_columns):
             missing_cols = [col for col in required_columns if col not in df.columns]
             st.error(f"CSV missing required columns: {', '.join(missing_cols)}")
