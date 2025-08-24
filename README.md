@@ -74,6 +74,9 @@ with periodic table rendering fixed: [![machinelearningthermoelectricity](https:
 Materials informatics and transformers enforcing physics based bias to VAE-Regressor  (Attentive Model)
 [![machinelearningthermoelectricity](https://img.shields.io/badge/physicsinformedattentiveVAERseebeck-streamlit-red)](https://physics-informed-attentivevaepredictor.streamlit.app/)
 
+# Integrated Models
+Formula Classifier and Visualization
+[![machinelearningthermoelectricity](https://img.shields.io/badge/materialType-streamlit-red)](https://formula-materialclassifieradvanced.streamlit.app/)
 
 
 # Informatics approach to classify p-type and n-type thermoelectric materials
