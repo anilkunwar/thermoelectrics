@@ -6,15 +6,14 @@ import streamlit as st
 # Directory setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def create_sunburst_chart(csv_path, colormap_choice, show_labels, label_fontsize, include_year, excluded_labels):
+def create_sunburst_chart(csv_path, colormap_choice, discrete_mode, show_labels, label_fontsize, excluded_labels):
     try:
         if not os.path.exists(csv_path):
-            st.error(f"CSV file not found at {csv_path}. Please ensure 'formula_classifications_via_nlp.csv' is in the same directory.")
+            st.error(f"CSV file not found at {csv_path}. Please ensure it's in the same directory.")
             return None
-        
+
         df = pd.read_csv(csv_path)
 
-        #required_columns = ["Formula", "Material Type"]
         required_columns = ["formula", "material_type"]
         if not all(col in df.columns for col in required_columns):
             missing_cols = [col for col in required_columns if col not in df.columns]
@@ -23,36 +22,31 @@ def create_sunburst_chart(csv_path, colormap_choice, show_labels, label_fontsize
 
         # Filter excluded labels
         if excluded_labels:
-            df = df[~df["Material Type"].isin(excluded_labels)]
-            df = df[~df["Formula"].isin(excluded_labels)]
-            if "Year" in df.columns:
-                df = df[~df["Year"].astype(str).isin(excluded_labels)]
+            df = df[~df["material_type"].isin(excluded_labels)]
+            df = df[~df["formula"].isin(excluded_labels)]
 
-        # Create hierarchy
-        if include_year and 'Year' in df.columns and df["Year"].notna().any():
-            sunburst_data = df.groupby(['Year', 'Formula', 'Material Type']).size().reset_index(name='count')
-            path = ['Year', 'Formula', 'Material Type']
-            title = "Hierarchical Distribution of Material Classifications by Year"
+        # Aggregate counts
+        sunburst_data = df.groupby(['formula', 'material_type']).size().reset_index(name='count')
+
+        # Color logic: discrete vs continuous
+        if discrete_mode:
+            fig_sunburst = px.sunburst(
+                sunburst_data,
+                path=['formula', 'material_type'],
+                values='count',
+                color='material_type',
+                title="Hierarchical Distribution of Materials",
+                color_discrete_map={"p-type": "#EF553B", "n-type": "#636EFA"}
+            )
         else:
-            sunburst_data = df.groupby(['Formula', 'Material Type']).size().reset_index(name='count')
-            path = ['Formula', 'Material Type']
-            title = "Hierarchical Distribution of Material Classifications (No Year Data)"
-
-        # Build chart
-        fig_sunburst = px.sunburst(
-            sunburst_data,
-            path=path,
-            values='count',
-            title=title,
-            color='Material Type',
-            color_continuous_scale=colormap_choice if colormap_choice else None,
-            labels={
-                "Year": "Year",
-                "Formula": "Formula",
-                "Material Type": "Material Type",
-                "count": "Frequency"
-            }
-        )
+            fig_sunburst = px.sunburst(
+                sunburst_data,
+                path=['formula', 'material_type'],
+                values='count',
+                color='count',
+                color_continuous_scale=colormap_choice,
+                title="Hierarchical Distribution of Materials"
+            )
 
         # Label visibility & styling
         fig_sunburst.update_traces(
@@ -75,37 +69,35 @@ def create_sunburst_chart(csv_path, colormap_choice, show_labels, label_fontsize
 
 # ------------------ Streamlit UI ------------------
 st.set_page_config(page_title="Enhanced Sunburst Chart", layout="wide")
-st.title("🌞 Enhanced Sunburst Chart for Material Classifications")
+st.title("🌞 Enhanced Sunburst Chart for Materials")
 
 csv_path = os.path.join(DB_DIR, "formula_classifications_via_nlp.csv")
 
 # Sidebar controls
 st.sidebar.header("Chart Customization")
 
+discrete_mode = st.sidebar.radio("Color Mode", ["Discrete (by type)", "Continuous (by count)"]) == "Discrete (by type)"
+
 colormap_choice = st.sidebar.selectbox(
-    "Choose Color Map",
-    ["Viridis", "Cividis", "Plasma", "Inferno", "Magma", "Turbo", None],
+    "Choose Continuous Color Map",
+    ["Viridis", "Cividis", "Plasma", "Inferno", "Magma", "Turbo"],
     index=0
 )
 
 show_labels = st.sidebar.checkbox("Show Labels", value=True)
 label_fontsize = st.sidebar.slider("Label Font Size", 8, 24, 12)
-include_year = st.sidebar.checkbox("Include Year in Hierarchy (if available)", value=True)
 
-# Exclude certain labels
-excluded_labels = st.sidebar.multiselect(
-    "Exclude Labels",
-    options=[],
-    help="Hide specific Formula, Material Type, or Year values"
-)
+# Exclude certain formulas or types
+all_labels = pd.read_csv(csv_path)[["formula", "material_type"]].stack().unique()
+excluded_labels = st.sidebar.multiselect("Exclude Labels", options=all_labels)
 
 # Generate chart
 fig_sunburst = create_sunburst_chart(
     csv_path,
     colormap_choice,
+    discrete_mode,
     show_labels,
     label_fontsize,
-    include_year,
     excluded_labels
 )
 
