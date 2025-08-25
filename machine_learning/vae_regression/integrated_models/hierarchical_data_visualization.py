@@ -9,6 +9,7 @@ import logging
 import base64
 from io import BytesIO
 import json
+import numpy as np
 
 # Directory setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -81,8 +82,23 @@ def load_data_from_db(db_file, year_range=None):
         st.error(f"Database error: {str(e)}")
         return None
 
+# Comprehensive color scale options
+COLOR_SCALES = [
+    "Viridis", "Plasma", "Inferno", "Magma", "Cividis",
+    "Turbo", "Rainbow", "Jet", "HSV", "Hot", "Cool",
+    "Spring", "Summer", "Autumn", "Winter", "Bone",
+    "Copper", "Greys", "YlGnBu", "YlOrRd", "Bluered",
+    "RdBu", "Reds", "Blues", "Picnic", "Portland",
+    "Electric", "Blackbody", "Earth", "Deep", "Dense",
+    "Pastel1", "Pastel2", "Set1", "Set2", "Set3",
+    "Dark2", "Paired", "Accent", "Plotly3", "Viridis_r",
+    "Plasma_r", "Inferno_r", "Magma_r", "Cividis_r",
+    "Turbo_r", "Rainbow_r", "Jet_r", "HSV_r", "Hot_r"
+]
+
 def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, label_fontsize, 
-                              excluded_labels, year_range=None, chart_height=800, branchvalues='total'):
+                              excluded_labels, year_range=None, chart_height=800, branchvalues='total',
+                              label_threshold=1.0, show_values=True, show_percentages=True):
     """
     Create a three-tier sunburst chart with Year -> Material Type -> Formula hierarchy
     """
@@ -156,6 +172,10 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                 ).sum()
                 hierarchy_data.loc[hierarchy_data['id'] == year_id, 'count'] = year_sum
             
+            # Calculate percentages for label visibility
+            total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
+            hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
+            
             # Create the sunburst chart
             if discrete_mode:
                 # Create a color mapping for material types
@@ -170,22 +190,39 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                 hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
                 hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'  # Light blue for years
                 
+                # Create custom text based on threshold
+                hierarchy_data['display_text'] = hierarchy_data['label']
+                if label_threshold > 0:
+                    # Only show labels for segments above the threshold
+                    hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+                
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
-                    labels=hierarchy_data['label'],
+                    labels=hierarchy_data['display_text'],
                     parents=hierarchy_data['parent'],
                     values=hierarchy_data['count'],
                     branchvalues=branchvalues,
                     marker=dict(colors=hierarchy_data['color']),
-                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Parent: %{parent}<extra></extra>',
-                    textinfo="label+value" if show_labels else "none",
+                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                    textinfo="label+text" if show_labels else "none",
+                    texttemplate=(
+                        "%{label}" + 
+                        ("<br>%{value}" if show_values else "") + 
+                        ("<br>%{percentParent:.1%}" if show_percentages else "")
+                    ),
                     textfont=dict(size=label_fontsize),
                     insidetextorientation='horizontal'
                 ))
             else:
+                # Create custom text based on threshold
+                hierarchy_data['display_text'] = hierarchy_data['label']
+                if label_threshold > 0:
+                    # Only show labels for segments above the threshold
+                    hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+                
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
-                    labels=hierarchy_data['label'],
+                    labels=hierarchy_data['display_text'],
                     parents=hierarchy_data['parent'],
                     values=hierarchy_data['count'],
                     branchvalues=branchvalues,
@@ -195,8 +232,13 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                         showscale=True,
                         colorbar=dict(title="Count")
                     ),
-                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Parent: %{parent}<extra></extra>',
-                    textinfo="label+value" if show_labels else "none",
+                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                    textinfo="label+text" if show_labels else "none",
+                    texttemplate=(
+                        "%{label}" + 
+                        ("<br>%{value}" if show_values else "") + 
+                        ("<br>%{percentParent:.1%}" if show_percentages else "")
+                    ),
                     textfont=dict(size=label_fontsize),
                     insidetextorientation='horizontal'
                 ))
@@ -228,6 +270,10 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                 type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
                 hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
             
+            # Calculate percentages for label visibility
+            total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
+            hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
+            
             # Create the sunburst chart
             if discrete_mode:
                 # Create a color mapping for material types
@@ -240,22 +286,39 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                 # Apply colors based on material type
                 hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
                 
+                # Create custom text based on threshold
+                hierarchy_data['display_text'] = hierarchy_data['label']
+                if label_threshold > 0:
+                    # Only show labels for segments above the threshold
+                    hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+                
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
-                    labels=hierarchy_data['label'],
+                    labels=hierarchy_data['display_text'],
                     parents=hierarchy_data['parent'],
                     values=hierarchy_data['count'],
                     branchvalues=branchvalues,
                     marker=dict(colors=hierarchy_data['color']),
-                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Parent: %{parent}<extra></extra>',
-                    textinfo="label+value" if show_labels else "none",
+                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                    textinfo="label+text" if show_labels else "none",
+                    texttemplate=(
+                        "%{label}" + 
+                        ("<br>%{value}" if show_values else "") + 
+                        ("<br>%{percentParent:.1%}" if show_percentages else "")
+                    ),
                     textfont=dict(size=label_fontsize),
                     insidetextorientation='horizontal'
                 ))
             else:
+                # Create custom text based on threshold
+                hierarchy_data['display_text'] = hierarchy_data['label']
+                if label_threshold > 0:
+                    # Only show labels for segments above the threshold
+                    hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+                
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
-                    labels=hierarchy_data['label'],
+                    labels=hierarchy_data['display_text'],
                     parents=hierarchy_data['parent'],
                     values=hierarchy_data['count'],
                     branchvalues=branchvalues,
@@ -265,8 +328,13 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                         showscale=True,
                         colorbar=dict(title="Count")
                     ),
-                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Parent: %{parent}<extra></extra>',
-                    textinfo="label+value" if show_labels else "none",
+                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                    textinfo="label+text" if show_labels else "none",
+                    texttemplate=(
+                        "%{label}" + 
+                        ("<br>%{value}" if show_values else "") + 
+                        ("<br>%{percentParent:.1%}" if show_percentages else "")
+                    ),
                     textfont=dict(size=label_fontsize),
                     insidetextorientation='horizontal'
                 ))
@@ -288,14 +356,14 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             )
         )
 
-        return fig
+        return fig, hierarchy_data
 
     except Exception as e:
         st.error(f"Failed to generate sunburst chart: {str(e)}")
         update_log(f"Sunburst chart error: {str(e)}")
         import traceback
         update_log(traceback.format_exc())
-        return None
+        return None, None
 
 # ------------------ Streamlit UI ------------------
 st.set_page_config(page_title="Three-Tier Thermoelectric Material Analysis", layout="wide")
@@ -312,6 +380,9 @@ if "db_file" not in st.session_state:
 
 if "data_df" not in st.session_state:
     st.session_state.data_df = None
+
+if "hierarchy_data" not in st.session_state:
+    st.session_state.hierarchy_data = None
 
 # Database selection
 st.sidebar.header("Data Source")
@@ -347,8 +418,8 @@ st.sidebar.header("Chart Customization")
 discrete_mode = st.sidebar.radio("Color Mode", ["Discrete (by type)", "Continuous (by count)"]) == "Discrete (by type)"
 
 colormap_choice = st.sidebar.selectbox(
-    "Choose Continuous Color Map",
-    ["Viridis", "Cividis", "Plasma", "Inferno", "Magma", "Turbo"],
+    "Choose Color Map",
+    COLOR_SCALES,
     index=0
 )
 
@@ -356,6 +427,13 @@ show_labels = st.sidebar.checkbox("Show Labels", value=True)
 label_fontsize = st.sidebar.slider("Label Font Size", 8, 24, 12)
 chart_height = st.sidebar.slider("Chart Height", 400, 1200, 800)
 branchvalues = st.sidebar.selectbox("Branch Values", ["total", "remainder"], index=0)
+
+# Label visibility options
+st.sidebar.header("Label Visibility")
+label_threshold = st.sidebar.slider("Label Threshold (%)", 0.0, 10.0, 1.0, 0.1,
+                                   help="Only show labels for segments larger than this percentage of the total")
+show_values = st.sidebar.checkbox("Show Values in Labels", value=True)
+show_percentages = st.sidebar.checkbox("Show Percentages in Labels", value=True)
 
 # Exclude certain formulas or types
 if st.session_state.data_df is not None:
@@ -415,7 +493,7 @@ if st.session_state.data_df is not None:
 
 # Generate chart
 if st.session_state.data_df is not None:
-    fig_sunburst = create_three_tier_sunburst(
+    fig_sunburst, hierarchy_data = create_three_tier_sunburst(
         st.session_state.data_df,
         colormap_choice,
         discrete_mode,
@@ -424,8 +502,13 @@ if st.session_state.data_df is not None:
         excluded_labels,
         year_range,
         chart_height,
-        branchvalues
+        branchvalues,
+        label_threshold,
+        show_values,
+        show_percentages
     )
+    
+    st.session_state.hierarchy_data = hierarchy_data
 
     if fig_sunburst:
         st.plotly_chart(fig_sunburst, use_container_width=True)
@@ -433,7 +516,7 @@ if st.session_state.data_df is not None:
         # Add download buttons with error handling
         st.subheader("Export Options")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             # Download as CSV
@@ -446,21 +529,34 @@ if st.session_state.data_df is not None:
             )
         
         with col2:
-            # Download as JSON (hierarchy data)
-            try:
-                # Extract hierarchy data from the figure
-                hierarchy_json = json.dumps(fig_sunburst.to_dict(), indent=2)
+            # Download hierarchy data as CSV
+            if st.session_state.hierarchy_data is not None:
+                hierarchy_csv = st.session_state.hierarchy_data.to_csv(index=False)
                 st.download_button(
-                    label="Download Hierarchy as JSON",
-                    data=hierarchy_json,
-                    file_name="thermoelectric_materials_hierarchy.json",
-                    mime="application/json"
+                    label="Download Hierarchy as CSV",
+                    data=hierarchy_csv,
+                    file_name="thermoelectric_materials_hierarchy.csv",
+                    mime="text/csv"
                 )
+        
+        with col3:
+            # Download as JSON (simplified hierarchy data)
+            try:
+                if st.session_state.hierarchy_data is not None:
+                    # Create a simplified JSON structure
+                    simplified_data = st.session_state.hierarchy_data[['id', 'parent', 'label', 'count', 'percentage']].to_dict('records')
+                    hierarchy_json = json.dumps(simplified_data, indent=2)
+                    st.download_button(
+                        label="Download Hierarchy as JSON",
+                        data=hierarchy_json,
+                        file_name="thermoelectric_materials_hierarchy.json",
+                        mime="application/json"
+                    )
             except Exception as e:
                 st.error("JSON export failed")
                 update_log(f"JSON export error: {str(e)}")
         
-        with col3:
+        with col4:
             # Use Plotly's built-in export
             st.info("Use the camera icon 📷 in the chart to export as PNG")
             
@@ -469,15 +565,22 @@ if st.session_state.data_df is not None:
             st.markdown("""
             **For publication-quality figures:**
             
-            1. **Use the camera icon** in the chart to export as high-resolution PNG
-            2. **Adjust the chart height** for better proportions
-            3. **Consider using discrete colors** for clearer material type differentiation
-            4. **For vector formats**, consider using the JSON export and recreating in specialized tools
+            1. **Adjust the label threshold** to reduce clutter from small segments
+            2. **Use the camera icon** in the chart to export as high-resolution PNG
+            3. **Adjust the chart height** for better proportions
+            4. **Consider using discrete colors** for clearer material type differentiation
             5. **For best results**, use the exported data in dedicated visualization software like:
                - Adobe Illustrator
                - Inkscape
                - Python with Matplotlib/Seaborn for complete control
             """)
+            
+        # Show hierarchy statistics
+        with st.expander("Hierarchy Statistics"):
+            if st.session_state.hierarchy_data is not None:
+                st.write(f"Total segments: {len(st.session_state.hierarchy_data)}")
+                if 'percentage' in st.session_state.hierarchy_data.columns:
+                    st.write(f"Segments above {label_threshold}% threshold: {len(st.session_state.hierarchy_data[st.session_state.hierarchy_data['percentage'] >= label_threshold])}")
     else:
         st.warning("Unable to generate sunburst chart. Check data format.")
 else:
@@ -514,6 +617,6 @@ with st.expander("Troubleshooting"):
     3. For Streamlit Cloud deployment, add `kaleido` to your requirements.txt file
     
     4. For publication-quality vector graphics, consider:
-       - Exporting the JSON data and recreating in specialized tools
+       - Exporting the CSV data and recreating in specialized tools
        - Using the CSV export with dedicated visualization software
     """)
