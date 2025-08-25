@@ -5,6 +5,8 @@ import streamlit as st
 import sqlite3
 from datetime import datetime
 import logging
+import base64
+from io import BytesIO
 
 # Directory setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -147,6 +149,27 @@ def create_sunburst_chart(df, colormap_choice, discrete_mode, show_labels, label
         update_log(f"Sunburst chart error: {str(e)}")
         return None
 
+def get_chart_download_link(fig, filename="chart.png"):
+    """Generate a download link for the chart"""
+    try:
+        # Try to export as PNG
+        img_bytes = fig.to_image(format="png")
+        b64 = base64.b64encode(img_bytes).decode()
+        href = f'<a href="data:image/png;base64,{b64}" download="{filename}">Download PNG</a>'
+        return href
+    except Exception as e:
+        update_log(f"PNG export failed: {str(e)}")
+        
+        # Fallback to HTML export
+        try:
+            html = fig.to_html()
+            b64 = base64.b64encode(html.encode()).decode()
+            href = f'<a href="data:text/html;base64,{b64}" download="{filename.replace(".png", ".html")}">Download HTML</a>'
+            return href
+        except Exception as e2:
+            update_log(f"HTML export also failed: {str(e2)}")
+            return None
+
 # ------------------ Streamlit UI ------------------
 st.set_page_config(page_title="Enhanced Thermoelectric Material Sunburst Analysis", layout="wide")
 st.title("🌞 Enhanced Sunburst Analysis for Thermoelectric Materials")
@@ -269,14 +292,48 @@ if st.session_state.data_df is not None:
     if fig_sunburst:
         st.plotly_chart(fig_sunburst, use_container_width=True)
         
-        # Add download button for the chart
-        chart_image = fig_sunburst.to_image(format="png")
-        st.download_button(
-            label="Download Sunburst Chart",
-            data=chart_image,
-            file_name="thermoelectric_materials_sunburst.png",
-            mime="image/png"
-        )
+        # Add download buttons with error handling
+        st.subheader("Download Options")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # Download as CSV
+            csv = st.session_state.data_df.to_csv(index=False)
+            st.download_button(
+                label="Download Data as CSV",
+                data=csv,
+                file_name="thermoelectric_materials_data.csv",
+                mime="text/csv"
+            )
+        
+        with col2:
+            # Try to download as PNG with fallback
+            try:
+                img_bytes = fig_sunburst.to_image(format="png")
+                st.download_button(
+                    label="Download Chart as PNG",
+                    data=img_bytes,
+                    file_name="thermoelectric_materials_sunburst.png",
+                    mime="image/png"
+                )
+            except Exception as e:
+                st.warning("PNG export not available. Please use the built-in Plotly export tools.")
+                update_log(f"PNG export error: {str(e)}")
+        
+        with col3:
+            # Download as HTML
+            try:
+                html = fig_sunburst.to_html()
+                st.download_button(
+                    label="Download Chart as HTML",
+                    data=html,
+                    file_name="thermoelectric_materials_sunburst.html",
+                    mime="text/html"
+                )
+            except Exception as e:
+                st.error("HTML export failed")
+                update_log(f"HTML export error: {str(e)}")
     else:
         st.warning("Unable to generate sunburst chart. Check data format.")
 else:
@@ -298,3 +355,18 @@ st.sidebar.info(
     extracted from scientific literature using NLP techniques.
     """
 )
+
+# Add installation instructions for Kaleido if needed
+with st.expander("Troubleshooting"):
+    st.markdown("""
+    **If you encounter issues with chart export:**
+    
+    1. Install the Kaleido library for better export functionality:
+    ```bash
+    pip install kaleido
+    ```
+    
+    2. For Streamlit Cloud deployment, add `kaleido` to your requirements.txt file
+    
+    3. Alternatively, use the built-in Plotly export tools (camera icon in the chart)
+    """)
