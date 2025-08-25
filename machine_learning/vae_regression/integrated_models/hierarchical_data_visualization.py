@@ -1,12 +1,14 @@
 import os
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 import sqlite3
 from datetime import datetime
 import logging
 import base64
 from io import BytesIO
+import json
 
 # Directory setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -79,7 +81,11 @@ def load_data_from_db(db_file, year_range=None):
         st.error(f"Database error: {str(e)}")
         return None
 
-def create_sunburst_chart(df, colormap_choice, discrete_mode, show_labels, label_fontsize, excluded_labels, year_range=None):
+def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, label_fontsize, 
+                              excluded_labels, year_range=None, chart_height=800, branchvalues='total'):
+    """
+    Create a three-tier sunburst chart with Year -> Material Type -> Formula hierarchy
+    """
     try:
         if df is None or df.empty:
             st.error("No data available for visualization")
@@ -98,81 +104,202 @@ def create_sunburst_chart(df, colormap_choice, discrete_mode, show_labels, label
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
         
-        # Aggregate counts
+        # Ensure we have the required columns
+        required_cols = []
         if 'year' in df.columns:
-            sunburst_data = df.groupby(['year', 'formula', 'material_type']).size().reset_index(name='count')
-            path = ['year', 'formula', 'material_type']
-        else:
-            sunburst_data = df.groupby(['formula', 'material_type']).size().reset_index(name='count')
-            path = ['formula', 'material_type']
+            required_cols.append('year')
+        required_cols.extend(['formula', 'material_type'])
         
-        if sunburst_data.empty:
-            st.warning("No data available after filtering")
+        if not all(col in df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in df.columns]
+            st.error(f"Missing required columns: {', '.join(missing)}")
             return None
-
-        # Color logic: discrete vs continuous
-        if discrete_mode:
-            fig_sunburst = px.sunburst(
-                sunburst_data,
-                path=path,
-                values='count',
-                color='material_type',
-                title="Hierarchical Distribution of Materials",
-                color_discrete_map={"p-type": "#EF553B", "n-type": "#636EFA", "unknown": "#7F7F7F"}
-            )
+        
+        # Create three-tier hierarchy data
+        if 'year' in df.columns:
+            # Group by year, material type, and formula
+            sunburst_data = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
+            
+            # Create IDs for each level
+            sunburst_data['year_id'] = sunburst_data['year'].astype(str)
+            sunburst_data['type_id'] = sunburst_data['year_id'] + '_' + sunburst_data['material_type']
+            sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
+            
+            # Create parent-child relationships
+            years = sunburst_data[['year_id', 'year']].drop_duplicates()
+            years['parent'] = ''
+            years['id'] = years['year_id']
+            
+            types = sunburst_data[['type_id', 'material_type', 'year_id']].drop_duplicates()
+            types['parent'] = types['year_id']
+            types['id'] = types['type_id']
+            
+            formulas = sunburst_data[['formula_id', 'formula', 'count', 'type_id']].copy()
+            formulas['parent'] = formulas['type_id']
+            formulas['id'] = formulas['formula_id']
+            
+            # Combine all levels
+            hierarchy_data = pd.concat([
+                years[['id', 'parent', 'year']].rename(columns={'year': 'label'}),
+                types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
+                formulas[['id', 'parent', 'formula', 'count']].rename(columns={'formula': 'label'})
+            ], ignore_index=True)
+            
+            # Add values for intermediate levels (sum of children)
+            for type_id in types['id']:
+                type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
+                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
+                
+            for year_id in years['id']:
+                year_sum = types[types['parent'] == year_id]['id'].apply(
+                    lambda x: hierarchy_data.loc[hierarchy_data['id'] == x, 'count'].values[0] if not hierarchy_data.loc[hierarchy_data['id'] == x, 'count'].empty else 0
+                ).sum()
+                hierarchy_data.loc[hierarchy_data['id'] == year_id, 'count'] = year_sum
+            
+            # Create the sunburst chart
+            if discrete_mode:
+                # Create a color mapping for material types
+                unique_types = hierarchy_data[hierarchy_data['id'].str.contains('_') & 
+                                            ~hierarchy_data['id'].str.contains('_', regex=False).str.count('_').gt(1)]['label'].unique()
+                color_map = {}
+                colors = px.colors.qualitative.Plotly
+                for i, t in enumerate(unique_types):
+                    color_map[t] = colors[i % len(colors)]
+                
+                # Apply colors based on material type
+                hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
+                hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'  # Light blue for years
+                
+                fig = go.Figure(go.Sunburst(
+                    ids=hierarchy_data['id'],
+                    labels=hierarchy_data['label'],
+                    parents=hierarchy_data['parent'],
+                    values=hierarchy_data['count'],
+                    branchvalues=branchvalues,
+                    marker=dict(colors=hierarchy_data['color']),
+                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Parent: %{parent}<extra></extra>',
+                    textinfo="label+value" if show_labels else "none",
+                    textfont=dict(size=label_fontsize),
+                    insidetextorientation='horizontal'
+                ))
+            else:
+                fig = go.Figure(go.Sunburst(
+                    ids=hierarchy_data['id'],
+                    labels=hierarchy_data['label'],
+                    parents=hierarchy_data['parent'],
+                    values=hierarchy_data['count'],
+                    branchvalues=branchvalues,
+                    marker=dict(
+                        colors=hierarchy_data['count'],
+                        colorscale=colormap_choice.lower(),
+                        showscale=True,
+                        colorbar=dict(title="Count")
+                    ),
+                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Parent: %{parent}<extra></extra>',
+                    textinfo="label+value" if show_labels else "none",
+                    textfont=dict(size=label_fontsize),
+                    insidetextorientation='horizontal'
+                ))
         else:
-            fig_sunburst = px.sunburst(
-                sunburst_data,
-                path=path,
-                values='count',
-                color='count',
-                color_continuous_scale=colormap_choice,
-                title="Hierarchical Distribution of Materials"
+            # Fallback to two-tier if no year data
+            sunburst_data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
+            
+            # Create IDs for each level
+            sunburst_data['type_id'] = sunburst_data['material_type']
+            sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
+            
+            # Create parent-child relationships
+            types = sunburst_data[['type_id', 'material_type']].drop_duplicates()
+            types['parent'] = ''
+            types['id'] = types['type_id']
+            
+            formulas = sunburst_data[['formula_id', 'formula', 'count', 'type_id']].copy()
+            formulas['parent'] = formulas['type_id']
+            formulas['id'] = formulas['formula_id']
+            
+            # Combine all levels
+            hierarchy_data = pd.concat([
+                types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
+                formulas[['id', 'parent', 'formula', 'count']].rename(columns={'formula': 'label'})
+            ], ignore_index=True)
+            
+            # Add values for intermediate levels (sum of children)
+            for type_id in types['id']:
+                type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
+                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
+            
+            # Create the sunburst chart
+            if discrete_mode:
+                # Create a color mapping for material types
+                unique_types = hierarchy_data[hierarchy_data['parent'] == '']['label'].unique()
+                color_map = {}
+                colors = px.colors.qualitative.Plotly
+                for i, t in enumerate(unique_types):
+                    color_map[t] = colors[i % len(colors)]
+                
+                # Apply colors based on material type
+                hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
+                
+                fig = go.Figure(go.Sunburst(
+                    ids=hierarchy_data['id'],
+                    labels=hierarchy_data['label'],
+                    parents=hierarchy_data['parent'],
+                    values=hierarchy_data['count'],
+                    branchvalues=branchvalues,
+                    marker=dict(colors=hierarchy_data['color']),
+                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Parent: %{parent}<extra></extra>',
+                    textinfo="label+value" if show_labels else "none",
+                    textfont=dict(size=label_fontsize),
+                    insidetextorientation='horizontal'
+                ))
+            else:
+                fig = go.Figure(go.Sunburst(
+                    ids=hierarchy_data['id'],
+                    labels=hierarchy_data['label'],
+                    parents=hierarchy_data['parent'],
+                    values=hierarchy_data['count'],
+                    branchvalues=branchvalues,
+                    marker=dict(
+                        colors=hierarchy_data['count'],
+                        colorscale=colormap_choice.lower(),
+                        showscale=True,
+                        colorbar=dict(title="Count")
+                    ),
+                    hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Parent: %{parent}<extra></extra>',
+                    textinfo="label+value" if show_labels else "none",
+                    textfont=dict(size=label_fontsize),
+                    insidetextorientation='horizontal'
+                ))
+
+        # Update layout for publication quality
+        fig.update_layout(
+            height=chart_height,
+            plot_bgcolor="rgba(255,255,255,1)",
+            paper_bgcolor="rgba(255,255,255,1)",
+            margin=dict(t=80, l=20, r=20, b=20),
+            font=dict(family="Arial, sans-serif", size=12, color="#000000"),
+            title=dict(
+                text="Three-Tier Hierarchy of Thermoelectric Materials",
+                x=0.5,
+                y=0.95,
+                xanchor='center',
+                yanchor='top',
+                font=dict(size=20, family="Arial, sans-serif")
             )
-
-        # Label visibility & styling
-        fig_sunburst.update_traces(
-            textinfo="label+percent entry+value" if show_labels else "none",
-            textfont_size=label_fontsize,
         )
 
-        fig_sunburst.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            margin=dict(t=50, l=25, r=25, b=25)
-        )
-
-        return fig_sunburst
+        return fig
 
     except Exception as e:
         st.error(f"Failed to generate sunburst chart: {str(e)}")
         update_log(f"Sunburst chart error: {str(e)}")
+        import traceback
+        update_log(traceback.format_exc())
         return None
 
-def get_chart_download_link(fig, filename="chart.png"):
-    """Generate a download link for the chart"""
-    try:
-        # Try to export as PNG
-        img_bytes = fig.to_image(format="png")
-        b64 = base64.b64encode(img_bytes).decode()
-        href = f'<a href="data:image/png;base64,{b64}" download="{filename}">Download PNG</a>'
-        return href
-    except Exception as e:
-        update_log(f"PNG export failed: {str(e)}")
-        
-        # Fallback to HTML export
-        try:
-            html = fig.to_html()
-            b64 = base64.b64encode(html.encode()).decode()
-            href = f'<a href="data:text/html;base64,{b64}" download="{filename.replace(".png", ".html")}">Download HTML</a>'
-            return href
-        except Exception as e2:
-            update_log(f"HTML export also failed: {str(e2)}")
-            return None
-
 # ------------------ Streamlit UI ------------------
-st.set_page_config(page_title="Enhanced Thermoelectric Material Sunburst Analysis", layout="wide")
-st.title("🌞 Enhanced Sunburst Analysis for Thermoelectric Materials")
+st.set_page_config(page_title="Three-Tier Thermoelectric Material Analysis", layout="wide")
+st.title("🌞 Three-Tier Hierarchy Analysis for Thermoelectric Materials")
 
 # Initialize session state
 if "db_file" not in st.session_state:
@@ -227,6 +354,8 @@ colormap_choice = st.sidebar.selectbox(
 
 show_labels = st.sidebar.checkbox("Show Labels", value=True)
 label_fontsize = st.sidebar.slider("Label Font Size", 8, 24, 12)
+chart_height = st.sidebar.slider("Chart Height", 400, 1200, 800)
+branchvalues = st.sidebar.selectbox("Branch Values", ["total", "remainder"], index=0)
 
 # Exclude certain formulas or types
 if st.session_state.data_df is not None:
@@ -248,7 +377,7 @@ else:
 # Data summary
 if st.session_state.data_df is not None:
     st.header("Data Summary")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric("Total Records", len(st.session_state.data_df))
@@ -272,6 +401,13 @@ if st.session_state.data_df is not None:
             st.metric("n-type Materials", n_type_count)
         else:
             st.metric("n-type Materials", "N/A")
+            
+    with col4:
+        if 'year' in st.session_state.data_df.columns:
+            year_range_str = f"{int(st.session_state.data_df['year'].min())}-{int(st.session_state.data_df['year'].max())}"
+            st.metric("Year Range", year_range_str)
+        else:
+            st.metric("Year Data", "Not Available")
     
     # Show data preview
     with st.expander("View Data Preview"):
@@ -279,21 +415,23 @@ if st.session_state.data_df is not None:
 
 # Generate chart
 if st.session_state.data_df is not None:
-    fig_sunburst = create_sunburst_chart(
+    fig_sunburst = create_three_tier_sunburst(
         st.session_state.data_df,
         colormap_choice,
         discrete_mode,
         show_labels,
         label_fontsize,
         excluded_labels,
-        year_range
+        year_range,
+        chart_height,
+        branchvalues
     )
 
     if fig_sunburst:
         st.plotly_chart(fig_sunburst, use_container_width=True)
         
         # Add download buttons with error handling
-        st.subheader("Download Options")
+        st.subheader("Export Options")
         
         col1, col2, col3 = st.columns(3)
         
@@ -308,32 +446,38 @@ if st.session_state.data_df is not None:
             )
         
         with col2:
-            # Try to download as PNG with fallback
+            # Download as JSON (hierarchy data)
             try:
-                img_bytes = fig_sunburst.to_image(format="png")
+                # Extract hierarchy data from the figure
+                hierarchy_json = json.dumps(fig_sunburst.to_dict(), indent=2)
                 st.download_button(
-                    label="Download Chart as PNG",
-                    data=img_bytes,
-                    file_name="thermoelectric_materials_sunburst.png",
-                    mime="image/png"
+                    label="Download Hierarchy as JSON",
+                    data=hierarchy_json,
+                    file_name="thermoelectric_materials_hierarchy.json",
+                    mime="application/json"
                 )
             except Exception as e:
-                st.warning("PNG export not available. Please use the built-in Plotly export tools.")
-                update_log(f"PNG export error: {str(e)}")
+                st.error("JSON export failed")
+                update_log(f"JSON export error: {str(e)}")
         
         with col3:
-            # Download as HTML
-            try:
-                html = fig_sunburst.to_html()
-                st.download_button(
-                    label="Download Chart as HTML",
-                    data=html,
-                    file_name="thermoelectric_materials_sunburst.html",
-                    mime="text/html"
-                )
-            except Exception as e:
-                st.error("HTML export failed")
-                update_log(f"HTML export error: {str(e)}")
+            # Use Plotly's built-in export
+            st.info("Use the camera icon 📷 in the chart to export as PNG")
+            
+        # Additional publication-quality tips
+        with st.expander("Publication Quality Tips"):
+            st.markdown("""
+            **For publication-quality figures:**
+            
+            1. **Use the camera icon** in the chart to export as high-resolution PNG
+            2. **Adjust the chart height** for better proportions
+            3. **Consider using discrete colors** for clearer material type differentiation
+            4. **For vector formats**, consider using the JSON export and recreating in specialized tools
+            5. **For best results**, use the exported data in dedicated visualization software like:
+               - Adobe Illustrator
+               - Inkscape
+               - Python with Matplotlib/Seaborn for complete control
+            """)
     else:
         st.warning("Unable to generate sunburst chart. Check data format.")
 else:
@@ -350,9 +494,9 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.info(
     """
-    **Thermoelectric Material Analysis Tool**  
-    This tool visualizes p-type and n-type material classifications
-    extracted from scientific literature using NLP techniques.
+    **Three-Tier Thermoelectric Material Analysis**  
+    This tool visualizes the hierarchy of p-type and n-type material classifications
+    across years, material types, and specific formulas.
     """
 )
 
@@ -361,12 +505,15 @@ with st.expander("Troubleshooting"):
     st.markdown("""
     **If you encounter issues with chart export:**
     
-    1. Install the Kaleido library for better export functionality:
+    1. **Use the camera icon** in the chart for the most reliable PNG export
+    2. Install the Kaleido library for better export functionality:
     ```bash
     pip install kaleido
     ```
     
-    2. For Streamlit Cloud deployment, add `kaleido` to your requirements.txt file
+    3. For Streamlit Cloud deployment, add `kaleido` to your requirements.txt file
     
-    3. Alternatively, use the built-in Plotly export tools (camera icon in the chart)
+    4. For publication-quality vector graphics, consider:
+       - Exporting the JSON data and recreating in specialized tools
+       - Using the CSV export with dedicated visualization software
     """)
