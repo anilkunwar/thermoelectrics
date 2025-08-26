@@ -773,7 +773,7 @@ else:
 # Top N materials selection
 st.sidebar.header("Top N Materials Chart")
 if st.session_state.data_df is not None:
-    max_formulas = len(st.session_state.data_df['formula'].unique()) if 'formula' in st.session_state.data_df.columns else 10
+    max_formulas = len(st.session_state.data_df['formula'].unique()) if 'formula' in st.session_state.data_df.columns else 100
     top_n = st.sidebar.slider("Number of Top Materials per Type", 1, max_formulas, 5)
 else:
     top_n = 5
