@@ -86,10 +86,14 @@ def load_data_from_db(db_file, year_range=None):
 COLOR_SCALES = [
     'viridis', 'plasma', 'inferno', 'magma', 'cividis', 'hot', 'blackbody', 'bluered',
     'blues', 'earth', 'electric', 'greens', 'greys', 'oranges', 'picnic', 'portland',
-    'rainbow', 'rdbu', 'reds', 'ylgnbu', 'ylorrd', 'deep', 'dense', 'pastel1', 'pastel2',
-    'set1', 'set2', 'set3', 'dark2', 'paired', 'accent', 'viridis_r', 'plasma_r',
-    'inferno_r', 'magma_r', 'cividis_r', 'hot_r'
+    'rainbow', 'rdbu', 'reds', 'ylgnbu', 'ylorrd', 'deep', 'dense'
 ]
+
+# Secondary color scale for "Other" categories
+OTHER_COLOR_SCALES = {
+    'p-type': 'blues',  # Light blue shades for Other p-type
+    'n-type': 'reds'    # Light red shades for Other n-type
+}
 
 def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, label_fontsize, 
                               excluded_labels, year_range=None, chart_height=800, branchvalues='total',
@@ -228,7 +232,9 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                         colors=hierarchy_data['count'],
                         colorscale=colormap_choice.lower(),
                         showscale=True,
-                        colorbar=dict(title="Count")
+                        colorbar=dict(title="Count"),
+                        cmin=hierarchy_data['count'].min(),
+                        cmax=hierarchy_data['count'].max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -322,7 +328,9 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                         colors=hierarchy_data['count'],
                         colorscale=colormap_choice.lower(),
                         showscale=True,
-                        colorbar=dict(title="Count")
+                        colorbar=dict(title="Count"),
+                        cmin=hierarchy_data['count'].min(),
+                        cmax=hierarchy_data['count'].max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -479,8 +487,10 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 colors = px.colors.qualitative.Plotly
                 for i, t in enumerate(unique_types):
                     if t.startswith('Other'):
-                        # Use distinct colors for "Other" categories
-                        color_map[t] = px.colors.qualitative.Pastel[i % len(px.colors.qualitative.Pastel)]
+                        # Use specific color scale for "Other" based on material type
+                        mtype = t.split(' ')[1]
+                        other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
+                        color_map[t] = other_colors[min(i, len(other_colors)-1)]
                     else:
                         color_map[t] = colors[i % len(colors)]
                 
@@ -513,14 +523,18 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
                 
-                # Adjust colors for "Other" categories in continuous mode
+                # Adjust colors for "Other" categories
                 colors = hierarchy_data['count'].copy()
                 other_mask = hierarchy_data['label'].str.startswith('Other')
                 if other_mask.any():
-                    # Scale "Other" counts to a lighter shade
-                    other_counts = hierarchy_data.loc[other_mask, 'count']
-                    max_count = hierarchy_data['count'].max()
-                    colors[other_mask] = other_counts * 0.5 / max_count  # Scale down for lighter colors
+                    for mtype in ['p-type', 'n-type']:
+                        mask = hierarchy_data['label'] == f'Other {mtype}'
+                        if mask.any():
+                            other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
+                            other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
+                            # Map count to a color in the secondary scale
+                            color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
+                            colors[mask] = other_colors[color_idx]
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -532,7 +546,9 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                         colors=colors,
                         colorscale=colormap_choice.lower(),
                         showscale=True,
-                        colorbar=dict(title="Count")
+                        colorbar=dict(title="Count"),
+                        cmin=hierarchy_data['count'].min(),
+                        cmax=hierarchy_data['count'].max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -597,7 +613,12 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 color_map = {}
                 colors = px.colors.qualitative.Plotly
                 for i, t in enumerate(unique_types):
-                    color_map[t] = colors[i % len(colors)]
+                    if t.startswith('Other'):
+                        mtype = t.split(' ')[1]
+                        other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
+                        color_map[t] = other_colors[min(i, len(other_colors)-1)]
+                    else:
+                        color_map[t] = colors[i % len(colors)]
                 
                 hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
                 
@@ -630,9 +651,13 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 colors = hierarchy_data['count'].copy()
                 other_mask = hierarchy_data['label'].str.startswith('Other')
                 if other_mask.any():
-                    other_counts = hierarchy_data.loc[other_mask, 'count']
-                    max_count = hierarchy_data['count'].max()
-                    colors[other_mask] = other_counts * 0.5 / max_count
+                    for mtype in ['p-type', 'n-type']:
+                        mask = hierarchy_data['label'] == f'Other {mtype}'
+                        if mask.any():
+                            other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
+                            other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
+                            color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
+                            colors[mask] = other_colors[color_idx]
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -644,7 +669,9 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                         colors=colors,
                         colorscale=colormap_choice.lower(),
                         showscale=True,
-                        colorbar=dict(title="Count")
+                        colorbar=dict(title="Count"),
+                        cmin=hierarchy_data['count'].min(),
+                        cmax=hierarchy_data['count'].max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -734,9 +761,9 @@ st.sidebar.header("Chart Customization")
 
 discrete_mode = st.sidebar.radio("Color Mode", ["Discrete (by type)", "Continuous (by count)"]) == "Discrete (by type)"
 if discrete_mode:
-    st.sidebar.info("In Discrete mode, colors are assigned by material type using Plotly's qualitative colors. Color map selection is ignored.")
+    st.sidebar.info("In Discrete mode, colors are assigned by material type using Plotly's qualitative colors. Color map selection is used only in Continuous mode.")
 colormap_choice = st.sidebar.selectbox(
-    "Choose Color Map (used in Continuous mode)",
+    "Choose Color Map (Continuous mode)",
     COLOR_SCALES,
     index=0
 )
@@ -773,8 +800,9 @@ else:
 # Top N materials selection
 st.sidebar.header("Top N Materials Chart")
 if st.session_state.data_df is not None:
-    max_formulas = len(st.session_state.data_df['formula'].unique()) if 'formula' in st.session_state.data_df.columns else 100
-    top_n = st.sidebar.slider("Number of Top Materials per Type", 1, max_formulas, 5)
+    max_formulas = max(50, len(st.session_state.data_df['formula'].unique()) if 'formula' in st.session_state.data_df.columns else 50)
+    top_n = st.sidebar.slider("Number of Top Materials per Type", 1, max_formulas, 5,
+                              help="Select the number of top materials to display individually. Remaining materials are grouped as 'Other'.")
 else:
     top_n = 5
     st.sidebar.info("Load data to adjust top N materials")
