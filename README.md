@@ -78,6 +78,8 @@ Materials informatics and transformers enforcing physics based bias to VAE-Regre
 Formula Classifier and Visualization
 [![machinelearningthermoelectricity](https://img.shields.io/badge/materialType-streamlit-red)](https://formula-materialclassifieradvanced.streamlit.app/)
 [![machinelearningthermoelectricity](https://img.shields.io/badge/hierarchicalVisualization-streamlit-red)](https://hierarchical-datavisualization.streamlit.app/)
+[![machinelearningthermoelectricity](https://img.shields.io/badge/advhierarchicalVisualization-streamlit-red)](https://advanced-hierarchical-datavisualization.streamlit.app/)
+
 
 
 # Informatics approach to classify p-type and n-type thermoelectric materials
