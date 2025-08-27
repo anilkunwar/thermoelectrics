@@ -6,11 +6,8 @@ import streamlit as st
 import sqlite3
 from datetime import datetime
 import logging
-import base64
-from io import BytesIO
 import json
 import numpy as np
-import uuid
 
 # Directory setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,14 +48,12 @@ def detect_year_column(conn, table_name='papers'):
 def load_data_from_db(db_file, year_range=None):
     """Load material classification data from database with robust validation."""
     try:
-        # Validate database file
         if not os.path.isfile(db_file):
             raise FileNotFoundError(f"Database file '{db_file}' does not exist")
         
         conn = sqlite3.connect(db_file)
         cursor = conn.cursor()
         
-        # Check if standardized_formulas table exists
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='standardized_formulas'")
         if not cursor.fetchone():
             update_log("No standardized_formulas table found in database")
@@ -66,11 +61,9 @@ def load_data_from_db(db_file, year_range=None):
             conn.close()
             return None
         
-        # Load data
         query = "SELECT * FROM standardized_formulas"
         df = pd.read_sql_query(query, conn)
         
-        # Try to get year data if available
         year_column = detect_year_column(conn)
         if year_column and 'paper_id' in df.columns:
             cursor.execute(f"PRAGMA table_info(papers)")
@@ -87,12 +80,10 @@ def load_data_from_db(db_file, year_range=None):
             st.error("No data found in standardized_formulas table")
             return None
         
-        # Apply year filter if specified
         if year_range and 'year' in df.columns:
             df['year'] = pd.to_numeric(df['year'], errors='coerce')
             df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
         
-        # Validate count column if it exists
         if 'count' in df.columns:
             df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
             update_log(f"Validated count column, dtype: {df['count'].dtype}")
@@ -107,25 +98,17 @@ def load_data_from_db(db_file, year_range=None):
         update_log(traceback.format_exc())
         return None
 
-# Comprehensive color scale options
+# Color scale options
 COLOR_SCALES = [
     'viridis', 'plasma', 'inferno', 'magma', 'cividis', 'hot', 'blackbody', 'bluered',
     'blues', 'earth', 'electric', 'greens', 'greys', 'oranges', 'picnic', 'portland',
     'rainbow', 'rdbu', 'reds', 'ylgnbu', 'ylorrd', 'deep', 'dense'
 ]
-
-# Discrete color palette for better distinction
 DISCRETE_COLORS = px.colors.qualitative.D3 + px.colors.qualitative.Set3
 COLORBLIND_DISCRETE = px.colors.qualitative.Safe
-
-# Color scales for "Other" categories
-OTHER_COLOR_SCALES = {
-    'p-type': 'Blues',
-    'n-type': 'Reds'
-}
+OTHER_COLOR_SCALES = {'p-type': 'Blues', 'n-type': 'Reds'}
 
 def validate_color_scale(scale_name):
-    """Return a list of color strings for the given scale name, or fallback to Greys."""
     try:
         colors = getattr(px.colors.sequential, scale_name)
         if not isinstance(colors, (list, tuple)) or not all(isinstance(c, str) for c in colors):
@@ -137,7 +120,6 @@ def validate_color_scale(scale_name):
         return px.colors.sequential.Greys
 
 def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe):
-    """Create a consistent color map for all charts."""
     color_map = custom_colors.copy()
     if discrete_mode:
         colors = COLORBLIND_DISCRETE if colorblind_safe else DISCRETE_COLORS
@@ -157,7 +139,7 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
                 mtype = label.split(' ')[1].split('L')[0] if 'L' in label else label.split(' ')[1]
                 mtype = mtype if mtype in ['p-type', 'n-type'] else 'p-type'
                 other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
-                color_map[label] = other_colors[-1]  # Use the last color for "Other"
+                color_map[label] = other_colors[-1]
     return color_map
 
 def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, label_fontsize, 
@@ -168,12 +150,10 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             st.error("No data available for visualization")
             return None, None
         
-        # Validate colormap_choice
         if colormap_choice.lower() not in COLOR_SCALES:
             update_log(f"Invalid colormap '{colormap_choice}' selected. Falling back to 'cividis'.")
             colormap_choice = 'cividis'
 
-        # Filter excluded labels
         if excluded_labels:
             if 'material_type' in df.columns:
                 df = df[~df["material_type"].isin(excluded_labels)]
@@ -182,11 +162,9 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             if 'classification' in df.columns:
                 df = df[~df["classification"].isin(excluded_labels)]
         
-        # Standardize column names
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
         
-        # Ensure required columns
         required_cols = ['formula', 'material_type']
         if 'year' in df.columns:
             required_cols.append('year')
@@ -196,7 +174,6 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             st.error(f"Missing required columns: {', '.join(missing)}")
             return None, None
         
-        # Create hierarchy data
         if 'year' in df.columns:
             sunburst_data = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
             sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
@@ -236,11 +213,10 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
             hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
             
-            # Create color map
             custom_colors = custom_colors or {}
             unique_labels = hierarchy_data['label'].unique()
             color_map = create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe)
-            st.session_state.color_map = color_map  # Store for consistency across charts
+            st.session_state.color_map = color_map
             
             if discrete_mode:
                 hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
@@ -272,7 +248,7 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
                 
-                colors = np.log1p(hierarchy_data['count'].astype(float))  # Log scale for better color distribution
+                colors = np.log1p(hierarchy_data['count'].astype(float))
                 other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other', na=False)
                 if other_mask.any():
                     for mtype in ['p-type', 'n-type']:
@@ -334,7 +310,6 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
             hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
             
-            # Create color map
             custom_colors = custom_colors or {}
             unique_labels = hierarchy_data['label'].unique()
             color_map = create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe)
@@ -438,12 +413,10 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             st.error("No data available for visualization")
             return None, None, None
         
-        # Validate colormap_choice
         if colormap_choice.lower() not in COLOR_SCALES:
             update_log(f"Invalid colormap '{colormap_choice}' selected. Falling back to 'cividis'.")
             colormap_choice = 'cividis'
 
-        # Filter excluded labels
         if excluded_labels:
             if 'material_type' in df.columns:
                 df = df[~df["material_type"].isin(excluded_labels)]
@@ -452,11 +425,9 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             if 'classification' in df.columns:
                 df = df[~df["classification"].isin(excluded_labels)]
         
-        # Standardize column names
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
         
-        # Ensure required columns
         required_cols = ['formula', 'material_type']
         if 'year' in df.columns:
             required_cols.append('year')
@@ -466,11 +437,9 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             st.error(f"Missing required columns: {', '.join(missing)}")
             return None, None, None
         
-        # Validate count column
         if 'count' in df.columns:
             df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
         
-        # Create hierarchy data
         if 'year' in df.columns:
             sunburst_data = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
             sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
@@ -532,7 +501,6 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
             hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
             
-            # Create color map
             custom_colors = custom_colors or {}
             unique_labels = hierarchy_data['label'].unique()
             color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe))
@@ -649,7 +617,6 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
             hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
             
-            # Create color map
             custom_colors = custom_colors or {}
             unique_labels = hierarchy_data['label'].unique()
             color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe))
@@ -754,12 +721,10 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             update_log("No data available for expanded sunburst chart")
             return None, None
         
-        # Validate colormap_choice
         if colormap_choice.lower() not in COLOR_SCALES:
             update_log(f"Invalid colormap '{colormap_choice}' selected. Falling back to 'cividis'.")
             colormap_choice = 'cividis'
 
-        # Filter excluded labels
         if excluded_labels:
             if 'material_type' in df.columns:
                 df = df[~df["material_type"].isin(excluded_labels)]
@@ -768,11 +733,9 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             if 'classification' in df.columns:
                 df = df[~df["classification"].isin(excluded_labels)]
         
-        # Standardize column names
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
         
-        # Ensure required columns
         required_cols = ['formula', 'material_type']
         if 'year' in df.columns:
             required_cols.append('year')
@@ -783,11 +746,9 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             update_log(f"Missing required columns for expanded sunburst: {', '.join(missing)}")
             return None, None
         
-        # Validate count column
         if 'count' in df.columns:
             df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
         
-        # Check if enough data for expansion
         unique_formulas = df.groupby(['material_type', 'year'] if 'year' in df.columns else ['material_type'])['formula'].nunique()
         max_formulas = unique_formulas.min()
         if max_formulas < max(top_ns):
@@ -795,7 +756,6 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             update_log(f"Insufficient unique formulas ({max_formulas}) for top {max(top_ns)}")
             top_ns = [min(n, max_formulas) for n in top_ns]
         
-        # Initialize hierarchy data
         hierarchy_data = []
         all_sunburst_data = []
         current_df = df.copy()
@@ -906,7 +866,6 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             
             hierarchy_data['count'] = pd.to_numeric(hierarchy_data['count'], errors='coerce').fillna(0)
             
-            # Create color map
             custom_colors = custom_colors or {}
             unique_labels = hierarchy_data['label'].unique()
             color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe))
@@ -1060,7 +1019,6 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             
             hierarchy_data['count'] = pd.to_numeric(hierarchy_data['count'], errors='coerce').fillna(0)
             
-            # Create color map
             custom_colors = custom_colors or {}
             unique_labels = hierarchy_data['label'].unique()
             color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe))
@@ -1163,10 +1121,7 @@ st.title("🌞 Three-Tier Hierarchy Analysis for Thermoelectric Materials")
 # Initialize session state
 if "db_file" not in st.session_state:
     db_files = [f for f in os.listdir(DB_DIR) if f.endswith('.db')]
-    if db_files:
-        st.session_state.db_file = os.path.join(DB_DIR, db_files[0])
-    else:
-        st.session_state.db_file = None
+    st.session_state.db_file = os.path.join(DB_DIR, db_files[0]) if db_files else None
 
 if "data_df" not in st.session_state:
     st.session_state.data_df = None
@@ -1206,7 +1161,6 @@ if st.session_state.data_df is not None and 'year' in st.session_state.data_df.c
     max_year = int(st.session_state.data_df['year'].max()) if st.session_state.data_df['year'].notna().any() else 2023
     year_range = st.sidebar.slider("Year Range", min_year, max_year, (min_year, max_year))
 
-# Reload data with year filter
 if year_range and st.sidebar.button("Apply Year Filter") and st.session_state.db_file:
     with st.spinner("Loading filtered data..."):
         st.session_state.data_df = load_data_from_db(st.session_state.db_file, year_range)
@@ -1216,12 +1170,8 @@ st.sidebar.header("Chart Customization")
 discrete_mode = st.sidebar.radio("Color Mode", ["Discrete (by type)", "Continuous (by count)"]) == "Discrete (by type)"
 colorblind_safe = st.sidebar.checkbox("Use Colorblind-Safe Palette", value=True)
 if discrete_mode:
-    st.sidebar.info("In Discrete mode, colors are assigned by material type using a qualitative palette. Color map selection is used only in Continuous mode.")
-colormap_choice = st.sidebar.selectbox(
-    "Choose Color Map (Continuous mode)",
-    COLOR_SCALES,
-    index=COLOR_SCALES.index('cividis')
-)
+    st.sidebar.info("In Discrete mode, colors are assigned by material type using a qualitative palette.")
+colormap_choice = st.sidebar.selectbox("Choose Color Map (Continuous mode)", COLOR_SCALES, index=COLOR_SCALES.index('cividis'))
 
 # Custom color selection
 st.sidebar.header("Custom Colors")
@@ -1466,3 +1416,22 @@ if st.session_state.data_df is not None:
             2. **Use the camera icon** in the chart to export as high-resolution PNG
             3. **Adjust the chart height** for better proportions
             4. **Use colorblind-safe palette** for accessibility
+            5. **Use Discrete mode** for clear differentiation of material types
+            6. **Assign custom colors** to highlight specific materials or types
+            7. **Export hierarchy data** as CSV or JSON for further analysis in other tools
+            8. **Check logs** below for any data or rendering issues
+            """)
+        
+        with st.expander("View Application Logs"):
+            if 'log_buffer' in st.session_state and st.session_state.log_buffer:
+                st.text_area("Logs (last 20 entries)", "\n".join(st.session_state.log_buffer), height=200)
+            else:
+                st.info("No logs available yet.")
+        
+        with st.expander("View Color Map"):
+            if 'color_map' in st.session_state and st.session_state.color_map:
+                st.write("Current color assignments:")
+                for label, color in st.session_state.color_map.items():
+                    st.markdown(f"<span style='color:{color};font-weight:bold'>{label}</span>: {color}", unsafe_allow_html=True)
+            else:
+                st.info("No color map available. Generate a chart to see color assignments.")
