@@ -80,9 +80,10 @@ def load_data_from_db(db_file, year_range=None):
             st.error("No data found in standardized_formulas table")
             return None
         
-        if year_range and 'year' in df.columns:
+        if 'year' in df.columns:
             df['year'] = pd.to_numeric(df['year'], errors='coerce')
-            df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
+            if year_range:
+                df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
         
         if 'count' in df.columns:
             df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
@@ -440,15 +441,23 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         if 'count' in df.columns:
             df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
         
+        # Ensure year is numeric if present
+        if 'year' in df.columns:
+            df['year'] = pd.to_numeric(df['year'], errors='coerce')
+            if year_range:
+                df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
+        
         if 'year' in df.columns:
             sunburst_data = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
             sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
             
             grouped_data = []
-            for year in sunburst_data['year'].unique():
+            for year in sunburst_data['year'].dropna().unique():
                 for mtype in sunburst_data['material_type'].unique():
                     type_data = sunburst_data[(sunburst_data['year'] == year) & 
                                             (sunburst_data['material_type'] == mtype)]
+                    if type_data.empty:
+                        continue
                     top_formulas = type_data.nlargest(top_n, 'count')
                     other_data = type_data[~type_data['formula'].isin(top_formulas['formula'])]
                     if not other_data.empty:
@@ -463,6 +472,11 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                     else:
                         type_data = top_formulas
                     grouped_data.append(type_data)
+            
+            if not grouped_data:
+                st.error("No data available after filtering for top N materials")
+                update_log("No data available after filtering for top N materials")
+                return None, None, None
             
             sunburst_data = pd.concat(grouped_data, ignore_index=True)
             
@@ -749,6 +763,12 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
         if 'count' in df.columns:
             df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
         
+        # Ensure year is numeric if present
+        if 'year' in df.columns:
+            df['year'] = pd.to_numeric(df['year'], errors='coerce')
+            if year_range:
+                df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
+        
         unique_formulas = df.groupby(['material_type', 'year'] if 'year' in df.columns else ['material_type'])['formula'].nunique()
         max_formulas = unique_formulas.min()
         if max_formulas < max(top_ns):
@@ -768,7 +788,7 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                 grouped_data = []
                 parent_level = 'type_id' if layer_idx == 0 else f'other_{layer_idx-1}_id'
                 
-                for year in sunburst_data['year'].unique():
+                for year in sunburst_data['year'].dropna().unique():
                     for mtype in sunburst_data['material_type'].unique():
                         type_data = sunburst_data[(sunburst_data['year'] == year) & 
                                                 (sunburst_data['material_type'] == mtype)]
@@ -1225,10 +1245,10 @@ else:
 st.sidebar.header("Top N Materials Chart")
 if st.session_state.data_df is not None:
     max_formulas = max(50, len(st.session_state.data_df['formula'].unique()) if 'formula' in st.session_state.data_df.columns else 50)
-    top_n = st.sidebar.slider("Number of Top Materials per Type", 1, max_formulas, 5,
+    top_n = st.sidebar.slider("Number of Top Materials per Type", 1, max_formulas, 15,
                               help="Select the number of top materials to display individually. Remaining materials are grouped as 'Other'.")
 else:
-    top_n = 5
+    top_n = 15
     st.sidebar.info("Load data to adjust top N materials")
 
 # Expanded sunburst layers
