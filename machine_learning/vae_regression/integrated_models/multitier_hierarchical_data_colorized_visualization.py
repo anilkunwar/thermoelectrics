@@ -38,19 +38,52 @@ def validate_color_scale(scale_name):
         return px.colors.sequential.Greys
 
 def load_data_from_db(db_path, table_name, year_range=None):
-    """Load data from SQLite database."""
+    """Load data from SQLite database with validation."""
     try:
+        # Validate database file existence
+        if not os.path.isfile(db_path):
+            raise FileNotFoundError(f"Database file '{db_path}' does not exist")
+        
+        # Validate table name (basic sanitization to prevent SQL injection)
+        if not table_name.isidentifier():
+            raise ValueError(f"Invalid table name '{table_name}'. Use alphanumeric characters and underscores.")
+        
         conn = sqlite3.connect(db_path)
+        # Check if table exists
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+        if not cursor.fetchone():
+            raise ValueError(f"Table '{table_name}' does not exist in database '{db_path}'")
+        
+        # Construct query
         query = f"SELECT * FROM {table_name}"
         if year_range:
-            query += f" WHERE year BETWEEN {year_range[0]} AND {year_range[1]}"
-        df = pd.read_sql_query(query, conn)
+            # Verify 'year' column exists
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'year' not in columns:
+                raise ValueError(f"Table '{table_name}' does not have a 'year' column for filtering")
+            # Use parameterized query to safely include year_range
+            query += " WHERE year BETWEEN ? AND ?"
+            df = pd.read_sql_query(query, conn, params=(year_range[0], year_range[1]))
+        else:
+            df = pd.read_sql_query(query, conn)
+        
         conn.close()
+        
+        if df.empty:
+            st.warning(f"No data found in table '{table_name}'")
+            update_log(f"No data found in table '{table_name}'. Rows: 0")
+            return None
+        
         update_log(f"Data loaded successfully from {db_path}, table {table_name}. Rows: {len(df)}")
         return df
+    
     except Exception as e:
         st.error(f"Failed to load data: {str(e)}")
         update_log(f"Data loading error: {str(e)}")
+        import traceback
+        update_log(traceback.format_exc())
         return None
 
 def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, label_fontsize, 
