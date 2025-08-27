@@ -75,6 +75,11 @@ def load_data_from_db(db_file, year_range=None):
         if year_range and 'year' in df.columns:
             df = df[(df["year"] >= year_range[0]) & (df["year"] <= year_range[1])]
         
+        # Validate count column if it exists
+        if 'count' in df.columns:
+            df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
+            update_log(f"Validated count column, dtype: {df['count'].dtype}")
+        
         update_log(f"Loaded {len(df)} records from database")
         return df
     
@@ -92,17 +97,20 @@ COLOR_SCALES = [
 
 # Secondary color scale for "Other" categories
 OTHER_COLOR_SCALES = {
-    'p-type': 'Blues',  # Capitalized to match Plotly's sequential color scales
-    'n-type': 'Reds'    # Capitalized to match Plotly's sequential color scales
+    'p-type': 'Blues',
+    'n-type': 'Reds'
 }
 
-# Validate color scales
 def validate_color_scale(scale_name):
-    """Check if a color scale exists in px.colors.sequential"""
+    """Return a list of color strings for the given scale name, or fallback to Greys."""
     try:
-        return px.colors.sequential.__dict__[scale_name]
-    except KeyError:
-        update_log(f"Color scale '{scale_name}' not found in px.colors.sequential. Using 'Greys' as fallback.")
+        colors = getattr(px.colors.sequential, scale_name)
+        if not isinstance(colors, (list, tuple)) or not all(isinstance(c, str) for c in colors):
+            raise ValueError(f"Color scale '{scale_name}' is not a valid list of color strings")
+        update_log(f"Validated color scale: {scale_name}")
+        return colors
+    except (AttributeError, ValueError) as e:
+        update_log(f"Invalid color scale '{scale_name}': {str(e)}. Falling back to Greys.")
         return px.colors.sequential.Greys
 
 def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, label_fontsize, 
@@ -147,15 +155,13 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
         
         # Create three-tier hierarchy data
         if 'year' in df.columns:
-            # Group by year, material type, and formula
             sunburst_data = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
+            sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
             
-            # Create IDs for each level
             sunburst_data['year_id'] = sunburst_data['year'].astype(str)
             sunburst_data['type_id'] = sunburst_data['year_id'] + '_' + sunburst_data['material_type']
             sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
             
-            # Create parent-child relationships
             years = sunburst_data[['year_id', 'year']].drop_duplicates()
             years['parent'] = ''
             years['id'] = years['year_id']
@@ -168,14 +174,12 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             formulas['parent'] = formulas['type_id']
             formulas['id'] = formulas['formula_id']
             
-            # Combine all levels
             hierarchy_data = pd.concat([
                 years[['id', 'parent', 'year']].rename(columns={'year': 'label'}),
                 types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
                 formulas[['id', 'parent', 'formula', 'count']].rename(columns={'formula': 'label'})
             ], ignore_index=True)
             
-            # Add values for intermediate levels (sum of children)
             for type_id in types['id']:
                 type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
                 hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
@@ -186,13 +190,10 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                 ).sum()
                 hierarchy_data.loc[hierarchy_data['id'] == year_id, 'count'] = year_sum
             
-            # Calculate percentages for label visibility
             total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
             hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
             
-            # Create the sunburst chart
             if discrete_mode:
-                # Create a color mapping for material types
                 unique_types = hierarchy_data[hierarchy_data['id'].str.contains('_') & 
                                             ~hierarchy_data['id'].str.contains('_', regex=False).str.count('_').gt(1)]['label'].unique()
                 color_map = {}
@@ -200,11 +201,9 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                 for i, t in enumerate(unique_types):
                     color_map[t] = colors[i % len(colors)]
                 
-                # Apply colors based on material type
                 hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
-                hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'  # Light blue for years
+                hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'
                 
-                # Create custom text based on threshold
                 hierarchy_data['display_text'] = hierarchy_data['label']
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
@@ -227,10 +226,12 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                     insidetextorientation='horizontal'
                 ))
             else:
-                # Create custom text based on threshold
                 hierarchy_data['display_text'] = hierarchy_data['label']
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+                
+                colors = hierarchy_data['count'].astype(float).copy()
+                update_log(f"Three-tier continuous colors dtype: {colors.dtype}, sample: {colors.head().tolist()}")
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -239,12 +240,12 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                     values=hierarchy_data['count'],
                     branchvalues=branchvalues,
                     marker=dict(
-                        colors=hierarchy_data['count'],
+                        colors=colors,
                         colorscale=colormap_choice.lower(),
                         showscale=True,
                         colorbar=dict(title="Count"),
-                        cmin=hierarchy_data['count'].min(),
-                        cmax=hierarchy_data['count'].max()
+                        cmin=colors.min(),
+                        cmax=colors.max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -257,14 +258,12 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                     insidetextorientation='horizontal'
                 ))
         else:
-            # Fallback to two-tier if no year data
             sunburst_data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
+            sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
             
-            # Create IDs for each level
             sunburst_data['type_id'] = sunburst_data['material_type']
             sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
             
-            # Create parent-child relationships
             types = sunburst_data[['type_id', 'material_type']].drop_duplicates()
             types['parent'] = ''
             types['id'] = types['type_id']
@@ -273,34 +272,27 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             formulas['parent'] = formulas['type_id']
             formulas['id'] = formulas['formula_id']
             
-            # Combine all levels
             hierarchy_data = pd.concat([
                 types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
                 formulas[['id', 'parent', 'formula', 'count']].rename(columns={'formula': 'label'})
             ], ignore_index=True)
             
-            # Add values for intermediate levels (sum of children)
             for type_id in types['id']:
                 type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
                 hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
             
-            # Calculate percentages for label visibility
             total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
             hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
             
-            # Create the sunburst chart
             if discrete_mode:
-                # Create a color mapping for material types
                 unique_types = hierarchy_data[hierarchy_data['parent'] == '']['label'].unique()
                 color_map = {}
                 colors = px.colors.qualitative.Plotly
                 for i, t in enumerate(unique_types):
                     color_map[t] = colors[i % len(colors)]
                 
-                # Apply colors based on material type
                 hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
                 
-                # Create custom text based on threshold
                 hierarchy_data['display_text'] = hierarchy_data['label']
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
@@ -323,10 +315,12 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                     insidetextorientation='horizontal'
                 ))
             else:
-                # Create custom text based on threshold
                 hierarchy_data['display_text'] = hierarchy_data['label']
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+                
+                colors = hierarchy_data['count'].astype(float).copy()
+                update_log(f"Two-tier continuous colors dtype: {colors.dtype}, sample: {colors.head().tolist()}")
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -335,12 +329,12 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                     values=hierarchy_data['count'],
                     branchvalues=branchvalues,
                     marker=dict(
-                        colors=hierarchy_data['count'],
+                        colors=colors,
                         colorscale=colormap_choice.lower(),
                         showscale=True,
                         colorbar=dict(title="Count"),
-                        cmin=hierarchy_data['count'].min(),
-                        cmax=hierarchy_data['count'].max()
+                        cmin=colors.min(),
+                        cmax=colors.max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -353,7 +347,6 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
                     insidetextorientation='horizontal'
                 ))
 
-        # Update layout for publication quality
         fig.update_layout(
             height=chart_height,
             plot_bgcolor="rgba(255,255,255,1)",
@@ -418,20 +411,21 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             st.error(f"Missing required columns: {', '.join(missing)}")
             return None, None, None
         
+        # Validate count column
+        if 'count' in df.columns:
+            df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
+        
         # Create hierarchy data with top N materials
         if 'year' in df.columns:
-            # Group by year, material type, and formula
             sunburst_data = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
+            sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
             
-            # Get top N formulas for each material type per year
             grouped_data = []
             for year in sunburst_data['year'].unique():
                 for mtype in sunburst_data['material_type'].unique():
                     type_data = sunburst_data[(sunburst_data['year'] == year) & 
                                             (sunburst_data['material_type'] == mtype)]
-                    # Sort by count and select top N
                     top_formulas = type_data.nlargest(top_n, 'count')
-                    # Group remaining as "Other"
                     other_data = type_data[~type_data['formula'].isin(top_formulas['formula'])]
                     if not other_data.empty:
                         other_count = other_data['count'].sum()
@@ -448,12 +442,10 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             
             sunburst_data = pd.concat(grouped_data, ignore_index=True)
             
-            # Create IDs for each level
             sunburst_data['year_id'] = sunburst_data['year'].astype(str)
             sunburst_data['type_id'] = sunburst_data['year_id'] + '_' + sunburst_data['material_type']
             sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
             
-            # Create parent-child relationships
             years = sunburst_data[['year_id', 'year']].drop_duplicates()
             years['parent'] = ''
             years['id'] = years['year_id']
@@ -466,14 +458,12 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             formulas['parent'] = formulas['type_id']
             formulas['id'] = formulas['formula_id']
             
-            # Combine all levels
             hierarchy_data = pd.concat([
                 years[['id', 'parent', 'year']].rename(columns={'year': 'label'}),
                 types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
                 formulas[['id', 'parent', 'formula', 'count']].rename(columns={'formula': 'label'})
             ], ignore_index=True)
             
-            # Add values for intermediate levels
             for type_id in types['id']:
                 type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
                 hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
@@ -484,20 +474,16 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 ).sum()
                 hierarchy_data.loc[hierarchy_data['id'] == year_id, 'count'] = year_sum
             
-            # Calculate percentages
             total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
             hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
             
-            # Create the sunburst chart
             if discrete_mode:
-                # Create a color mapping for material types and "Other"
                 unique_types = hierarchy_data[hierarchy_data['id'].str.contains('_') & 
                                             ~hierarchy_data['id'].str.contains('_', regex=False).str.count('_').gt(1)]['label'].unique()
                 color_map = {}
                 colors = px.colors.qualitative.Plotly
                 for i, t in enumerate(unique_types):
                     if t.startswith('Other'):
-                        # Use specific color scale for "Other" based on material type
                         mtype = t.split(' ')[1]
                         other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                         color_map[t] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
@@ -510,6 +496,8 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 hierarchy_data['display_text'] = hierarchy_data['label']
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+                
+                update_log(f"Top N discrete colors dtype: {hierarchy_data['color'].dtype}, sample: {hierarchy_data['color'].head().tolist()}")
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -533,17 +521,20 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
                 
-                # Adjust colors for "Other" categories
-                colors = hierarchy_data['count'].copy()
+                colors = hierarchy_data['count'].astype(float).copy()
                 other_mask = hierarchy_data['label'].str.startswith('Other')
                 if other_mask.any():
                     for mtype in ['p-type', 'n-type']:
                         mask = hierarchy_data['label'] == f'Other {mtype}'
                         if mask.any():
-                            other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
+                            other_count = hierarchy_data.loc[mask, 'count'].astype(float).iloc[0]
                             other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                             color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
                             colors[mask] = other_colors[color_idx]
+                            update_log(f"Top N assigned color {other_colors[color_idx]} to Other {mtype} (count: {other_count}, idx: {color_idx})")
+                
+                colors = pd.to_numeric(colors, errors='coerce').fillna(0)
+                update_log(f"Top N continuous colors dtype: {colors.dtype}, sample: {colors.head().tolist()}")
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -556,8 +547,8 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                         colorscale=colormap_choice.lower(),
                         showscale=True,
                         colorbar=dict(title="Count"),
-                        cmin=hierarchy_data['count'].min(),
-                        cmax=hierarchy_data['count'].max()
+                        cmin=colors.min(),
+                        cmax=colors.max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -570,10 +561,9 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                     insidetextorientation='horizontal'
                 ))
         else:
-            # Two-tier hierarchy (no year)
             sunburst_data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
+            sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
             
-            # Get top N formulas for each material type
             grouped_data = []
             for mtype in sunburst_data['material_type'].unique():
                 type_data = sunburst_data[sunburst_data['material_type'] == mtype]
@@ -593,7 +583,6 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             
             sunburst_data = pd.concat(grouped_data, ignore_index=True)
             
-            # Create IDs
             sunburst_data['type_id'] = sunburst_data['material_type']
             sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
             
@@ -635,6 +624,8 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
                 
+                update_log(f"Top N two-tier discrete colors dtype: {hierarchy_data['color'].dtype}, sample: {hierarchy_data['color'].head().tolist()}")
+                
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
                     labels=hierarchy_data['display_text'],
@@ -657,16 +648,20 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
                 
-                colors = hierarchy_data['count'].copy()
+                colors = hierarchy_data['count'].astype(float).copy()
                 other_mask = hierarchy_data['label'].str.startswith('Other')
                 if other_mask.any():
                     for mtype in ['p-type', 'n-type']:
                         mask = hierarchy_data['label'] == f'Other {mtype}'
                         if mask.any():
-                            other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
+                            other_count = hierarchy_data.loc[mask, 'count'].astype(float).iloc[0]
                             other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                             color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
                             colors[mask] = other_colors[color_idx]
+                            update_log(f"Top N two-tier assigned color {other_colors[color_idx]} to Other {mtype} (count: {other_count}, idx: {color_idx})")
+                
+                colors = pd.to_numeric(colors, errors='coerce').fillna(0)
+                update_log(f"Top N two-tier continuous colors dtype: {colors.dtype}, sample: {colors.head().tolist()}")
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -679,8 +674,8 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                         colorscale=colormap_choice.lower(),
                         showscale=True,
                         colorbar=dict(title="Count"),
-                        cmin=hierarchy_data['count'].min(),
-                        cmax=hierarchy_data['count'].max()
+                        cmin=colors.min(),
+                        cmax=colors.max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -693,7 +688,6 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                     insidetextorientation='horizontal'
                 ))
 
-        # Update layout
         fig.update_layout(
             height=chart_height,
             plot_bgcolor="rgba(255,255,255,1)",
@@ -760,6 +754,14 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             update_log(f"Missing required columns for expanded sunburst: {', '.join(missing)}")
             return None, None
         
+        # Validate count column for non-numeric or NaN values
+        if 'count' in df.columns:
+            df['count'] = pd.to_numeric(df['count'], errors='coerce')
+            if df['count'].isna().any():
+                st.warning("NaN values found in 'count' column. Filling with 0.")
+                update_log("NaN values in 'count' column. Filling with 0.")
+                df['count'] = df['count'].fillna(0)
+        
         # Check if enough data for expansion
         unique_formulas = df.groupby(['material_type', 'year'] if 'year' in df.columns else ['material_type'])['formula'].nunique()
         max_formulas = unique_formulas.min()
@@ -774,8 +776,8 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
         current_df = df.copy()
         
         if 'year' in df.columns:
-            # Group by year, material type, and formula
             sunburst_data = current_df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
+            sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
             
             for layer_idx, top_n in enumerate(top_ns):
                 grouped_data = []
@@ -788,7 +790,6 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                         if type_data.empty:
                             continue
                         
-                        # Select top N formulas
                         top_formulas = type_data.nlargest(top_n, 'count')
                         other_data = type_data[~type_data['formula'].isin(top_formulas['formula'])]
                         
@@ -797,7 +798,6 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                         else:
                             type_id = f"{year}_{mtype}_other_{layer_idx-1}"
                         
-                        # Add top formulas
                         type_data = top_formulas.copy()
                         type_data['parent'] = type_id if layer_idx == 0 else f"{year}_{mtype}_other_{layer_idx-1}"
                         type_data['id'] = type_data['formula'].apply(lambda x: f"{type_id}_{x}")
@@ -823,15 +823,11 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                     update_log(f"No data for layer {layer_idx + 1}")
                     break
                 
-                # Prepare for next layer
                 if layer_idx < len(top_ns) - 1:
-                    # Filter to only the "Other" categories for the next layer
                     other_data = sunburst_data[sunburst_data['formula'].str.startswith('Other')]
                     if other_data.empty:
                         update_log(f"No 'Other' categories to expand in layer {layer_idx + 1}")
                         break
-                    # Use original data to get formulas for "Other" categories
-                    other_ids = other_data['id'].tolist()
                     other_formulas = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
                     for idx, row in other_data.iterrows():
                         year, mtype = row['year'], row['material_type']
@@ -851,7 +847,6 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                         update_log(f"No remaining formulas for layer {layer_idx + 2}")
                         break
             
-            # Create hierarchy levels
             years = sunburst_data[['year']].drop_duplicates()
             years['parent'] = ''
             years['id'] = years['year'].astype(str)
@@ -871,7 +866,6 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             
             hierarchy_data = pd.concat(hierarchy_data, ignore_index=True)
             
-            # Add values for intermediate levels
             for type_id in types['id']:
                 type_sum = hierarchy_data[hierarchy_data['parent'] == type_id]['count'].sum()
                 hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
@@ -882,20 +876,22 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                 ).sum()
                 hierarchy_data.loc[hierarchy_data['id'] == year_id, 'count'] = year_sum
             
-            # Calculate percentages
             total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
             hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
             
-            # Create the sunburst chart
+            hierarchy_data['count'] = pd.to_numeric(hierarchy_data['count'], errors='coerce').fillna(0)
+            update_log(f"Expanded count column dtype: {hierarchy_data['count'].dtype}")
+            if hierarchy_data['count'].isna().any():
+                update_log("Warning: NaN values in hierarchy_data['count'] after conversion")
+            
             if discrete_mode:
                 unique_labels = hierarchy_data[hierarchy_data['parent'].str.contains('_') | (hierarchy_data['parent'] == '')]['label'].unique()
                 color_map = {}
                 colors = px.colors.qualitative.Plotly
                 for i, t in enumerate(unique_labels):
                     if t.startswith('Other') or t.startswith('Sub-Other'):
-                        # Extract material type (e.g., 'p-type' or 'n-type') from label
                         mtype_parts = t.split(' ')[1].split('L')[0] if 'L' in t else t.split(' ')[1]
-                        mtype = mtype_parts if mtype_parts in ['p-type', 'n-type'] else 'p-type'  # Fallback to p-type
+                        mtype = mtype_parts if mtype_parts in ['p-type', 'n-type'] else 'p-type'
                         other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                         color_map[t] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
                     else:
@@ -907,6 +903,8 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                 hierarchy_data['display_text'] = hierarchy_data['label']
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+                
+                update_log(f"Expanded discrete colors dtype: {hierarchy_data['color'].dtype}, sample: {hierarchy_data['color'].head().tolist()}")
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -930,16 +928,23 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
                 
-                colors = hierarchy_data['count'].copy()
+                colors = hierarchy_data['count'].astype(float).copy()
+                update_log(f"Expanded continuous colors dtype: {colors.dtype}, sample: {colors.head().tolist()}")
+                
                 other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other', na=False)
                 if other_mask.any():
                     for mtype in ['p-type', 'n-type']:
                         mask = hierarchy_data['label'].str.contains(f'Other {mtype}|Sub-Other {mtype}', na=False)
                         if mask.any():
-                            other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
+                            other_count = hierarchy_data.loc[mask, 'count'].astype(float).iloc[0]
                             other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
+                            update_log(f"Expanded other colors for {mtype}: {other_colors[:3]}... (length: {len(other_colors)})")
                             color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
                             colors[mask] = other_colors[color_idx]
+                            update_log(f"Expanded assigned color {other_colors[color_idx]} to Other {mtype} (count: {other_count}, idx: {color_idx})")
+                
+                colors = pd.to_numeric(colors, errors='coerce').fillna(0)
+                update_log(f"Expanded final colors dtype: {colors.dtype}, sample: {colors.head().tolist()}")
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -952,8 +957,8 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                         colorscale=colormap_choice.lower(),
                         showscale=True,
                         colorbar=dict(title="Count"),
-                        cmin=hierarchy_data['count'].min(),
-                        cmax=hierarchy_data['count'].max()
+                        cmin=colors.min(),
+                        cmax=colors.max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -966,8 +971,8 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                     insidetextorientation='horizontal'
                 ))
         else:
-            # Two-tier hierarchy (no year)
             sunburst_data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
+            sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
             
             for layer_idx, top_n in enumerate(top_ns):
                 grouped_data = []
@@ -1048,6 +1053,9 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
             hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
             
+            hierarchy_data['count'] = pd.to_numeric(hierarchy_data['count'], errors='coerce').fillna(0)
+            update_log(f"Expanded two-tier count column dtype: {hierarchy_data['count'].dtype}")
+            
             if discrete_mode:
                 unique_types = hierarchy_data[hierarchy_data['parent'].str.contains('_') | (hierarchy_data['parent'] == '')]['label'].unique()
                 color_map = {}
@@ -1066,6 +1074,8 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                 hierarchy_data['display_text'] = hierarchy_data['label']
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+                
+                update_log(f"Expanded two-tier discrete colors dtype: {hierarchy_data['color'].dtype}, sample: {hierarchy_data['color'].head().tolist()}")
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -1089,16 +1099,23 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                 if label_threshold > 0:
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
                 
-                colors = hierarchy_data['count'].copy()
+                colors = hierarchy_data['count'].astype(float).copy()
+                update_log(f"Expanded two-tier continuous colors dtype: {colors.dtype}, sample: {colors.head().tolist()}")
+                
                 other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other', na=False)
                 if other_mask.any():
                     for mtype in ['p-type', 'n-type']:
                         mask = hierarchy_data['label'].str.contains(f'Other {mtype}|Sub-Other {mtype}', na=False)
                         if mask.any():
-                            other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
+                            other_count = hierarchy_data.loc[mask, 'count'].astype(float).iloc[0]
                             other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
+                            update_log(f"Expanded two-tier other colors for {mtype}: {other_colors[:3]}... (length: {len(other_colors)})")
                             color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
                             colors[mask] = other_colors[color_idx]
+                            update_log(f"Expanded two-tier assigned color {other_colors[color_idx]} to Other {mtype} (count: {other_count}, idx: {color_idx})")
+                
+                colors = pd.to_numeric(colors, errors='coerce').fillna(0)
+                update_log(f"Expanded two-tier final colors dtype: {colors.dtype}, sample: {colors.head().tolist()}")
                 
                 fig = go.Figure(go.Sunburst(
                     ids=hierarchy_data['id'],
@@ -1111,8 +1128,8 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                         colorscale=colormap_choice.lower(),
                         showscale=True,
                         colorbar=dict(title="Count"),
-                        cmin=hierarchy_data['count'].min(),
-                        cmax=hierarchy_data['count'].max()
+                        cmin=colors.min(),
+                        cmax=colors.max()
                     ),
                     hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                     textinfo="label+text" if show_labels else "none",
@@ -1125,7 +1142,6 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                     insidetextorientation='horizontal'
                 ))
 
-        # Update layout
         fig.update_layout(
             height=chart_height,
             plot_bgcolor="rgba(255,255,255,1)",
@@ -1170,7 +1186,7 @@ if "hierarchy_data" not in st.session_state:
     st.session_state.hierarchy_data = None
 
 if "expanded_layers" not in st.session_state:
-    st.session_state.expanded_layers = [5, 5, 5]  # Initialize with 3 layers
+    st.session_state.expanded_layers = [5, 5, 5]  # Default to 3 layers
 
 # Database selection
 st.sidebar.header("Data Source")
@@ -1202,7 +1218,6 @@ if year_range and st.sidebar.button("Apply Year Filter") and st.session_state.db
 
 # Chart customization
 st.sidebar.header("Chart Customization")
-
 discrete_mode = st.sidebar.radio("Color Mode", ["Discrete (by type)", "Continuous (by count)"]) == "Discrete (by type)"
 if discrete_mode:
     st.sidebar.info("In Discrete mode, colors are assigned by material type using Plotly's qualitative colors. Color map selection is used only in Continuous mode.")
@@ -1265,7 +1280,7 @@ if st.session_state.data_df is not None:
         st.session_state.expanded_layers[layer_idx] = st.session_state[f"top_n_layer_{layer_idx}"]
 
     if st.sidebar.button("Add Another Layer"):
-        if len(st.session_state.expanded_layers) < 5:  # Limit to 5 layers to prevent excessive complexity
+        if len(st.session_state.expanded_layers) < 5:
             st.session_state.expanded_layers.append(5)
             update_log(f"Added new layer, total layers: {len(st.session_state.expanded_layers)}")
         else:
@@ -1312,7 +1327,6 @@ if st.session_state.data_df is not None:
 
 # Generate charts
 if st.session_state.data_df is not None:
-    # First chart (original sunburst)
     st.subheader("Full Hierarchy Sunburst Chart")
     fig_sunburst, hierarchy_data = create_three_tier_sunburst(
         st.session_state.data_df,
@@ -1334,7 +1348,6 @@ if st.session_state.data_df is not None:
     if fig_sunburst:
         st.plotly_chart(fig_sunburst, use_container_width=True)
     
-    # Second chart (top N materials)
     st.subheader(f"Top {top_n} Materials Sunburst Chart")
     if st.sidebar.button("Generate Top N Materials Chart"):
         with st.spinner("Generating top N materials chart..."):
@@ -1359,7 +1372,6 @@ if st.session_state.data_df is not None:
             else:
                 st.warning("Unable to generate top N materials chart. Check data format.")
     
-    # Third chart (expanded sunburst)
     st.subheader(f"Expanded Sunburst Chart with {len(st.session_state.expanded_layers)} Layers")
     if st.sidebar.button("Generate Expanded Sunburst Chart"):
         with st.spinner("Generating expanded sunburst chart..."):
@@ -1384,7 +1396,6 @@ if st.session_state.data_df is not None:
             else:
                 st.warning("Unable to generate expanded sunburst chart. Check data format or logs for details.")
     
-    # Export options
     if fig_sunburst:
         st.subheader("Export Options")
         col1, col2, col3, col4 = st.columns(4)
