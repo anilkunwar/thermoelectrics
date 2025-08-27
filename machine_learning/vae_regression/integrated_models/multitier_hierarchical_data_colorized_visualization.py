@@ -136,7 +136,8 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             if 'material' in df.columns:
                 df = df[~df["material"].isin(excluded_labels)]
             if 'classification' in df.columns:
-                df = df[~df["classification'].isin(excluded_labels)]
+                df = df[~df["classification"].isin(excluded_labels)]
+
         
         # Standardize column names
         if 'material' in df.columns and 'classification' in df.columns:
