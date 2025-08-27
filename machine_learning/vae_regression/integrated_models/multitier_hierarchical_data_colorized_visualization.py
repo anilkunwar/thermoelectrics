@@ -740,12 +740,19 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             colormap_choice = 'cividis'
 
         if excluded_labels:
+            # Combine conditions with element-wise OR
+            mask = False
             if 'material_type' in df.columns:
-                df = df[~df["material_type"].isin(excluded_labels)]
+                mask |= df["material_type"].isin(excluded_labels)
             if 'material' in df.columns:
-                df = df[~df["material"].isin(excluded_labels)]
+                mask |= df["material"].isin(excluded_labels)
             if 'classification' in df.columns:
-                df = df[~df["classification"].isin(excluded_labels)]
+                mask |= df["classification"].isin(excluded_labels)
+            if mask is not False:
+                df = df[~mask]
+                update_log(f"Excluded {mask.sum()} rows based on excluded_labels")
+            else:
+                update_log("No valid columns for exclusion filtering")
         
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
