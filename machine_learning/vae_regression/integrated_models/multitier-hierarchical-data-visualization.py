@@ -92,9 +92,18 @@ COLOR_SCALES = [
 
 # Secondary color scale for "Other" categories
 OTHER_COLOR_SCALES = {
-    'p-type': 'blues',  # Light blue shades for Other p-type
-    'n-type': 'reds'    # Light red shades for Other n-type
+    'p-type': 'Blues',  # Capitalized to match Plotly's sequential color scales
+    'n-type': 'Reds'    # Capitalized to match Plotly's sequential color scales
 }
+
+# Validate color scales
+def validate_color_scale(scale_name):
+    """Check if a color scale exists in px.colors.sequential"""
+    try:
+        return px.colors.sequential.__dict__[scale_name]
+    except KeyError:
+        update_log(f"Color scale '{scale_name}' not found in px.colors.sequential. Using 'Greys' as fallback.")
+        return px.colors.sequential.Greys
 
 def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, label_fontsize, 
                               excluded_labels, year_range=None, chart_height=800, branchvalues='total',
@@ -379,7 +388,7 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
     try:
         if df is None or df.empty:
             st.error("No data available for visualization")
-            return None, None
+            return None, None, None
         
         # Validate colormap_choice
         if colormap_choice.lower() not in COLOR_SCALES:
@@ -407,7 +416,7 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         if not all(col in df.columns for col in required_cols):
             missing = [col for col in required_cols if col not in df.columns]
             st.error(f"Missing required columns: {', '.join(missing)}")
-            return None, None
+            return None, None, None
         
         # Create hierarchy data with top N materials
         if 'year' in df.columns:
@@ -490,8 +499,8 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                     if t.startswith('Other'):
                         # Use specific color scale for "Other" based on material type
                         mtype = t.split(' ')[1]
-                        other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
-                        color_map[t] = other_colors[min(i, len(other_colors)-1)]
+                        other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
+                        color_map[t] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
                     else:
                         color_map[t] = colors[i % len(colors)]
                 
@@ -532,8 +541,7 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                         mask = hierarchy_data['label'] == f'Other {mtype}'
                         if mask.any():
                             other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
-                            other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
-                            # Map count to a color in the secondary scale
+                            other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                             color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
                             colors[mask] = other_colors[color_idx]
                 
@@ -616,8 +624,8 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 for i, t in enumerate(unique_types):
                     if t.startswith('Other'):
                         mtype = t.split(' ')[1]
-                        other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
-                        color_map[t] = other_colors[min(i, len(other_colors)-1)]
+                        other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
+                        color_map[t] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
                     else:
                         color_map[t] = colors[i % len(colors)]
                 
@@ -656,7 +664,7 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                         mask = hierarchy_data['label'] == f'Other {mtype}'
                         if mask.any():
                             other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
-                            other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
+                            other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                             color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
                             colors[mask] = other_colors[color_idx]
                 
@@ -720,6 +728,7 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
     try:
         if df is None or df.empty:
             st.error("No data available for visualization")
+            update_log("No data available for expanded sunburst chart")
             return None, None
         
         # Validate colormap_choice
@@ -748,7 +757,16 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
         if not all(col in df.columns for col in required_cols):
             missing = [col for col in required_cols if col not in df.columns]
             st.error(f"Missing required columns: {', '.join(missing)}")
+            update_log(f"Missing required columns for expanded sunburst: {', '.join(missing)}")
             return None, None
+        
+        # Check if enough data for expansion
+        unique_formulas = df.groupby(['material_type', 'year'] if 'year' in df.columns else ['material_type'])['formula'].nunique()
+        max_formulas = unique_formulas.min()
+        if max_formulas < max(top_ns):
+            st.warning(f"Insufficient unique formulas ({max_formulas}) for requested top {max(top_ns)} in some categories. Adjusting layers.")
+            update_log(f"Insufficient unique formulas ({max_formulas}) for top {max(top_ns)}")
+            top_ns = [min(n, max_formulas) for n in top_ns]
         
         # Initialize hierarchy data
         hierarchy_data = []
@@ -781,7 +799,7 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                         
                         # Add top formulas
                         type_data = top_formulas.copy()
-                        type_data['parent'] = parent_level
+                        type_data['parent'] = type_id if layer_idx == 0 else f"{year}_{mtype}_other_{layer_idx-1}"
                         type_data['id'] = type_data['formula'].apply(lambda x: f"{type_id}_{x}")
                         
                         if not other_data.empty and layer_idx < len(top_ns) - 1:
@@ -801,17 +819,38 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                 if grouped_data:
                     sunburst_data = pd.concat(grouped_data, ignore_index=True)
                     all_sunburst_data.append(sunburst_data)
+                else:
+                    update_log(f"No data for layer {layer_idx + 1}")
+                    break
                 
                 # Prepare for next layer
                 if layer_idx < len(top_ns) - 1:
                     # Filter to only the "Other" categories for the next layer
                     other_data = sunburst_data[sunburst_data['formula'].str.startswith('Other')]
                     if other_data.empty:
+                        update_log(f"No 'Other' categories to expand in layer {layer_idx + 1}")
                         break
-                    sunburst_data = other_data.rename(columns={'formula': 'original_formula'})
-                    sunburst_data['formula'] = sunburst_data['original_formula'].apply(lambda x: f"Sub-{x}")
-                    sunburst_data['id'] = sunburst_data['id'].apply(lambda x: f"{x}_sub")
-                
+                    # Use original data to get formulas for "Other" categories
+                    other_ids = other_data['id'].tolist()
+                    other_formulas = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
+                    for idx, row in other_data.iterrows():
+                        year, mtype = row['year'], row['material_type']
+                        prev_formulas = sunburst_data[sunburst_data['id'].str.startswith(f"{year}_{mtype}") & 
+                                                     ~sunburst_data['formula'].str.startswith('Other')]['formula'].tolist()
+                        other_formulas = other_formulas[
+                            (other_formulas['year'] == year) & 
+                            (other_formulas['material_type'] == mtype) & 
+                            (~other_formulas['formula'].isin(prev_formulas))
+                        ]
+                        other_formulas['id'] = other_formulas['formula'].apply(lambda x: f"{row['id']}_{x}")
+                        other_formulas['parent'] = row['id']
+                        grouped_data.append(other_formulas)
+                    if grouped_data:
+                        sunburst_data = pd.concat(grouped_data, ignore_index=True)
+                    else:
+                        update_log(f"No remaining formulas for layer {layer_idx + 2}")
+                        break
+            
             # Create hierarchy levels
             years = sunburst_data[['year']].drop_duplicates()
             years['parent'] = ''
@@ -849,13 +888,15 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             
             # Create the sunburst chart
             if discrete_mode:
-                unique_labels = hierarchy_data[hierarchy_data['parent'].str.contains('_')]['label'].unique()
+                unique_labels = hierarchy_data[hierarchy_data['parent'].str.contains('_') | (hierarchy_data['parent'] == '')]['label'].unique()
                 color_map = {}
                 colors = px.colors.qualitative.Plotly
                 for i, t in enumerate(unique_labels):
                     if t.startswith('Other') or t.startswith('Sub-Other'):
-                        mtype = t.split(' ')[1].split('L')[0] if 'L' in t else t.split(' ')[1]
-                        other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
+                        # Extract material type (e.g., 'p-type' or 'n-type') from label
+                        mtype_parts = t.split(' ')[1].split('L')[0] if 'L' in t else t.split(' ')[1]
+                        mtype = mtype_parts if mtype_parts in ['p-type', 'n-type'] else 'p-type'  # Fallback to p-type
+                        other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                         color_map[t] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
                     else:
                         color_map[t] = colors[i % len(colors)]
@@ -890,13 +931,13 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
                 
                 colors = hierarchy_data['count'].copy()
-                other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other')
+                other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other', na=False)
                 if other_mask.any():
                     for mtype in ['p-type', 'n-type']:
-                        mask = hierarchy_data['label'].str.contains(f'Other {mtype}|Sub-Other {mtype}')
+                        mask = hierarchy_data['label'].str.contains(f'Other {mtype}|Sub-Other {mtype}', na=False)
                         if mask.any():
                             other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
-                            other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
+                            other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                             color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
                             colors[mask] = other_colors[color_idx]
                 
@@ -940,7 +981,7 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                     type_id = mtype if layer_idx == 0 else f"{mtype}_other_{layer_idx-1}"
                     
                     type_data = top_formulas.copy()
-                    type_data['parent'] = parent_level
+                    type_data['parent'] = type_id if layer_idx == 0 else f"{mtype}_other_{layer_idx-1}"
                     type_data['id'] = type_data['formula'].apply(lambda x: f"{type_id}_{x}")
                     
                     if not other_data.empty and layer_idx < len(top_ns) - 1:
@@ -959,14 +1000,32 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                 if grouped_data:
                     sunburst_data = pd.concat(grouped_data, ignore_index=True)
                     all_sunburst_data.append(sunburst_data)
+                else:
+                    update_log(f"No data for layer {layer_idx + 1} (no year)")
+                    break
                 
                 if layer_idx < len(top_ns) - 1:
                     other_data = sunburst_data[sunburst_data['formula'].str.startswith('Other')]
                     if other_data.empty:
+                        update_log(f"No 'Other' categories to expand in layer {layer_idx + 1} (no year)")
                         break
-                    sunburst_data = other_data.rename(columns={'formula': 'original_formula'})
-                    sunburst_data['formula'] = sunburst_data['original_formula'].apply(lambda x: f"Sub-{x}")
-                    sunburst_data['id'] = sunburst_data['id'].apply(lambda x: f"{x}_sub")
+                    other_formulas = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
+                    for idx, row in other_data.iterrows():
+                        mtype = row['material_type']
+                        prev_formulas = sunburst_data[sunburst_data['material_type'] == mtype & 
+                                                     ~sunburst_data['formula'].str.startswith('Other')]['formula'].tolist()
+                        other_formulas = other_formulas[
+                            (other_formulas['material_type'] == mtype) & 
+                            (~other_formulas['formula'].isin(prev_formulas))
+                        ]
+                        other_formulas['id'] = other_formulas['formula'].apply(lambda x: f"{row['id']}_{x}")
+                        other_formulas['parent'] = row['id']
+                        grouped_data.append(other_formulas)
+                    if grouped_data:
+                        sunburst_data = pd.concat(grouped_data, ignore_index=True)
+                    else:
+                        update_log(f"No remaining formulas for layer {layer_idx + 2} (no year)")
+                        break
             
             types = sunburst_data[['material_type']].drop_duplicates()
             types['parent'] = ''
@@ -995,8 +1054,9 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                 colors = px.colors.qualitative.Plotly
                 for i, t in enumerate(unique_types):
                     if t.startswith('Other') or t.startswith('Sub-Other'):
-                        mtype = t.split(' ')[1].split('L')[0] if 'L' in t else t.split(' ')[1]
-                        other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
+                        mtype_parts = t.split(' ')[1].split('L')[0] if 'L' in t else t.split(' ')[1]
+                        mtype = mtype_parts if mtype_parts in ['p-type', 'n-type'] else 'p-type'
+                        other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                         color_map[t] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
                     else:
                         color_map[t] = colors[i % len(colors)]
@@ -1030,13 +1090,13 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
                     hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
                 
                 colors = hierarchy_data['count'].copy()
-                other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other')
+                other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other', na=False)
                 if other_mask.any():
                     for mtype in ['p-type', 'n-type']:
-                        mask = hierarchy_data['label'].str.contains(f'Other {mtype}|Sub-Other {mtype}')
+                        mask = hierarchy_data['label'].str.contains(f'Other {mtype}|Sub-Other {mtype}', na=False)
                         if mask.any():
                             other_count = hierarchy_data.loc[mask, 'count'].iloc[0]
-                            other_colors = px.colors.sequential.__dict__[OTHER_COLOR_SCALES.get(mtype, 'greys')]
+                            other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                             color_idx = min(int((other_count / hierarchy_data['count'].max()) * (len(other_colors) - 1)), len(other_colors) - 1)
                             colors[mask] = other_colors[color_idx]
                 
@@ -1110,7 +1170,7 @@ if "hierarchy_data" not in st.session_state:
     st.session_state.hierarchy_data = None
 
 if "expanded_layers" not in st.session_state:
-    st.session_state.expanded_layers = [5]  # Initial top N for first layer
+    st.session_state.expanded_layers = [5, 5, 5]  # Initialize with 3 layers
 
 # Database selection
 st.sidebar.header("Data Source")
@@ -1205,8 +1265,12 @@ if st.session_state.data_df is not None:
         st.session_state.expanded_layers[layer_idx] = st.session_state[f"top_n_layer_{layer_idx}"]
 
     if st.sidebar.button("Add Another Layer"):
-        st.session_state.expanded_layers.append(5)
-        update_log(f"Added new layer, total layers: {len(st.session_state.expanded_layers)}")
+        if len(st.session_state.expanded_layers) < 5:  # Limit to 5 layers to prevent excessive complexity
+            st.session_state.expanded_layers.append(5)
+            update_log(f"Added new layer, total layers: {len(st.session_state.expanded_layers)}")
+        else:
+            st.sidebar.warning("Maximum number of layers (5) reached.")
+            update_log("Attempted to add layer beyond maximum (5)")
 
 # Data summary
 if st.session_state.data_df is not None:
@@ -1318,7 +1382,7 @@ if st.session_state.data_df is not None:
             if fig_expanded:
                 st.plotly_chart(fig_expanded, use_container_width=True)
             else:
-                st.warning("Unable to generate expanded sunburst chart. Check data format.")
+                st.warning("Unable to generate expanded sunburst chart. Check data format or logs for details.")
     
     # Export options
     if fig_sunburst:
