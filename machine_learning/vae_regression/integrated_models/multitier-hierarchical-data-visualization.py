@@ -1228,7 +1228,7 @@ colormap_choice = st.sidebar.selectbox(
 )
 
 show_labels = st.sidebar.checkbox("Show Labels", value=True)
-label_fontsize = st.sidebar.slider("Label Font Size", 8, 24, 12)
+label_fontsize = st.sidebar.slider("Label Font Size", 8, 100, 12)
 chart_height = st.sidebar.slider("Chart Height", 400, 1200, 800)
 branchvalues = st.sidebar.selectbox("Branch Values", ["total", "remainder"], index=0)
 
