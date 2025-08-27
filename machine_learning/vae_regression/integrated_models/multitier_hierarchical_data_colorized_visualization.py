@@ -143,6 +143,29 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
                 color_map[label] = other_colors[-1]
     return color_map
 
+def filter_excluded_labels(df, excluded_labels, update_log=None):
+    """Filter out rows where any of the relevant columns match excluded_labels."""
+    if not excluded_labels:
+        return df
+    
+    mask = False
+    if 'material_type' in df.columns:
+        mask |= df["material_type"].isin(excluded_labels)
+    if 'material' in df.columns:
+        mask |= df["material"].isin(excluded_labels)
+    if 'classification' in df.columns:
+        mask |= df["classification"].isin(excluded_labels)
+
+    if isinstance(mask, pd.Series) and mask.any():
+        df = df[~mask]
+        if update_log:
+            update_log(f"Excluded {mask.sum()} rows based on excluded_labels")
+    else:
+        if update_log:
+            update_log("No valid rows matched for exclusion filtering")
+
+    return df
+
 def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, label_fontsize, 
                               excluded_labels, year_range=None, chart_height=800, branchvalues='total',
                               label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, colorblind_safe=False):
@@ -155,13 +178,8 @@ def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, 
             update_log(f"Invalid colormap '{colormap_choice}' selected. Falling back to 'cividis'.")
             colormap_choice = 'cividis'
 
-        if excluded_labels:
-            if 'material_type' in df.columns:
-                df = df[~df["material_type"].isin(excluded_labels)]
-            if 'material' in df.columns:
-                df = df[~df["material"].isin(excluded_labels)]
-            if 'classification' in df.columns:
-                df = df[~df["classification"].isin(excluded_labels)]
+        # Apply exclusion filtering
+        df = filter_excluded_labels(df, excluded_labels, update_log)
         
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
@@ -418,13 +436,8 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             update_log(f"Invalid colormap '{colormap_choice}' selected. Falling back to 'cividis'.")
             colormap_choice = 'cividis'
 
-        if excluded_labels:
-            if 'material_type' in df.columns:
-                df = df[~df["material_type"].isin(excluded_labels)]
-            if 'material' in df.columns:
-                df = df[~df["material"].isin(excluded_labels)]
-            if 'classification' in df.columns:
-                df = df[~df["classification"].isin(excluded_labels)]
+        # Apply exclusion filtering
+        df = filter_excluded_labels(df, excluded_labels, update_log)
         
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
@@ -739,21 +752,9 @@ def create_expanded_sunburst(df, top_ns, colormap_choice, discrete_mode, show_la
             update_log(f"Invalid colormap '{colormap_choice}' selected. Falling back to 'cividis'.")
             colormap_choice = 'cividis'
 
-        if excluded_labels:
-            # Combine conditions with element-wise OR
-            mask = False
-            if 'material_type' in df.columns:
-                mask |= df["material_type"].isin(excluded_labels)
-            if 'material' in df.columns:
-                mask |= df["material"].isin(excluded_labels)
-            if 'classification' in df.columns:
-                mask |= df["classification"].isin(excluded_labels)
-            if mask is not False:
-                df = df[~mask]
-                update_log(f"Excluded {mask.sum()} rows based on excluded_labels")
-            else:
-                update_log("No valid columns for exclusion filtering")
-        
+        # Apply exclusion filtering
+        df = filter_excluded_labels(df, excluded_labels, update_log)
+
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
         
