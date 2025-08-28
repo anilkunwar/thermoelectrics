@@ -154,8 +154,8 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
                 other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                 color_map[label] = other_colors[-1]
             elif label not in color_map:
-                # Use darker gray for non-highlighted materials to increase contrast
-                color_map[label] = '#A9A9A9'  # Changed from #D3D3D3 to darker gray
+                # Use light gray for non-highlighted materials
+                color_map[label] = '#D3D3D3'
     return color_map
 
 def filter_excluded_labels(df, excluded_labels, update_log=None):
@@ -878,17 +878,6 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe, highlight_materials))
         st.session_state.color_map = color_map
         
-        # Add font size and style columns for highlighted materials
-        hierarchy_data['font_size'] = hierarchy_data['label'].apply(lambda x: int(label_fontsize * 1.5) if x in highlight_materials else label_fontsize)
-        hierarchy_data['font_weight'] = hierarchy_data['label'].apply(lambda x: 'bold' if x in highlight_materials else 'normal')
-        
-        # Add outline for highlighted materials
-        line_widths = hierarchy_data['label'].apply(lambda x: 2 if x in highlight_materials else 0).tolist()
-        line_colors = hierarchy_data['label'].apply(lambda x: '#000000' if x in highlight_materials else hierarchy_data['color']).tolist()
-        
-        # Optional: Add pattern for highlighted materials (commented out, enable if desired)
-        # patterns = hierarchy_data['label'].apply(lambda x: dict(shape='|', fillmode='overlay') if x in highlight_materials else dict(shape='')).tolist()
-        
         if discrete_mode:
             hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
             hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'
@@ -903,11 +892,7 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                 parents=hierarchy_data['parent'],
                 values=hierarchy_data['scaled_count'],  # Use scaled_count for visibility
                 branchvalues=branchvalues,
-                marker=dict(
-                    colors=hierarchy_data['color'],
-                    line=dict(width=line_widths, color=line_colors),
-                    # pattern=patterns  # Uncomment to enable patterns
-                ),
+                marker=dict(colors=hierarchy_data['color']),
                 hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                 textinfo="label+text" if show_labels else "none",
                 texttemplate=(
@@ -915,11 +900,7 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     ("<br>%{value}" if show_values else "") + 
                     ("<br>%{percentParent:.1%}" if show_percentages else "")
                 ),
-                textfont=dict(
-                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
-                    family="Arial, sans-serif",
-                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
-                ),
+                textfont=dict(size=label_fontsize),
                 insidetextorientation='horizontal'
             ))
         else:
@@ -942,9 +923,7 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     showscale=True,
                     colorbar=dict(title="Log(Scaled Count+1)"),
                     cmin=colors.min(),
-                    cmax=colors.max(),
-                    line=dict(width=line_widths, color=line_colors),
-                    # pattern=patterns  # Uncomment to enable patterns
+                    cmax=colors.max()
                 ),
                 hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                 textinfo="label+text" if show_labels else "none",
@@ -953,11 +932,7 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     ("<br>%{value}" if show_values else "") + 
                     ("<br>%{percentParent:.1%}" if show_percentages else "")
                 ),
-                textfont=dict(
-                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
-                    family="Arial, sans-serif",
-                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
-                ),
+                textfont=dict(size=label_fontsize),
                 insidetextorientation='horizontal'
             ))
 
