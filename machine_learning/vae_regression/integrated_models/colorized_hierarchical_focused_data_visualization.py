@@ -1,4 +1,3 @@
-```python
 import os
 import pandas as pd
 import plotly.express as px
@@ -1282,4 +1281,23 @@ if st.session_state.data_df is not None:
             2. **Use the camera icon** in the chart to export as high-resolution PNG
             3. **Adjust the chart height** for better proportions
             4. **Use colorblind-safe palette** for accessibility
-            5. **Use Discrete mode**
+            5. **Use Discrete mode** for clear differentiation of material types
+            6. **Assign custom colors** to highlight specific materials or types
+            7. **Export hierarchy data** as CSV or JSON for further analysis in other tools
+            8. **Check logs** below for any data or rendering issues
+            9. **Adjust Minimum Count Scale** to enhance visibility of small segments
+            """)
+        
+        with st.expander("View Application Logs"):
+            if 'log_buffer' in st.session_state and st.session_state.log_buffer:
+                st.text_area("Logs (last 20 entries)", "\n".join(st.session_state.log_buffer), height=200)
+            else:
+                st.info("No logs available yet.")
+        
+        with st.expander("View Color Map"):
+            if 'color_map' in st.session_state and st.session_state.color_map:
+                st.write("Current color assignments:")
+                for label, color in st.session_state.color_map.items():
+                    st.markdown(f"<span style='color:{color};font-weight:bold'>{label}</span>: {color}", unsafe_allow_html=True)
+            else:
+                st.info("No color map available. Generate a chart to see color assignments.")
