@@ -8,6 +8,7 @@ from datetime import datetime
 import logging
 import json
 import numpy as np
+import uuid
 
 # Directory setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -107,6 +108,7 @@ COLOR_SCALES = [
 ]
 DISCRETE_COLORS = px.colors.qualitative.D3 + px.colors.qualitative.Set3
 COLORBLIND_DISCRETE = px.colors.qualitative.Safe
+HIGHLIGHT_COLORS = px.colors.qualitative.Plotly  # Bright colors for highlighted materials
 OTHER_COLOR_SCALES = {'p-type': 'Blues', 'n-type': 'Reds'}
 
 def validate_color_scale(scale_name):
@@ -120,27 +122,40 @@ def validate_color_scale(scale_name):
         update_log(f"Invalid color scale '{scale_name}': {str(e)}. Falling back to Greys.")
         return px.colors.sequential.Greys
 
-def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe):
+def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe, highlight_materials=None):
     color_map = custom_colors.copy()
+    highlight_materials = highlight_materials or []
+    
     if discrete_mode:
         colors = COLORBLIND_DISCRETE if colorblind_safe else DISCRETE_COLORS
+        highlight_colors = HIGHLIGHT_COLORS
         for i, label in enumerate(labels):
-            if label not in color_map:
+            if label in highlight_materials:
+                # Use bright, distinct colors for highlighted materials
+                color_map[label] = highlight_colors[i % len(highlight_colors)]
+            elif label not in color_map:
                 if label.startswith('Other') or label.startswith('Sub-Other'):
                     mtype = label.split(' ')[1].split('L')[0] if 'L' in label else label.split(' ')[1]
                     mtype = mtype if mtype in ['p-type', 'n-type'] else 'p-type'
                     other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                     color_map[label] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
                 else:
+                    # Use faded colors for non-highlighted materials
                     color_map[label] = colors[i % len(colors)]
     else:
         colors = validate_color_scale(colormap_choice if colormap_choice in COLOR_SCALES else 'cividis')
         for label in labels:
-            if label not in color_map and (label.startswith('Other') or label.startswith('Sub-Other')):
+            if label in highlight_materials:
+                # Use bright colors for highlighted materials
+                color_map[label] = HIGHLIGHT_COLORS[labels.tolist().index(label) % len(HIGHLIGHT_COLORS)]
+            elif label not in color_map and (label.startswith('Other') or label.startswith('Sub-Other')):
                 mtype = label.split(' ')[1].split('L')[0] if 'L' in label else label.split(' ')[1]
                 mtype = mtype if mtype in ['p-type', 'n-type'] else 'p-type'
                 other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                 color_map[label] = other_colors[-1]
+            elif label not in color_map:
+                # Use faded colors for non-highlighted materials
+                color_map[label] = '#D3D3D3'  # Light gray for background
     return color_map
 
 def filter_excluded_labels(df, excluded_labels, update_log=None):
@@ -739,13 +754,14 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         update_log(traceback.format_exc())
         return None, None, None
 
-def create_focused_sunburst(df, focus_materials, colormap_choice, discrete_mode, show_labels, label_fontsize, 
-                           excluded_labels, year_range=None, chart_height=1000, branchvalues='total',
-                           label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, colorblind_safe=False):
+def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discrete_mode, show_labels, label_fontsize, 
+                               excluded_labels, year_range=None, chart_height=800, branchvalues='total',
+                               label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, 
+                               colorblind_safe=False, min_count_scale=5.0):
     try:
         if df is None or df.empty:
             st.error("No data available for visualization")
-            update_log("No data available for focused sunburst chart")
+            update_log("No data available for highlighted sunburst chart")
             return None, None
         
         if colormap_choice.lower() not in COLOR_SCALES:
@@ -766,22 +782,10 @@ def create_focused_sunburst(df, focus_materials, colormap_choice, discrete_mode,
         if not all(col in df.columns for col in required_cols):
             missing = [col for col in required_cols if col not in df.columns]
             st.error(f"Missing required columns: {', '.join(missing)}")
-            update_log(f"Missing required columns for focused sunburst: {', '.join(missing)}")
+            update_log(f"Missing required columns for highlighted sunburst: {', '.join(missing)}")
             return None, None
         
-        # Filter to focus materials
-        if not focus_materials:
-            st.error("No materials selected for focused view")
-            update_log("No materials selected for focused sunburst")
-            return None, None
-        
-        df = df[df['formula'].isin(focus_materials)]
-        if df.empty:
-            st.error("No data available for selected materials after filtering")
-            update_log(f"No data for selected materials: {focus_materials}")
-            return None, None
-        
-        update_log(f"Filtered to {len(df)} rows for materials: {focus_materials}")
+        update_log(f"Generating highlighted sunburst for materials: {highlight_materials}")
 
         if 'count' in df.columns:
             df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
@@ -792,9 +796,13 @@ def create_focused_sunburst(df, focus_materials, colormap_choice, discrete_mode,
             if year_range:
                 df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
         
+        # Create hierarchy data
         if 'year' in df.columns:
             sunburst_data = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
             sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
+            
+            # Scale small counts for visibility
+            sunburst_data['scaled_count'] = sunburst_data['count'].apply(lambda x: max(x, min_count_scale) if x > 0 and x <= 2 else x)
             
             sunburst_data['year_id'] = sunburst_data['year'].astype(str)
             sunburst_data['type_id'] = sunburst_data['year_id'] + '_' + sunburst_data['material_type']
@@ -808,28 +816,37 @@ def create_focused_sunburst(df, focus_materials, colormap_choice, discrete_mode,
             types['parent'] = types['year_id']
             types['id'] = types['type_id']
             
-            formulas = sunburst_data[['formula_id', 'formula', 'count', 'type_id']].copy()
+            formulas = sunburst_data[['formula_id', 'formula', 'count', 'scaled_count', 'type_id']].copy()
             formulas['parent'] = formulas['type_id']
             formulas['id'] = formulas['formula_id']
             
             hierarchy_data = pd.concat([
                 years[['id', 'parent', 'year']].rename(columns={'year': 'label'}),
                 types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
-                formulas[['id', 'parent', 'formula', 'count']].rename(columns={'formula': 'label'})
+                formulas[['id', 'parent', 'formula', 'count', 'scaled_count']].rename(columns={'formula': 'label'})
             ], ignore_index=True)
             
             for type_id in types['id']:
                 type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
+                type_scaled_sum = formulas[formulas['parent'] == type_id]['scaled_count'].sum()
                 hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
+                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'scaled_count'] = type_scaled_sum
                 
             for year_id in years['id']:
                 year_sum = types[types['parent'] == year_id]['id'].apply(
                     lambda x: hierarchy_data.loc[hierarchy_data['id'] == x, 'count'].values[0] if not hierarchy_data.loc[hierarchy_data['id'] == x, 'count'].empty else 0
                 ).sum()
+                year_scaled_sum = types[types['parent'] == year_id]['id'].apply(
+                    lambda x: hierarchy_data.loc[hierarchy_data['id'] == x, 'scaled_count'].values[0] if not hierarchy_data.loc[hierarchy_data['id'] == x, 'scaled_count'].empty else 0
+                ).sum()
                 hierarchy_data.loc[hierarchy_data['id'] == year_id, 'count'] = year_sum
+                hierarchy_data.loc[hierarchy_data['id'] == year_id, 'scaled_count'] = year_scaled_sum
         else:
             sunburst_data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
             sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
+            
+            # Scale small counts for visibility
+            sunburst_data['scaled_count'] = sunburst_data['count'].apply(lambda x: max(x, min_count_scale) if x > 0 and x <= 2 else x)
             
             sunburst_data['type_id'] = sunburst_data['material_type']
             sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
@@ -838,25 +855,27 @@ def create_focused_sunburst(df, focus_materials, colormap_choice, discrete_mode,
             types['parent'] = ''
             types['id'] = types['type_id']
             
-            formulas = sunburst_data[['formula_id', 'formula', 'count', 'type_id']].copy()
+            formulas = sunburst_data[['formula_id', 'formula', 'count', 'scaled_count', 'type_id']].copy()
             formulas['parent'] = formulas['type_id']
             formulas['id'] = formulas['formula_id']
             
             hierarchy_data = pd.concat([
                 types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
-                formulas[['id', 'parent', 'formula', 'count']].rename(columns={'formula': 'label'})
+                formulas[['id', 'parent', 'formula', 'count', 'scaled_count']].rename(columns={'formula': 'label'})
             ], ignore_index=True)
             
             for type_id in types['id']:
                 type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
+                type_scaled_sum = formulas[formulas['parent'] == type_id]['scaled_count'].sum()
                 hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
+                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'scaled_count'] = type_scaled_sum
         
         total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
         hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
         
         custom_colors = custom_colors or {}
         unique_labels = hierarchy_data['label'].unique()
-        color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe))
+        color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe, highlight_materials))
         st.session_state.color_map = color_map
         
         if discrete_mode:
@@ -867,13 +886,19 @@ def create_focused_sunburst(df, focus_materials, colormap_choice, discrete_mode,
             if label_threshold > 0:
                 hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
             
+            # Apply opacity to non-highlighted segments
+            hierarchy_data['opacity'] = hierarchy_data['label'].apply(lambda x: 1.0 if x in highlight_materials else 0.4)
+            
             fig = go.Figure(go.Sunburst(
                 ids=hierarchy_data['id'],
                 labels=hierarchy_data['display_text'],
                 parents=hierarchy_data['parent'],
-                values=hierarchy_data['count'],
+                values=hierarchy_data['scaled_count'],  # Use scaled_count for visibility
                 branchvalues=branchvalues,
-                marker=dict(colors=hierarchy_data['color']),
+                marker=dict(
+                    colors=hierarchy_data['color'],
+                    opacity=hierarchy_data['opacity']
+                ),
                 hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                 textinfo="label+text" if show_labels else "none",
                 texttemplate=(
@@ -889,28 +914,22 @@ def create_focused_sunburst(df, focus_materials, colormap_choice, discrete_mode,
             if label_threshold > 0:
                 hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
             
-            colors = np.log1p(hierarchy_data['count'].astype(float))
-            other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other', na=False)
-            if other_mask.any():
-                for mtype in ['p-type', 'n-type']:
-                    mask = hierarchy_data['label'].str.contains(f'Other {mtype}|Sub-Other {mtype}', na=False)
-                    if mask.any():
-                        other_count = hierarchy_data.loc[mask, 'count'].astype(float).iloc[0]
-                        colorscale = validate_color_scale(colormap_choice)
-                        color_idx = min(int((np.log1p(other_count) / colors.max()) * (len(colorscale) - 1)), len(colorscale) - 1)
-                        colors[mask] = colorscale[color_idx]
+            colors = np.log1p(hierarchy_data['scaled_count'].astype(float))
+            hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
+            hierarchy_data['opacity'] = hierarchy_data['label'].apply(lambda x: 1.0 if x in highlight_materials else 0.4)
             
             fig = go.Figure(go.Sunburst(
                 ids=hierarchy_data['id'],
                 labels=hierarchy_data['display_text'],
                 parents=hierarchy_data['parent'],
-                values=hierarchy_data['count'],
+                values=hierarchy_data['scaled_count'],  # Use scaled_count for visibility
                 branchvalues=branchvalues,
                 marker=dict(
-                    colors=colors,
+                    colors=hierarchy_data['color'],
+                    opacity=hierarchy_data['opacity'],
                     colorscale=colormap_choice.lower(),
                     showscale=True,
-                    colorbar=dict(title="Log(Count+1)"),
+                    colorbar=dict(title="Log(Scaled Count+1)"),
                     cmin=colors.min(),
                     cmax=colors.max()
                 ),
@@ -932,7 +951,7 @@ def create_focused_sunburst(df, focus_materials, colormap_choice, discrete_mode,
             margin=dict(t=80, l=20, r=20, b=20),
             font=dict(family="Arial, sans-serif", size=12, color="#000000"),
             title=dict(
-                text=f"Focused Sunburst for Selected Materials: {', '.join(focus_materials)}",
+                text=f"Sunburst with Highlighted Materials: {', '.join(highlight_materials) if highlight_materials else 'None'}",
                 x=0.5,
                 y=0.95,
                 xanchor='center',
@@ -944,8 +963,8 @@ def create_focused_sunburst(df, focus_materials, colormap_choice, discrete_mode,
         return fig, hierarchy_data
 
     except Exception as e:
-        st.error(f"Failed to generate focused sunburst chart: {str(e)}")
-        update_log(f"Focused sunburst chart error: {str(e)}")
+        st.error(f"Failed to generate highlighted sunburst chart: {str(e)}")
+        update_log(f"Highlighted sunburst chart error: {str(e)}")
         import traceback
         update_log(traceback.format_exc())
         return None, None
@@ -1064,18 +1083,21 @@ else:
     top_n = 15
     st.sidebar.info("Load data to adjust top N materials")
 
-# Focused materials selection
-st.sidebar.header("Focused Materials Chart")
+# Highlighted materials selection
+st.sidebar.header("Highlighted Materials Chart")
 if st.session_state.data_df is not None:
     formula_options = st.session_state.data_df['formula'].unique().tolist() if 'formula' in st.session_state.data_df.columns else []
     if 'material' in st.session_state.data_df.columns:
         formula_options.extend(st.session_state.data_df['material'].unique().tolist())
     formula_options = list(set(formula_options))
-    focus_materials = st.sidebar.multiselect("Select Materials to Focus On", options=formula_options,
-                                            help="Select specific materials for an enlarged view in the focused sunburst chart.")
+    highlight_materials = st.sidebar.multiselect("Select Materials to Highlight", options=formula_options,
+                                                help="Select materials to highlight with distinct colors in the sunburst chart.")
+    min_count_scale = st.sidebar.slider("Minimum Count Scale for Small Segments", 1.0, 10.0, 5.0,
+                                        help="Scales the visual size of segments with counts of 1 or 2 for better visibility.")
 else:
-    focus_materials = []
-    st.sidebar.info("Load data to select materials for focused chart")
+    highlight_materials = []
+    min_count_scale = 5.0
+    st.sidebar.info("Load data to select materials for highlighting")
 
 # Data summary
 if st.session_state.data_df is not None:
@@ -1166,12 +1188,12 @@ if st.session_state.data_df is not None:
             else:
                 st.warning("Unable to generate top N materials chart. Check data format.")
     
-    st.subheader("Focused Materials Sunburst Chart")
-    if st.sidebar.button("Generate Focused Materials Chart"):
-        with st.spinner("Generating focused materials chart..."):
-            fig_focused, focused_hierarchy_data = create_focused_sunburst(
+    st.subheader("Highlighted Materials Sunburst Chart")
+    if st.sidebar.button("Generate Highlighted Materials Chart"):
+        with st.spinner("Generating highlighted materials chart..."):
+            fig_highlighted, highlighted_hierarchy_data = create_highlighted_sunburst(
                 st.session_state.data_df,
-                focus_materials,
+                highlight_materials,
                 colormap_choice,
                 discrete_mode,
                 show_labels,
@@ -1184,13 +1206,14 @@ if st.session_state.data_df is not None:
                 show_values,
                 show_percentages,
                 custom_colors=st.session_state.custom_colors,
-                colorblind_safe=colorblind_safe
+                colorblind_safe=colorblind_safe,
+                min_count_scale=min_count_scale
             )
             
-            if fig_focused:
-                st.plotly_chart(fig_focused, use_container_width=True)
+            if fig_highlighted:
+                st.plotly_chart(fig_highlighted, use_container_width=True)
             else:
-                st.warning("Unable to generate focused sunburst chart. Check selected materials or logs for details.")
+                st.warning("Unable to generate highlighted sunburst chart. Check selected materials or logs for details.")
     
     if fig_sunburst:
         st.subheader("Export Options")
@@ -1245,6 +1268,7 @@ if st.session_state.data_df is not None:
             6. **Assign custom colors** to highlight specific materials or types
             7. **Export hierarchy data** as CSV or JSON for further analysis in other tools
             8. **Check logs** below for any data or rendering issues
+            9. **Adjust Minimum Count Scale** to enhance visibility of small segments
             """)
         
         with st.expander("View Application Logs"):
