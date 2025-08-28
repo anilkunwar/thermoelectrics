@@ -154,8 +154,8 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
                 other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                 color_map[label] = other_colors[-1]
             elif label not in color_map:
-                # Use faded colors for non-highlighted materials
-                color_map[label] = '#D3D3D3'  # Light gray for background
+                # Use light gray for non-highlighted materials
+                color_map[label] = '#D3D3D3'
     return color_map
 
 def filter_excluded_labels(df, excluded_labels, update_log=None):
@@ -886,19 +886,13 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
             if label_threshold > 0:
                 hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
             
-            # Apply opacity to non-highlighted segments
-            hierarchy_data['opacity'] = hierarchy_data['label'].apply(lambda x: 1.0 if x in highlight_materials else 0.4)
-            
             fig = go.Figure(go.Sunburst(
                 ids=hierarchy_data['id'],
                 labels=hierarchy_data['display_text'],
                 parents=hierarchy_data['parent'],
                 values=hierarchy_data['scaled_count'],  # Use scaled_count for visibility
                 branchvalues=branchvalues,
-                marker=dict(
-                    colors=hierarchy_data['color'],
-                    opacity=hierarchy_data['opacity']
-                ),
+                marker=dict(colors=hierarchy_data['color']),
                 hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                 textinfo="label+text" if show_labels else "none",
                 texttemplate=(
@@ -916,7 +910,6 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
             
             colors = np.log1p(hierarchy_data['scaled_count'].astype(float))
             hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
-            hierarchy_data['opacity'] = hierarchy_data['label'].apply(lambda x: 1.0 if x in highlight_materials else 0.4)
             
             fig = go.Figure(go.Sunburst(
                 ids=hierarchy_data['id'],
@@ -926,7 +919,6 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                 branchvalues=branchvalues,
                 marker=dict(
                     colors=hierarchy_data['color'],
-                    opacity=hierarchy_data['opacity'],
                     colorscale=colormap_choice.lower(),
                     showscale=True,
                     colorbar=dict(title="Log(Scaled Count+1)"),
