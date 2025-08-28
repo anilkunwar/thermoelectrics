@@ -1,3 +1,4 @@
+```python
 import os
 import pandas as pd
 import plotly.express as px
@@ -154,8 +155,8 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
                 other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                 color_map[label] = other_colors[-1]
             elif label not in color_map:
-                # Use light gray for non-highlighted materials
-                color_map[label] = '#D3D3D3'
+                # Use darker gray for non-highlighted materials to increase contrast
+                color_map[label] = '#A9A9A9'  # Changed from #D3D3D3 to darker gray
     return color_map
 
 def filter_excluded_labels(df, excluded_labels, update_log=None):
@@ -878,6 +879,17 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe, highlight_materials))
         st.session_state.color_map = color_map
         
+        # Add font size and style columns for highlighted materials
+        hierarchy_data['font_size'] = hierarchy_data['label'].apply(lambda x: int(label_fontsize * 1.5) if x in highlight_materials else label_fontsize)
+        hierarchy_data['font_weight'] = hierarchy_data['label'].apply(lambda x: 'bold' if x in highlight_materials else 'normal')
+        
+        # Add outline for highlighted materials
+        line_widths = hierarchy_data['label'].apply(lambda x: 2 if x in highlight_materials else 0).tolist()
+        line_colors = hierarchy_data['label'].apply(lambda x: '#000000' if x in highlight_materials else hierarchy_data['color']).tolist()
+        
+        # Optional: Add pattern for highlighted materials (commented out, enable if desired)
+        # patterns = hierarchy_data['label'].apply(lambda x: dict(shape='|', fillmode='overlay') if x in highlight_materials else dict(shape='')).tolist()
+        
         if discrete_mode:
             hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
             hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'
@@ -892,7 +904,11 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                 parents=hierarchy_data['parent'],
                 values=hierarchy_data['scaled_count'],  # Use scaled_count for visibility
                 branchvalues=branchvalues,
-                marker=dict(colors=hierarchy_data['color']),
+                marker=dict(
+                    colors=hierarchy_data['color'],
+                    line=dict(width=line_widths, color=line_colors),
+                    # pattern=patterns  # Uncomment to enable patterns
+                ),
                 hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                 textinfo="label+text" if show_labels else "none",
                 texttemplate=(
@@ -900,7 +916,11 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     ("<br>%{value}" if show_values else "") + 
                     ("<br>%{percentParent:.1%}" if show_percentages else "")
                 ),
-                textfont=dict(size=label_fontsize),
+                textfont=dict(
+                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
+                    family="Arial, sans-serif",
+                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
+                ),
                 insidetextorientation='horizontal'
             ))
         else:
@@ -923,7 +943,9 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     showscale=True,
                     colorbar=dict(title="Log(Scaled Count+1)"),
                     cmin=colors.min(),
-                    cmax=colors.max()
+                    cmax=colors.max(),
+                    line=dict(width=line_widths, color=line_colors),
+                    # pattern=patterns  # Uncomment to enable patterns
                 ),
                 hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                 textinfo="label+text" if show_labels else "none",
@@ -932,7 +954,11 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     ("<br>%{value}" if show_values else "") + 
                     ("<br>%{percentParent:.1%}" if show_percentages else "")
                 ),
-                textfont=dict(size=label_fontsize),
+                textfont=dict(
+                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
+                    family="Arial, sans-serif",
+                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
+                ),
                 insidetextorientation='horizontal'
             ))
 
@@ -1256,23 +1282,4 @@ if st.session_state.data_df is not None:
             2. **Use the camera icon** in the chart to export as high-resolution PNG
             3. **Adjust the chart height** for better proportions
             4. **Use colorblind-safe palette** for accessibility
-            5. **Use Discrete mode** for clear differentiation of material types
-            6. **Assign custom colors** to highlight specific materials or types
-            7. **Export hierarchy data** as CSV or JSON for further analysis in other tools
-            8. **Check logs** below for any data or rendering issues
-            9. **Adjust Minimum Count Scale** to enhance visibility of small segments
-            """)
-        
-        with st.expander("View Application Logs"):
-            if 'log_buffer' in st.session_state and st.session_state.log_buffer:
-                st.text_area("Logs (last 20 entries)", "\n".join(st.session_state.log_buffer), height=200)
-            else:
-                st.info("No logs available yet.")
-        
-        with st.expander("View Color Map"):
-            if 'color_map' in st.session_state and st.session_state.color_map:
-                st.write("Current color assignments:")
-                for label, color in st.session_state.color_map.items():
-                    st.markdown(f"<span style='color:{color};font-weight:bold'>{label}</span>: {color}", unsafe_allow_html=True)
-            else:
-                st.info("No color map available. Generate a chart to see color assignments.")
+            5. **Use Discrete mode**
