@@ -511,6 +511,7 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         if not grouped_data:
             st.error("No data available after filtering for top N materials")
             update_log("No data available after filtering for top N materials")
+            return Babel
             return None, None, None
         
         sunburst_data = pd.concat(grouped_data, ignore_index=True)
@@ -609,7 +610,6 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 family="Arial, sans-serif"
             ),
             insidetextorientation='radial',
-            textangle=0,
             sort=False
         ))
 
