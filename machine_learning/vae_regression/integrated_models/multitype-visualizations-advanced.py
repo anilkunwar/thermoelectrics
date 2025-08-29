@@ -334,7 +334,6 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         if label_threshold > 0:
             hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
         
-        # Only show parent labels (year or material_type) inside
         hierarchy_data['text_template'] = hierarchy_data.apply(
             lambda row: '' if row['parent'] != '' and row['label'] not in highlight_materials else (
                 f"{row['label']}<br>Count: {row['count']}<br>Type: {row['parent'].split('_')[-1] if '_' in row['parent'] else row['parent']}"
@@ -400,7 +399,6 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                 sort=False
             ))
 
-        # Add annotations for formula labels (outside periphery)
         annotations = []
         if highlight_materials:
             formula_data = hierarchy_data[hierarchy_data['label'].isin(highlight_materials)]
@@ -607,7 +605,6 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         if label_threshold > 0:
             hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
         
-        # Only show parent labels inside
         hierarchy_data['text_template'] = hierarchy_data.apply(
             lambda row: row['display_text'] if row['parent'] == '' else '', axis=1
         )
@@ -668,7 +665,6 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 sort=False
             ))
 
-        # Add annotations for formula labels (outside periphery)
         annotations = []
         formula_data = hierarchy_data[hierarchy_data['parent'].str.contains('_') | (hierarchy_data['parent'] == '')]
         angles = np.linspace(0, 2 * np.pi, len(formula_data) + 1)[:-1]
@@ -880,10 +876,11 @@ def create_histogram(df, top_n, material_type=None, year_range=None, outline_thi
         update_log(traceback.format_exc())
         return None
 
-def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
+def create_network(df, top_n, year_range=None, edge_thickness_scale=5, chart_title_fontsize=20):
     try:
         if df is None or df.empty:
             st.error("No data available for network visualization")
+            update_log("No data available for network visualization")
             return None
         
         if 'material' in df.columns and 'classification' in df.columns:
@@ -895,6 +892,11 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
         data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
         top_data = data.groupby('material_type').apply(lambda x: x.nlargest(top_n, 'count')).reset_index(drop=True)
         
+        if top_data.empty:
+            st.error("No data available after filtering for top N materials")
+            update_log("No data available after filtering for top N materials")
+            return None
+        
         G = nx.Graph()
         color_map = st.session_state.get('color_map', {'p-type': '#d62728', 'n-type': '#1f77b4'})
         
@@ -905,8 +907,16 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
             formula = row['formula']
             mtype = row['material_type']
             count = row['count']
+            if count <= 0:
+                update_log(f"Skipping edge for {formula} (count={count}) due to non-positive weight")
+                continue
             G.add_node(formula, size=max(count * 10, 5), color=color_map.get(formula, color_map.get(mtype, '#808080')))
             G.add_edge(mtype, formula, weight=count)
+        
+        if not G.nodes:
+            st.error("No valid nodes to display in network visualization")
+            update_log("No valid nodes to display in network visualization")
+            return None
         
         total_counts = top_data.groupby('material_type')['count'].sum().to_dict()
         node_labels = {}
@@ -967,8 +977,14 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
         
         fig = go.Figure(data=[edge_trace, node_trace],
                         layout=go.Layout(
-                            title=f"Network of Top {top_n} Materials per Type",
-                            titlefont_size=20,
+                            title=dict(
+                                text=f"Network of Top {top_n} Materials per Type",
+                                x=0.5,
+                                y=0.95,
+                                xanchor='center',
+                                yanchor='top',
+                                font=dict(size=chart_title_fontsize, family="Arial, sans-serif")
+                            ),
                             showlegend=False,
                             hovermode='closest',
                             margin=dict(b=20, l=20, r=20, t=80),
@@ -1336,13 +1352,14 @@ if st.session_state.data_df is not None:
     st.subheader("Network Visualization")
     if st.sidebar.button("Generate Network Visualization"):
         with st.spinner("Generating network visualization..."):
-            network_fig = create_network(st.session_state.data_df, top_n, year_range=year_range, edge_thickness_scale=curve_thickness)
+            network_fig = create_network(st.session_state.data_df, top_n, year_range=year_range, edge_thickness_scale=curve_thickness, chart_title_fontsize=chart_title_fontsize)
             if network_fig:
                 network_fig.update_layout(
-                    title_font_size=chart_title_fontsize,
                     **layout_settings
                 )
                 st.plotly_chart(network_fig, use_container_width=True)
+            else:
+                st.warning("Unable to generate network visualization. Check data format or review logs for details.")
     
     st.subheader("Export Options")
     col1, col2, col3, col4 = st.columns(4)
@@ -1382,12 +1399,15 @@ if st.session_state.data_df is not None:
             update_log(f"JSON export error: {str(e)}")
     
     with col4:
-        st.download_button(
-            label="Download Charts as HTML",
-            data=fig_highlighted.to_html() if 'fig_highlighted' in locals() else "",
-            file_name="thermoelectric_charts.html",
-            mime="text/html"
-        )
+        if 'fig_highlighted' in locals() and fig_highlighted:
+            st.download_button(
+                label="Download Charts as HTML",
+                data=fig_highlighted.to_html(),
+                file_name="thermoelectric_charts.html",
+                mime="text/html"
+            )
+        else:
+            st.info("Generate a chart to enable HTML export")
     
     with st.expander("Publication Quality Tips"):
         st.markdown("""
