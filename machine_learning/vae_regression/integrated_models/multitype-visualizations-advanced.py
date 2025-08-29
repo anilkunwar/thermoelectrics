@@ -9,11 +9,8 @@ import logging
 import json
 import numpy as np
 import uuid
-from wordcloud import WordCloud
-import matplotlib.pyplot as plt
+from graphviz import Digraph
 from io import BytesIO
-from plotly.subplots import make_subplots
-import networkx as nx
 
 # Directory setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -113,7 +110,7 @@ COLOR_SCALES = [
 DISCRETE_COLORS = px.colors.qualitative.D3 + px.colors.qualitative.Set3
 COLORBLIND_DISCRETE = px.colors.qualitative.Safe
 HIGHLIGHT_COLORS = px.colors.qualitative.Plotly
-OTHER_COLOR_SCALES = {'p-type': 'Reds', 'n-type': 'Blues'}
+OTHER_COLOR_SCALES = {'p-type': 'Blues', 'n-type': 'Reds'}
 
 def validate_color_scale(scale_name):
     try:
@@ -142,24 +139,20 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
                     mtype = mtype if mtype in ['p-type', 'n-type'] else 'p-type'
                     other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                     color_map[label] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
-                elif label in ['p-type', 'n-type']:
-                    color_map[label] = validate_color_scale(OTHER_COLOR_SCALES.get(label, 'Greys'))[4]
                 else:
                     color_map[label] = colors[i % len(colors)]
     else:
         colors = validate_color_scale(colormap_choice if colormap_choice in COLOR_SCALES else 'cividis')
-        for i, label in enumerate(labels):
+        for label in labels:
             if label in highlight_materials:
-                color_map[label] = HIGHLIGHT_COLORS[i % len(HIGHLIGHT_COLORS)]
+                color_map[label] = HIGHLIGHT_COLORS[labels.tolist().index(label) % len(HIGHLIGHT_COLORS)]
             elif label not in color_map and (label.startswith('Other') or label.startswith('Sub-Other')):
                 mtype = label.split(' ')[1].split('L')[0] if 'L' in label else label.split(' ')[1]
                 mtype = mtype if mtype in ['p-type', 'n-type'] else 'p-type'
                 other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                 color_map[label] = other_colors[-1]
-            elif label not in color_map and label in ['p-type', 'n-type']:
-                color_map[label] = validate_color_scale(OTHER_COLOR_SCALES.get(label, 'Greys'))[4]
             elif label not in color_map:
-                color_map[label] = colors[i % len(colors)]
+                color_map[label] = '#808080'
     return color_map
 
 def filter_excluded_labels(df, excluded_labels, update_log=None):
@@ -183,14 +176,12 @@ def filter_excluded_labels(df, excluded_labels, update_log=None):
             update_log("No valid rows matched for exclusion filtering")
     return df
 
-def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discrete_mode, show_labels, label_fontsize, 
-                               excluded_labels, year_range=None, chart_height=800, branchvalues='total',
-                               label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, 
-                               colorblind_safe=False, min_count_scale=10.0, outline_thickness=1):
+def create_three_tier_sunburst(df, colormap_choice, discrete_mode, show_labels, label_fontsize, 
+                              excluded_labels, year_range=None, chart_height=800, branchvalues='total',
+                              label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, colorblind_safe=False):
     try:
         if df is None or df.empty:
             st.error("No data available for visualization")
-            update_log("No data available for sunburst chart")
             return None, None
         
         if colormap_choice.lower() not in COLOR_SCALES:
@@ -198,7 +189,7 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
             colormap_choice = 'cividis'
 
         df = filter_excluded_labels(df, excluded_labels, update_log)
-
+        
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
         
@@ -209,21 +200,11 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         if not all(col in df.columns for col in required_cols):
             missing = [col for col in required_cols if col not in df.columns]
             st.error(f"Missing required columns: {', '.join(missing)}")
-            update_log(f"Missing required columns for sunburst: {', '.join(missing)}")
             return None, None
-
-        if 'count' in df.columns:
-            df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
-        
-        if 'year' in df.columns:
-            df['year'] = pd.to_numeric(df['year'], errors='coerce')
-            if year_range:
-                df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
         
         if 'year' in df.columns:
             sunburst_data = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
             sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
-            sunburst_data['scaled_count'] = sunburst_data['count'].apply(lambda x: max(x, min_count_scale) if x > 0 and x <= 2 else x)
             
             sunburst_data['year_id'] = sunburst_data['year'].astype(str)
             sunburst_data['type_id'] = sunburst_data['year_id'] + '_' + sunburst_data['material_type']
@@ -237,35 +218,28 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
             types['parent'] = types['year_id']
             types['id'] = types['type_id']
             
-            formulas = sunburst_data[['formula_id', 'formula', 'count', 'scaled_count', 'type_id']].copy()
+            formulas = sunburst_data[['formula_id', 'formula', 'count', 'type_id']].copy()
             formulas['parent'] = formulas['type_id']
             formulas['id'] = formulas['formula_id']
             
             hierarchy_data = pd.concat([
                 years[['id', 'parent', 'year']].rename(columns={'year': 'label'}),
                 types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
-                formulas[['id', 'parent', 'formula', 'count', 'scaled_count']].rename(columns={'formula': 'label'})
+                formulas[['id', 'parent', 'formula', 'count']].rename(columns={'formula': 'label'})
             ], ignore_index=True)
             
             for type_id in types['id']:
                 type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
-                type_scaled_sum = formulas[formulas['parent'] == type_id]['scaled_count'].sum()
                 hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
-                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'scaled_count'] = type_scaled_sum
                 
             for year_id in years['id']:
                 year_sum = types[types['parent'] == year_id]['id'].apply(
                     lambda x: hierarchy_data.loc[hierarchy_data['id'] == x, 'count'].values[0] if not hierarchy_data.loc[hierarchy_data['id'] == x, 'count'].empty else 0
                 ).sum()
-                year_scaled_sum = types[types['parent'] == year_id]['id'].apply(
-                    lambda x: hierarchy_data.loc[hierarchy_data['id'] == x, 'scaled_count'].values[0] if not hierarchy_data.loc[hierarchy_data['id'] == x, 'scaled_count'].empty else 0
-                ).sum()
                 hierarchy_data.loc[hierarchy_data['id'] == year_id, 'count'] = year_sum
-                hierarchy_data.loc[hierarchy_data['id'] == year_id, 'scaled_count'] = year_scaled_sum
         else:
             sunburst_data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
             sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
-            sunburst_data['scaled_count'] = sunburst_data['count'].apply(lambda x: max(x, min_count_scale) if x > 0 and x <= 2 else x)
             
             sunburst_data['type_id'] = sunburst_data['material_type']
             sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
@@ -274,100 +248,91 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
             types['parent'] = ''
             types['id'] = types['type_id']
             
-            formulas = sunburst_data[['formula_id', 'formula', 'count', 'scaled_count', 'type_id']].copy()
+            formulas = sunburst_data[['formula_id', 'formula', 'count', 'type_id']].copy()
             formulas['parent'] = formulas['type_id']
             formulas['id'] = formulas['formula_id']
             
             hierarchy_data = pd.concat([
                 types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
-                formulas[['id', 'parent', 'formula', 'count', 'scaled_count']].rename(columns={'formula': 'label'})
+                formulas[['id', 'parent', 'formula', 'count']].rename(columns={'formula': 'label'})
             ], ignore_index=True)
             
             for type_id in types['id']:
                 type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
-                type_scaled_sum = formulas[formulas['parent'] == type_id]['scaled_count'].sum()
                 hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
-                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'scaled_count'] = type_scaled_sum
-        
+            
         total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
         hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
         
         custom_colors = custom_colors or {}
         unique_labels = hierarchy_data['label'].unique()
-        color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe, highlight_materials))
+        color_map = create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe)
         st.session_state.color_map = color_map
         
-        hierarchy_data['font_size'] = label_fontsize
-        hierarchy_data['font_weight'] = 'normal'
-        
-        line_widths = [outline_thickness] * len(hierarchy_data)
-        line_colors = ['#FFFFFF'] * len(hierarchy_data)
-        update_log("Using uniform outline thickness for sunburst chart")
-
-        hierarchy_data['display_text'] = hierarchy_data['label']
-        if label_threshold > 0:
-            hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
-        
-        hierarchy_data['text_template'] = hierarchy_data.apply(
-            lambda row: (
-                f"{row['label']}<br>Count: {row['count']}<br>Type: {row['parent'].split('_')[-1] if '_' in row['parent'] else row['parent']}"
-            ), axis=1
-        )
-
         if discrete_mode:
             hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
             hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'
             
-            fig = go.Figure(go.Sunburst(
-                ids=hierarchy_data['id'],
-                labels=hierarchy_data['display_text'],
-                parents=hierarchy_data['parent'],
-                values=hierarchy_data['scaled_count'],
-                branchvalues=branchvalues,
-                marker=dict(
-                    colors=hierarchy_data['color'],
-                    line=dict(width=line_widths, color=line_colors)
-                ),
-                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
-                textinfo="label+text" if show_labels else "none",
-                texttemplate=hierarchy_data['text_template'],
-                textfont=dict(
-                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
-                    family="Arial, sans-serif",
-                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
-                ),
-                insidetextorientation='radial',
-                sort=False
-            ))
-        else:
-            colors = np.log1p(hierarchy_data['scaled_count'].astype(float))
-            hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
+            hierarchy_data['display_text'] = hierarchy_data['label']
+            if label_threshold > 0:
+                hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
             
             fig = go.Figure(go.Sunburst(
                 ids=hierarchy_data['id'],
                 labels=hierarchy_data['display_text'],
                 parents=hierarchy_data['parent'],
-                values=hierarchy_data['scaled_count'],
+                values=hierarchy_data['count'],
+                branchvalues=branchvalues,
+                marker=dict(colors=hierarchy_data['color']),
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                textinfo="label+text" if show_labels else "none",
+                texttemplate=(
+                    "%{label}" + 
+                    ("<br>%{value}" if show_values else "") + 
+                    ("<br>%{percentParent:.1%}" if show_percentages else "")
+                ),
+                textfont=dict(size=label_fontsize),
+                insidetextorientation='horizontal'
+            ))
+        else:
+            hierarchy_data['display_text'] = hierarchy_data['label']
+            if label_threshold > 0:
+                hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+            
+            colors = np.log1p(hierarchy_data['count'].astype(float))
+            other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other', na=False)
+            if other_mask.any():
+                for mtype in ['p-type', 'n-type']:
+                    mask = hierarchy_data['label'].str.contains(f'Other {mtype}|Sub-Other {mtype}', na=False)
+                    if mask.any():
+                        other_count = hierarchy_data.loc[mask, 'count'].astype(float).iloc[0]
+                        colorscale = validate_color_scale(colormap_choice)
+                        color_idx = min(int((np.log1p(other_count) / colors.max()) * (len(colorscale) - 1)), len(colorscale) - 1)
+                        colors[mask] = colorscale[color_idx]
+            
+            fig = go.Figure(go.Sunburst(
+                ids=hierarchy_data['id'],
+                labels=hierarchy_data['display_text'],
+                parents=hierarchy_data['parent'],
+                values=hierarchy_data['count'],
                 branchvalues=branchvalues,
                 marker=dict(
                     colors=colors,
                     colorscale=colormap_choice.lower(),
                     showscale=True,
-                    colorbar=dict(title="Log(Scaled Count+1)"),
+                    colorbar=dict(title="Log(Count+1)"),
                     cmin=colors.min(),
-                    cmax=colors.max(),
-                    line=dict(width=line_widths, color=line_colors)
+                    cmax=colors.max()
                 ),
                 hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                 textinfo="label+text" if show_labels else "none",
-                texttemplate=hierarchy_data['text_template'],
-                textfont=dict(
-                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
-                    family="Arial, sans-serif",
-                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
+                texttemplate=(
+                    "%{label}" + 
+                    ("<br>%{value}" if show_values else "") + 
+                    ("<br>%{percentParent:.1%}" if show_percentages else "")
                 ),
-                insidetextorientation='radial',
-                sort=False
+                textfont=dict(size=label_fontsize),
+                insidetextorientation='horizontal'
             ))
 
         fig.update_layout(
@@ -377,7 +342,7 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
             margin=dict(t=80, l=20, r=20, b=20),
             font=dict(family="Arial, sans-serif", size=12, color="#000000"),
             title=dict(
-                text="Thermoelectric Materials Sunburst Chart",
+                text="Three-Tier Hierarchy of Thermoelectric Materials",
                 x=0.5,
                 y=0.95,
                 xanchor='center',
@@ -389,7 +354,7 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         return fig, hierarchy_data
 
     except Exception as e:
-        st.error(f"Failed to generate sunburst chart: {str(e)}. Check data and review logs for details.")
+        st.error(f"Failed to generate sunburst chart: {str(e)}")
         update_log(f"Sunburst chart error: {str(e)}")
         import traceback
         update_log(traceback.format_exc())
@@ -397,8 +362,7 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
 
 def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels, label_fontsize, 
                          excluded_labels, year_range=None, chart_height=800, branchvalues='total',
-                         label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, 
-                         colorblind_safe=False, outline_thickness=1):
+                         label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, colorblind_safe=False):
     try:
         if df is None or df.empty:
             st.error("No data available for visualization")
@@ -539,45 +503,75 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
         
         custom_colors = custom_colors or {}
-        color_map = {'p-type': '#d62728', 'n-type': '#1f77b4'}  # Red for p-type, Blue for n-type
-        for label in hierarchy_data['label']:
-            if label.startswith('Other p-type'):
-                color_map[label] = '#fd8d3c'
-            elif label.startswith('Other n-type'):
-                color_map[label] = '#6baed6'
-            elif label not in color_map and label not in ['p-type', 'n-type']:
-                mtype = hierarchy_data[hierarchy_data['label'] == label]['parent'].iloc[0].split('_')[-1] if '_' in hierarchy_data[hierarchy_data['label'] == label]['parent'].iloc[0] else hierarchy_data[hierarchy_data['label'] == label]['parent'].iloc[0]
-                color_map[label] = '#d62728' if mtype == 'p-type' else '#1f77b4'
+        unique_labels = hierarchy_data['label'].unique()
+        color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe))
         st.session_state.color_map = color_map
         
-        hierarchy_data['display_text'] = hierarchy_data['label']
-        if label_threshold > 0:
-            hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
-        
-        fig = go.Figure(go.Sunburst(
-            ids=hierarchy_data['id'],
-            labels=hierarchy_data['display_text'],
-            parents=hierarchy_data['parent'],
-            values=hierarchy_data['count'],
-            branchvalues=branchvalues,
-            marker=dict(
-                colors=hierarchy_data['label'].map(color_map),
-                line=dict(width=[outline_thickness if label not in ['p-type', 'n-type'] else 0 for label in hierarchy_data['label']], color=['#FFFFFF'] * len(hierarchy_data))
-            ),
-            hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
-            textinfo="label+text" if show_labels else "none",
-            texttemplate=(
-                "%{label}" + 
-                ("<br>%{value}" if show_values else "") + 
-                ("<br>%{percentParent:.1%}" if show_percentages else "")
-            ),
-            textfont=dict(
-                size=label_fontsize,
-                family="Arial, sans-serif"
-            ),
-            insidetextorientation='radial',
-            sort=False
-        ))
+        if discrete_mode:
+            hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
+            hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'
+            
+            hierarchy_data['display_text'] = hierarchy_data['label']
+            if label_threshold > 0:
+                hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+            
+            fig = go.Figure(go.Sunburst(
+                ids=hierarchy_data['id'],
+                labels=hierarchy_data['display_text'],
+                parents=hierarchy_data['parent'],
+                values=hierarchy_data['count'],
+                branchvalues=branchvalues,
+                marker=dict(colors=hierarchy_data['color']),
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                textinfo="label+text" if show_labels else "none",
+                texttemplate=(
+                    "%{label}" + 
+                    ("<br>%{value}" if show_values else "") + 
+                    ("<br>%{percentParent:.1%}" if show_percentages else "")
+                ),
+                textfont=dict(size=label_fontsize),
+                insidetextorientation='horizontal'
+            ))
+        else:
+            hierarchy_data['display_text'] = hierarchy_data['label']
+            if label_threshold > 0:
+                hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+            
+            colors = np.log1p(hierarchy_data['count'].astype(float))
+            other_mask = hierarchy_data['label'].str.contains('Other|Sub-Other', na=False)
+            if other_mask.any():
+                for mtype in ['p-type', 'n-type']:
+                    mask = hierarchy_data['label'].str.contains(f'Other {mtype}|Sub-Other {mtype}', na=False)
+                    if mask.any():
+                        other_count = hierarchy_data.loc[mask, 'count'].astype(float).iloc[0]
+                        colorscale = validate_color_scale(colormap_choice)
+                        color_idx = min(int((np.log1p(other_count) / colors.max()) * (len(colorscale) - 1)), len(colorscale) - 1)
+                        colors[mask] = colorscale[color_idx]
+            
+            fig = go.Figure(go.Sunburst(
+                ids=hierarchy_data['id'],
+                labels=hierarchy_data['display_text'],
+                parents=hierarchy_data['parent'],
+                values=hierarchy_data['count'],
+                branchvalues=branchvalues,
+                marker=dict(
+                    colors=colors,
+                    colorscale=colormap_choice.lower(),
+                    showscale=True,
+                    colorbar=dict(title="Log(Count+1)"),
+                    cmin=colors.min(),
+                    cmax=colors.max()
+                ),
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                textinfo="label+text" if show_labels else "none",
+                texttemplate=(
+                    "%{label}" + 
+                    ("<br>%{value}" if show_values else "") + 
+                    ("<br>%{percentParent:.1%}" if show_percentages else "")
+                ),
+                textfont=dict(size=label_fontsize),
+                insidetextorientation='horizontal'
+            ))
 
         fig.update_layout(
             height=chart_height,
@@ -586,7 +580,7 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             margin=dict(t=80, l=20, r=20, b=20),
             font=dict(family="Arial, sans-serif", size=12, color="#000000"),
             title=dict(
-                text=f"Top {top_n} Thermoelectric Materials per Type",
+                text="Three-Tier Hierarchy of Thermoelectric Materials",
                 x=0.5,
                 y=0.95,
                 xanchor='center',
@@ -595,179 +589,259 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             )
         )
 
-        return fig, hierarchy_data, sunburst_data
+        return fig, hierarchy_data
 
     except Exception as e:
-        st.error(f"Failed to generate top N sunburst chart: {str(e)}")
-        update_log(f"Top N sunburst chart error: {str(e)}")
+        st.error(f"Failed to generate sunburst chart: {str(e)}")
+        update_log(f"Sunburst chart error: {str(e)}")
         import traceback
         update_log(traceback.format_exc())
-        return None, None, None
+        return None, None
 
-def create_word_cloud(df, top_n, material_type=None, year_range=None):
+def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discrete_mode, show_labels, label_fontsize, 
+                               excluded_labels, year_range=None, chart_height=800, branchvalues='total',
+                               label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, 
+                               colorblind_safe=False, min_count_scale=10.0):
     try:
         if df is None or df.empty:
-            st.error("No data available for word cloud")
-            return None
+            st.error("No data available for visualization")
+            update_log("No data available for highlighted sunburst chart")
+            return None, None
         
+        if colormap_choice.lower() not in COLOR_SCALES:
+            update_log(f"Invalid colormap '{colormap_choice}' selected. Falling back to 'cividis'.")
+            colormap_choice = 'cividis'
+
+        df = filter_excluded_labels(df, excluded_labels, update_log)
+
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
         
-        if 'year' in df.columns and year_range:
-            df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
+        required_cols = ['formula', 'material_type']
+        if 'year' in df.columns:
+            required_cols.append('year')
         
-        if material_type:
-            df = df[df['material_type'] == material_type]
+        if not all(col in df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in df.columns]
+            st.error(f"Missing required columns: {', '.join(missing)}")
+            update_log(f"Missing required columns for highlighted sunburst: {', '.join(missing)}")
+            return None, None
         
-        word_data = df.groupby('formula').size().reset_index(name='count')
-        top_words = word_data.nlargest(top_n, 'count')
-        word_freq = dict(zip(top_words['formula'], top_words['count']))
-        
-        wordcloud = WordCloud(
-            width=800, height=400, background_color='white',
-            min_font_size=10, max_font_size=100, random_state=42
-        ).generate_from_frequencies(word_freq)
-        
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.imshow(wordcloud, interpolation='bilinear')
-        ax.axis('off')
-        plt.tight_layout()
-        
-        buf = BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
-        plt.close(fig)
-        buf.seek(0)
-        
-        return buf
-    
-    except Exception as e:
-        st.error(f"Failed to generate word cloud: {str(e)}")
-        update_log(f"Word cloud error: {str(e)}")
-        import traceback
-        update_log(traceback.format_exc())
-        return None
+        if highlight_materials:
+            available_formulas = df['formula'].unique().tolist()
+            valid_highlights = [m for m in highlight_materials if m in available_formulas]
+            invalid_highlights = [m for m in highlight_materials if m not in valid_highlights]
+            if invalid_highlights:
+                st.warning(f"The following highlighted materials are not in the dataset: {', '.join(invalid_highlights)}")
+                update_log(f"Invalid highlighted materials: {invalid_highlights}")
+            if not valid_highlights:
+                st.error("No valid materials selected for highlighting. Please choose materials present in the dataset.")
+                update_log("No valid materials selected for highlighting")
+                return None, None
+            highlight_materials = valid_highlights
+            update_log(f"Generating highlighted sunburst for materials: {highlight_materials}")
+            df = df[df['formula'].isin(highlight_materials) | df['material_type'].isin(['p-type', 'n-type'])]
+            if df.empty:
+                st.error("No data remains after filtering for highlighted materials. Check if materials exist in the selected year range.")
+                update_log("No data after filtering for highlighted materials")
+                return None, None
+        else:
+            st.info("No materials selected for highlighting. Generating standard sunburst chart.")
+            update_log("No materials selected for highlighting, using all data")
 
-def create_radar_chart(df, top_n, material_type=None, year_range=None, curve_thickness=2):
-    try:
-        if df is None or df.empty:
-            st.error("No data available for radar chart")
-            return None
+        if 'count' in df.columns:
+            df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
         
-        if 'material' in df.columns and 'classification' in df.columns:
-            df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
+        if 'year' in df.columns:
+            df['year'] = pd.to_numeric(df['year'], errors='coerce')
+            if year_range:
+                df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
         
-        if 'year' in df.columns and year_range:
-            df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
+        if 'year' in df.columns:
+            sunburst_data = df.groupby(['year', 'material_type', 'formula']).size().reset_index(name='count')
+            sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
+            
+            sunburst_data['scaled_count'] = sunburst_data['count'].apply(lambda x: max(x, min_count_scale) if x > 0 and x <= 2 else x)
+            
+            sunburst_data['year_id'] = sunburst_data['year'].astype(str)
+            sunburst_data['type_id'] = sunburst_data['year_id'] + '_' + sunburst_data['material_type']
+            sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
+            
+            years = sunburst_data[['year_id', 'year']].drop_duplicates()
+            years['parent'] = ''
+            years['id'] = years['year_id']
+            
+            types = sunburst_data[['type_id', 'material_type', 'year_id']].drop_duplicates()
+            types['parent'] = types['year_id']
+            types['id'] = types['type_id']
+            
+            formulas = sunburst_data[['formula_id', 'formula', 'count', 'scaled_count', 'type_id']].copy()
+            formulas['parent'] = formulas['type_id']
+            formulas['id'] = formulas['formula_id']
+            
+            hierarchy_data = pd.concat([
+                years[['id', 'parent', 'year']].rename(columns={'year': 'label'}),
+                types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
+                formulas[['id', 'parent', 'formula', 'count', 'scaled_count']].rename(columns={'formula': 'label'})
+            ], ignore_index=True)
+            
+            for type_id in types['id']:
+                type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
+                type_scaled_sum = formulas[formulas['parent'] == type_id]['scaled_count'].sum()
+                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
+                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'scaled_count'] = type_scaled_sum
+                
+            for year_id in years['id']:
+                year_sum = types[types['parent'] == year_id]['id'].apply(
+                    lambda x: hierarchy_data.loc[hierarchy_data['id'] == x, 'count'].values[0] if not hierarchy_data.loc[hierarchy_data['id'] == x, 'count'].empty else 0
+                ).sum()
+                year_scaled_sum = types[types['parent'] == year_id]['id'].apply(
+                    lambda x: hierarchy_data.loc[hierarchy_data['id'] == x, 'scaled_count'].values[0] if not hierarchy_data.loc[hierarchy_data['id'] == x, 'scaled_count'].empty else 0
+                ).sum()
+                hierarchy_data.loc[hierarchy_data['id'] == year_id, 'count'] = year_sum
+                hierarchy_data.loc[hierarchy_data['id'] == year_id, 'scaled_count'] = year_scaled_sum
+        else:
+            sunburst_data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
+            sunburst_data['count'] = pd.to_numeric(sunburst_data['count'], errors='coerce').fillna(0)
+            
+            sunburst_data['scaled_count'] = sunburst_data['count'].apply(lambda x: max(x, min_count_scale) if x > 0 and x <= 2 else x)
+            
+            sunburst_data['type_id'] = sunburst_data['material_type']
+            sunburst_data['formula_id'] = sunburst_data['type_id'] + '_' + sunburst_data['formula']
+            
+            types = sunburst_data[['type_id', 'material_type']].drop_duplicates()
+            types['parent'] = ''
+            types['id'] = types['type_id']
+            
+            formulas = sunburst_data[['formula_id', 'formula', 'count', 'scaled_count', 'type_id']].copy()
+            formulas['parent'] = formulas['type_id']
+            formulas['id'] = formulas['formula_id']
+            
+            hierarchy_data = pd.concat([
+                types[['id', 'parent', 'material_type']].rename(columns={'material_type': 'label'}),
+                formulas[['id', 'parent', 'formula', 'count', 'scaled_count']].rename(columns={'formula': 'label'})
+            ], ignore_index=True)
+            
+            for type_id in types['id']:
+                type_sum = formulas[formulas['parent'] == type_id]['count'].sum()
+                type_scaled_sum = formulas[formulas['parent'] == type_id]['scaled_count'].sum()
+                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'count'] = type_sum
+                hierarchy_data.loc[hierarchy_data['id'] == type_id, 'scaled_count'] = type_scaled_sum
         
-        if material_type:
-            df = df[df['material_type'] == material_type]
+        total_count = hierarchy_data[hierarchy_data['parent'] == '']['count'].sum()
+        hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
         
-        data = df.groupby('formula').size().reset_index(name='count')
-        top_data = data.nlargest(top_n, 'count')
+        custom_colors = custom_colors or {}
+        unique_labels = hierarchy_data['label'].unique()
+        color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe, highlight_materials))
+        st.session_state.color_map = color_map
         
-        categories = top_data['formula'].tolist()
-        values = top_data['count'].tolist()
+        hierarchy_data['font_size'] = hierarchy_data['label'].apply(lambda x: int(label_fontsize * 2.0) if x in highlight_materials else label_fontsize)
+        hierarchy_data['font_weight'] = hierarchy_data['label'].apply(lambda x: 'bold' if x in highlight_materials else 'normal')
         
-        if len(values) < 3:
-            st.error("Need at least 3 materials for a radar chart")
-            return None
-        
-        # Normalize values for better visualization
-        max_value = max(values)
-        values = [v / max_value * 100 if max_value > 0 else 0 for v in values]
-        
-        color_map = st.session_state.get('color_map', {'p-type': '#d62728', 'n-type': '#1f77b4'})
-        color = color_map.get(material_type, '#808080') if material_type else '#808080'
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatterpolar(
-            r=values + [values[0]],  # Close the radar chart
-            theta=categories + [categories[0]],
-            fill='toself',
-            name=material_type if material_type else 'All Materials',
-            line=dict(width=curve_thickness, color=color)
-        ))
-        
+        if highlight_materials:
+            line_widths = hierarchy_data['label'].apply(lambda x: 3 if x in highlight_materials else 0).tolist()
+            line_colors = hierarchy_data['label'].apply(lambda x: '#000000' if x in highlight_materials else '#FFFFFF').tolist()
+            update_log(f"Line colors assigned: {line_colors[:10]}...")
+        else:
+            line_widths = [0] * len(hierarchy_data)
+            line_colors = ['#FFFFFF'] * len(hierarchy_data)
+            update_log("No highlighted materials, using default line colors (white)")
+
+        if discrete_mode:
+            hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
+            hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'
+            
+            hierarchy_data['display_text'] = hierarchy_data['label']
+            if label_threshold > 0:
+                hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+            
+            fig = go.Figure(go.Sunburst(
+                ids=hierarchy_data['id'],
+                labels=hierarchy_data['display_text'],
+                parents=hierarchy_data['parent'],
+                values=hierarchy_data['scaled_count'],
+                branchvalues=branchvalues,
+                marker=dict(
+                    colors=hierarchy_data['color'],
+                    line=dict(width=line_widths, color=line_colors)
+                ),
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                textinfo="label+text" if show_labels else "none",
+                texttemplate=(
+                    "%{label}" + 
+                    ("<br>%{value}" if show_values else "") + 
+                    ("<br>%{percentParent:.1%}" if show_percentages else "")
+                ),
+                textfont=dict(
+                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
+                    family="Arial, sans-serif",
+                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
+                ),
+                insidetextorientation='horizontal'
+            ))
+        else:
+            hierarchy_data['display_text'] = hierarchy_data['label']
+            if label_threshold > 0:
+                hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
+            
+            colors = np.log1p(hierarchy_data['scaled_count'].astype(float))
+            hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
+            
+            fig = go.Figure(go.Sunburst(
+                ids=hierarchy_data['id'],
+                labels=hierarchy_data['display_text'],
+                parents=hierarchy_data['parent'],
+                values=hierarchy_data['scaled_count'],
+                branchvalues=branchvalues,
+                marker=dict(
+                    colors=hierarchy_data['color'],
+                    colorscale=colormap_choice.lower(),
+                    showscale=True,
+                    colorbar=dict(title="Log(Scaled Count+1)"),
+                    cmin=colors.min(),
+                    cmax=colors.max(),
+                    line=dict(width=line_widths, color=line_colors)
+                ),
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                textinfo="label+text" if show_labels else "none",
+                texttemplate=(
+                    "%{label}" + 
+                    ("<br>%{value}" if show_values else "") + 
+                    ("<br>%{percentParent:.1%}" if show_percentages else "")
+                ),
+                textfont=dict(
+                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
+                    family="Arial, sans-serif",
+                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
+                ),
+                insidetextorientation='horizontal'
+            ))
+
         fig.update_layout(
-            polar=dict(
-                radialaxis=dict(visible=True, range=[0, 100], gridwidth=curve_thickness),
-                angularaxis=dict(rotation=90, direction="clockwise", gridwidth=curve_thickness)
-            ),
-            showlegend=True,
-            height=400,
-            margin=dict(t=50, b=50, l=50, r=50),
+            height=chart_height,
+            plot_bgcolor="rgba(255,255,255,1)",
+            paper_bgcolor="rgba(255,255,255,1)",
+            margin=dict(t=80, l=20, r=20, b=20),
+            font=dict(family="Arial, sans-serif", size=12, color="#000000"),
             title=dict(
-                text=f"Top {top_n} {'Materials' if not material_type else material_type} Radar Chart",
+                text=f"Sunburst with Highlighted Materials: {', '.join(highlight_materials) if highlight_materials else 'None'}",
                 x=0.5,
                 y=0.95,
                 xanchor='center',
-                yanchor='top'
+                yanchor='top',
+                font=dict(size=20, family="Arial, sans-serif")
             )
         )
-        
-        return fig
-    
-    except Exception as e:
-        st.error(f"Failed to generate radar chart: {str(e)}")
-        update_log(f"Radar chart error: {str(e)}")
-        import traceback
-        update_log(traceback.format_exc())
-        return None
 
-def create_histogram(df, top_n, material_type=None, year_range=None, outline_thickness=1):
-    try:
-        if df is None or df.empty:
-            st.error("No data available for histogram")
-            return None
-        
-        if 'material' in df.columns and 'classification' in df.columns:
-            df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
-        
-        if 'year' in df.columns and year_range:
-            df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
-        
-        if material_type:
-            df = df[df['material_type'] == material_type]
-        
-        data = df.groupby('formula').size().reset_index(name='count')
-        top_data = data.nlargest(top_n, 'count')
-        
-        color_map = st.session_state.get('color_map', {'p-type': '#d62728', 'n-type': '#1f77b4'})
-        top_data['color'] = top_data['formula'].apply(
-            lambda x: color_map.get(x, '#d62728' if material_type == 'p-type' else '#1f77b4' if material_type == 'n-type' else '#808080')
-        )
-        
-        fig = go.Figure()
-        for _, row in top_data.iterrows():
-            fig.add_trace(go.Bar(
-                x=[row['formula']],
-                y=[row['count']],
-                name=row['formula'],
-                marker=dict(
-                    color=row['color'],
-                    line=dict(width=outline_thickness, color='#000000')
-                )
-            ))
-        
-        fig.update_layout(
-            title=f"Top {top_n} {'Materials' if not material_type else material_type} Histogram",
-            xaxis_title="Material",
-            yaxis_title="Count",
-            xaxis_tickangle=45,
-            height=400,
-            margin=dict(t=50, b=100, l=50, r=50),
-            barmode='group',
-            showlegend=True
-        )
-        
-        return fig
-    
+        return fig, hierarchy_data
+
     except Exception as e:
-        st.error(f"Failed to generate histogram: {str(e)}")
-        update_log(f"Histogram error: {str(e)}")
+        st.error(f"Failed to generate highlighted sunburst chart: {str(e)}. Check if highlighted materials exist in the dataset and review logs for details.")
+        update_log(f"Highlighted sunburst chart error: {str(e)}")
         import traceback
         update_log(traceback.format_exc())
-        return None
+        return None, None
 
 def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
     try:
@@ -784,98 +858,45 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
         data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
         top_data = data.groupby('material_type').apply(lambda x: x.nlargest(top_n, 'count')).reset_index(drop=True)
         
-        G = nx.Graph()
-        color_map = st.session_state.get('color_map', {'p-type': '#d62728', 'n-type': '#1f77b4'})
+        color_map = st.session_state.get('color_map', {'p-type': '#1f77b4', 'n-type': '#d62728'})
+        
+        # Create Graphviz Digraph
+        dot = Digraph('network', format='png')
+        dot.attr(rankdir='LR', size='8,8', bgcolor='white', fontname='Arial')
         
         # Add nodes for material types
         for mtype in top_data['material_type'].unique():
-            G.add_node(mtype, size=20, color=color_map.get(mtype, '#808080'))
+            dot.node(mtype, mtype, shape='box', style='filled', fillcolor=color_map.get(mtype, '#808080'), fontname='Arial', fontsize='12')
         
         # Add nodes for materials and edges
+        edge_weights = []
         for _, row in top_data.iterrows():
             formula = row['formula']
             mtype = row['material_type']
             count = row['count']
-            G.add_node(formula, size=max(count * 10, 5), color=color_map.get(formula, color_map.get(mtype, '#808080')))
-            G.add_edge(mtype, formula, weight=count)
+            dot.node(formula, formula, shape='ellipse', style='filled', fillcolor=color_map.get(formula, color_map.get(mtype, '#808080')), fontname='Arial', fontsize='10')
+            edge_weights.append(count)
         
-        # Calculate proportions for hover text
-        total_counts = top_data.groupby('material_type')['count'].sum().to_dict()
-        node_labels = {}
-        for node in G.nodes():
-            if node in ['p-type', 'n-type']:
-                total_count = total_counts.get(node, 1)
-                node_labels[node] = f"{node}\nCount: {total_count}"
-            else:
-                p_count = top_data[(top_data['formula'] == node) & (top_data['material_type'] == 'p-type')]['count'].sum()
-                n_count = top_data[(top_data['formula'] == node) & (top_data['material_type'] == 'n-type')]['count'].sum()
-                total = p_count + n_count
-                p_prop = p_count / total if total > 0 else 0
-                n_prop = n_count / total if total > 0 else 0
-                node_labels[node] = f"{node}\n{p_prop:.1%} p-type, {n_prop:.1%} n-type"
-        
-        # Create layout
-        pos = nx.spring_layout(G, seed=42)
-        
-        # Create edge traces individually
-        edge_traces = []
-        edge_weights = [edge[2]['weight'] for edge in G.edges(data=True)]
+        # Scale edge thicknesses
         max_weight = max(edge_weights) if edge_weights else 1
-        for edge in G.edges(data=True):
-            x0, y0 = pos[edge[0]]
-            x1, y1 = pos[edge[1]]
-            weight = edge[2]['weight']
-            edge_traces.append(
-                go.Scatter(
-                    x=[x0, x1, None],
-                    y=[y0, y1, None],
-                    mode='lines',
-                    line=dict(width=weight/max_weight*edge_thickness_scale, color='#888'),
-                    hoverinfo='none'
-                )
-            )
+        for _, row in top_data.iterrows():
+            formula = row['formula']
+            mtype = row['material_type']
+            weight = row['count']
+            penwidth = max(1.0, (weight / max_weight) * edge_thickness_scale)
+            dot.edge(mtype, formula, label=f'{weight}', penwidth=str(penwidth), color='#888888', fontname='Arial', fontsize='8')
         
-        # Create node trace
-        node_x = []
-        node_y = []
-        node_sizes = []
-        node_colors = []
-        node_text = []
-        for node in G.nodes():
-            x, y = pos[node]
-            node_x.append(x)
-            node_y.append(y)
-            node_sizes.append(G.nodes[node]['size'])
-            node_colors.append(G.nodes[node]['color'])
-            node_text.append(node_labels[node])
-        
-        node_trace = go.Scatter(
-            x=node_x, 
-            y=node_y,
-            mode='markers+text',
-            text=node_text,
-            hoverinfo='text',
-            marker=dict(
-                showscale=False,
-                color=node_colors,
-                size=node_sizes,
-                line_width=2
-            )
-        )
-        
-        fig = go.Figure(data=edge_traces + [node_trace],
-                        layout=go.Layout(
-                            title=f"Network of Top {top_n} Materials per Type",
-                            titlefont_size=20,
-                            showlegend=False,
-                            hovermode='closest',
-                            margin=dict(b=20, l=20, r=20, t=80),
-                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                            height=600
-                        ))
-        
-        return fig
+        # Render the graph to a BytesIO buffer
+        try:
+            img_data = dot.pipe(format='png')
+            buf = BytesIO(img_data)
+            buf.seek(0)
+            update_log(f"Generated network visualization with {len(top_data)} nodes and {len(edge_weights)} edges")
+            return buf
+        except Exception as e:
+            st.error(f"Graphviz rendering failed: {str(e)}. Ensure Graphviz is installed on your system.")
+            update_log(f"Graphviz rendering error: {str(e)}")
+            return None
     
     except Exception as e:
         st.error(f"Failed to generate network visualization: {str(e)}")
@@ -885,8 +906,8 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
         return None
 
 # Streamlit UI
-st.set_page_config(page_title="Advanced Thermoelectric Material Analysis", layout="wide")
-st.title("🌞 Advanced Thermoelectric Material Analysis")
+st.set_page_config(page_title="Three-Tier Thermoelectric Material Analysis", layout="wide")
+st.title("🌞 Three-Tier Hierarchy Analysis for Thermoelectric Materials")
 
 # Initialize session state
 if "db_file" not in st.session_state:
@@ -936,11 +957,13 @@ if year_range and st.sidebar.button("Apply Year Filter") and st.session_state.db
 st.sidebar.header("Chart Customization")
 discrete_mode = st.sidebar.radio("Color Mode", ["Discrete (by type)", "Continuous (by count)"]) == "Discrete (by type)"
 colorblind_safe = st.sidebar.checkbox("Use Colorblind-Safe Palette", value=True)
+if discrete_mode:
+    st.sidebar.info("In Discrete mode, colors are assigned by material type using a qualitative palette.")
 colormap_choice = st.sidebar.selectbox("Choose Color Map (Continuous mode)", COLOR_SCALES, index=COLOR_SCALES.index('cividis'))
 
 # Line and grid thickness
 st.sidebar.header("Line and Grid Settings")
-curve_thickness = st.sidebar.slider("Curve Thickness", 1, 5, 2)
+curve_thickness = st.sidebar.slider("Edge Thickness Scale", 1, 10, 5)
 grid_thickness = st.sidebar.slider("Grid Thickness", 1, 5, 1)
 outline_thickness = st.sidebar.slider("Outline Thickness", 1, 5, 1)
 
@@ -954,6 +977,10 @@ background_color = st.sidebar.color_picker("Background Color", "#FFFFFF")
 font_family = st.sidebar.selectbox("Font Family", ["Arial, sans-serif", "Times New Roman, serif", "Helvetica, sans-serif"], index=0)
 show_grid = st.sidebar.checkbox("Show Gridlines", value=False)
 export_dpi = st.sidebar.slider("Export DPI", 100, 600, 300)
+show_labels = st.sidebar.checkbox("Show Labels", value=True)
+label_threshold = st.sidebar.slider("Label Threshold (%)", 0.0, 10.0, 1.0, 0.1)
+show_values = st.sidebar.checkbox("Show Values in Labels", value=True)
+show_percentages = st.sidebar.checkbox("Show Percentages in Labels", value=True)
 
 # Custom color selection
 st.sidebar.header("Custom Colors")
@@ -973,11 +1000,6 @@ if st.session_state.data_df is not None:
     if st.sidebar.button("Apply Custom Color"):
         st.session_state.custom_colors[selected_label] = custom_color
         update_log(f"Applied custom color {custom_color} to label {selected_label}")
-
-show_labels = st.sidebar.checkbox("Show Labels", value=True)
-label_threshold = st.sidebar.slider("Label Threshold (%)", 0.0, 10.0, 1.0, 0.1)
-show_values = st.sidebar.checkbox("Show Values in Labels", value=True)
-show_percentages = st.sidebar.checkbox("Show Percentages in Labels", value=True)
 
 # Exclude labels
 if st.session_state.data_df is not None:
@@ -1063,7 +1085,7 @@ if st.session_state.data_df is not None:
 
 # Generate charts
 if st.session_state.data_df is not None:
-    # Apply publication-quality settings to all charts
+    # Apply publication-quality settings to Plotly charts
     layout_settings = dict(
         height=chart_height,
         width=chart_width,
@@ -1076,10 +1098,71 @@ if st.session_state.data_df is not None:
         yaxis=dict(showgrid=show_grid, gridwidth=grid_thickness)
     )
 
-    st.subheader("Materials Sunburst Chart")
+    st.subheader("Full Hierarchy Sunburst Chart")
     if st.sidebar.button("Generate Materials Chart"):
-        with st.spinner("Generating materials chart..."):
-            fig_sunburst, sunburst_hierarchy_data = create_highlighted_sunburst(
+        with st.spinner("Generating full hierarchy sunburst chart..."):
+            fig_sunburst, hierarchy_data = create_three_tier_sunburst(
+                st.session_state.data_df,
+                colormap_choice,
+                discrete_mode,
+                show_labels,
+                label_fontsize,
+                excluded_labels,
+                year_range,
+                chart_height,
+                branchvalues='total',
+                label_threshold=label_threshold,
+                show_values=show_values,
+                show_percentages=show_percentages,
+                custom_colors=st.session_state.custom_colors,
+                colorblind_safe=colorblind_safe
+            )
+            
+            if fig_sunburst:
+                fig_sunburst.update_layout(
+                    title_font_size=chart_title_fontsize,
+                    **layout_settings
+                )
+                st.plotly_chart(fig_sunburst, use_container_width=True)
+                st.session_state.hierarchy_data = hierarchy_data
+            else:
+                st.warning("Unable to generate sunburst chart. Check data format or review logs for details.")
+    
+    st.subheader(f"Top {top_n} Materials Sunburst Chart")
+    if st.sidebar.button("Generate Top N Materials Chart"):
+        with st.spinner("Generating top N materials chart..."):
+            fig_top_n, top_n_hierarchy_data, _ = create_top_n_sunburst(
+                st.session_state.data_df,
+                top_n,
+                colormap_choice,
+                discrete_mode,
+                show_labels,
+                label_fontsize,
+                excluded_labels,
+                year_range,
+                chart_height,
+                branchvalues='total',
+                label_threshold=label_threshold,
+                show_values=show_values,
+                show_percentages=show_percentages,
+                custom_colors=st.session_state.custom_colors,
+                colorblind_safe=colorblind_safe
+            )
+            
+            if fig_top_n:
+                fig_top_n.update_layout(
+                    title_font_size=chart_title_fontsize,
+                    **layout_settings
+                )
+                st.plotly_chart(fig_top_n, use_container_width=True)
+                st.session_state.hierarchy_data = top_n_hierarchy_data
+            else:
+                st.warning("Unable to generate top N sunburst chart. Check data format.")
+    
+    st.subheader("Highlighted Materials Sunburst Chart")
+    if st.sidebar.button("Generate Highlighted Materials Chart"):
+        with st.spinner("Generating highlighted materials chart..."):
+            fig_highlighted, highlighted_hierarchy_data = create_highlighted_sunburst(
                 st.session_state.data_df,
                 highlight_materials,
                 colormap_choice,
@@ -1095,155 +1178,37 @@ if st.session_state.data_df is not None:
                 show_percentages=show_percentages,
                 custom_colors=st.session_state.custom_colors,
                 colorblind_safe=colorblind_safe,
-                min_count_scale=min_count_scale,
-                outline_thickness=outline_thickness
+                min_count_scale=min_count_scale
             )
             
-            if fig_sunburst:
-                fig_sunburst.update_layout(
+            if fig_highlighted:
+                fig_highlighted.update_layout(
                     title_font_size=chart_title_fontsize,
                     **layout_settings
                 )
-                st.plotly_chart(fig_sunburst, use_container_width=True)
-                st.session_state.hierarchy_data = sunburst_hierarchy_data
+                st.plotly_chart(fig_highlighted, use_container_width=True)
+                st.session_state.hierarchy_data = highlighted_hierarchy_data
             else:
-                st.warning("Unable to generate sunburst chart. Check data format or review logs for details.")
-    
-    st.subheader(f"Top {top_n} Materials Sunburst Chart")
-    if st.sidebar.button("Generate Top N Materials Chart"):
-        with st.spinner("Generating top N materials chart..."):
-            fig_top_n, top_n_hierarchy_data, top_n_data = create_top_n_sunburst(
-                st.session_state.data_df,
-                top_n,
-                colormap_choice,
-                discrete_mode,
-                show_labels,
-                label_fontsize,
-                excluded_labels,
-                year_range,
-                chart_height,
-                branchvalues='total',
-                label_threshold=label_threshold,
-                show_values=show_values,
-                show_percentages=show_percentages,
-                custom_colors=st.session_state.custom_colors,
-                colorblind_safe=colorblind_safe,
-                outline_thickness=outline_thickness
-            )
-            
-            if fig_top_n:
-                fig_top_n.update_layout(
-                    title_font_size=chart_title_fontsize,
-                    **layout_settings
-                )
-                st.plotly_chart(fig_top_n, use_container_width=True)
-                st.session_state.hierarchy_data = top_n_hierarchy_data
-            else:
-                st.warning("Unable to generate top N sunburst chart. Check data format.")
-    
-    st.subheader("Word Clouds")
-    col1, col2, col3 = st.columns(3)
-    if st.sidebar.button("Generate Word Clouds"):
-        with st.spinner("Generating word clouds..."):
-            with col1:
-                st.write("All Materials")
-                wordcloud_all = create_word_cloud(st.session_state.data_df, top_n, year_range=year_range)
-                if wordcloud_all:
-                    st.image(wordcloud_all, use_column_width=True)
-            
-            with col2:
-                st.write("p-type Materials")
-                wordcloud_p = create_word_cloud(st.session_state.data_df, top_n, material_type='p-type', year_range=year_range)
-                if wordcloud_p:
-                    st.image(wordcloud_p, use_column_width=True)
-            
-            with col3:
-                st.write("n-type Materials")
-                wordcloud_n = create_word_cloud(st.session_state.data_df, top_n, material_type='n-type', year_range=year_range)
-                if wordcloud_n:
-                    st.image(wordcloud_n, use_column_width=True)
-    
-    st.subheader("Radar Charts")
-    col1, col2, col3 = st.columns(3)
-    if st.sidebar.button("Generate Radar Charts"):
-        with st.spinner("Generating radar charts..."):
-            with col1:
-                st.write("All Materials")
-                radar_all = create_radar_chart(st.session_state.data_df, top_n, year_range=year_range, curve_thickness=curve_thickness)
-                if radar_all:
-                    radar_all.update_layout(
-                        title_font_size=chart_title_fontsize,
-                        **layout_settings
-                    )
-                    st.plotly_chart(radar_all, use_container_width=True)
-            
-            with col2:
-                st.write("p-type Materials")
-                radar_p = create_radar_chart(st.session_state.data_df, top_n, material_type='p-type', year_range=year_range, curve_thickness=curve_thickness)
-                if radar_p:
-                    radar_p.update_layout(
-                        title_font_size=chart_title_fontsize,
-                        **layout_settings
-                    )
-                    st.plotly_chart(radar_p, use_container_width=True)
-            
-            with col3:
-                st.write("n-type Materials")
-                radar_n = create_radar_chart(st.session_state.data_df, top_n, material_type='n-type', year_range=year_range, curve_thickness=curve_thickness)
-                if radar_n:
-                    radar_n.update_layout(
-                        title_font_size=chart_title_fontsize,
-                        **layout_settings
-                    )
-                    st.plotly_chart(radar_n, use_container_width=True)
-    
-    st.subheader("Histograms")
-    col1, col2, col3 = st.columns(3)
-    if st.sidebar.button("Generate Histograms"):
-        with st.spinner("Generating histograms..."):
-            with col1:
-                st.write("All Materials")
-                hist_all = create_histogram(st.session_state.data_df, top_n, year_range=year_range, outline_thickness=outline_thickness)
-                if hist_all:
-                    hist_all.update_layout(
-                        title_font_size=chart_title_fontsize,
-                        **layout_settings
-                    )
-                    st.plotly_chart(hist_all, use_container_width=True)
-            
-            with col2:
-                st.write("p-type Materials")
-                hist_p = create_histogram(st.session_state.data_df, top_n, material_type='p-type', year_range=year_range, outline_thickness=outline_thickness)
-                if hist_p:
-                    hist_p.update_layout(
-                        title_font_size=chart_title_fontsize,
-                        **layout_settings
-                    )
-                    st.plotly_chart(hist_p, use_container_width=True)
-            
-            with col3:
-                st.write("n-type Materials")
-                hist_n = create_histogram(st.session_state.data_df, top_n, material_type='n-type', year_range=year_range, outline_thickness=outline_thickness)
-                if hist_n:
-                    hist_n.update_layout(
-                        title_font_size=chart_title_fontsize,
-                        **layout_settings
-                    )
-                    st.plotly_chart(hist_n, use_container_width=True)
+                st.warning("Unable to generate highlighted sunburst chart. Check if selected materials exist in the dataset or review logs for details.")
     
     st.subheader("Network Visualization")
     if st.sidebar.button("Generate Network Visualization"):
         with st.spinner("Generating network visualization..."):
-            network_fig = create_network(st.session_state.data_df, top_n, year_range=year_range, edge_thickness_scale=curve_thickness)
-            if network_fig:
-                network_fig.update_layout(
-                    title_font_size=chart_title_fontsize,
-                    **layout_settings
+            network_img = create_network(st.session_state.data_df, top_n, year_range=year_range, edge_thickness_scale=curve_thickness)
+            if network_img:
+                st.image(network_img, caption=f"Network of Top {top_n} Materials per Type", use_column_width=True)
+                # Provide download button for the network image
+                st.download_button(
+                    label="Download Network as PNG",
+                    data=network_img,
+                    file_name="thermoelectric_network.png",
+                    mime="image/png"
                 )
-                st.plotly_chart(network_fig, use_container_width=True)
+            else:
+                st.warning("Unable to generate network visualization. Ensure Graphviz is installed and check logs for details.")
     
     st.subheader("Export Options")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         csv = st.session_state.data_df.to_csv(index=False)
@@ -1279,14 +1244,6 @@ if st.session_state.data_df is not None:
             st.error("JSON export failed")
             update_log(f"JSON export error: {str(e)}")
     
-    with col4:
-        st.download_button(
-            label="Download Charts as HTML",
-            data=fig_sunburst.to_html() if 'fig_sunburst' in locals() else "",
-            file_name="thermoelectric_charts.html",
-            mime="text/html"
-        )
-    
     with st.expander("Publication Quality Tips"):
         st.markdown("""
         **For publication-quality figures:**
@@ -1299,8 +1256,9 @@ if st.session_state.data_df is not None:
         6. Enable **Colorblind-Safe Palette** for accessibility.
         7. Adjust **Label Threshold** to reduce clutter from small segments.
         8. Use **Custom Colors** to highlight specific materials or types.
-        9. Adjust **Curve Thickness**, **Grid Thickness**, and **Outline Thickness** for visual clarity.
+        9. Adjust **Edge Thickness Scale**, **Grid Thickness**, and **Outline Thickness** for visual clarity.
         10. Check **logs** below for any data or rendering issues.
+        11. For network visualization, ensure Graphviz is installed on your system.
         """)
     
     with st.expander("View Application Logs"):
