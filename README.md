@@ -83,7 +83,7 @@ Formula Classifier and Visualization
 [![machinelearningthermoelectricity](https://img.shields.io/badge/colorizedmultihierarchicalVisualization-streamlit-red)](https://multitierhierarchicaldata-colorizedvisualization.streamlit.app/)
 [![machinelearningthermoelectricity](https://img.shields.io/badge/colorizedfocusedhierarchicalVisualization-streamlit-red)](https://colorizedhierarchical-focuseddatavisualization.streamlit.app/)
 [![machinelearningthermoelectricity](https://img.shields.io/badge/multitypehierarchicalVisualization-streamlit-red)](https://multitype-visualizations-pntypethermoelectrics.streamlit.app/) (works only for wordcloud, histogram and radar chart)
-
+[![machinelearningthermoelectricity](https://img.shields.io/badge/advancedmultitypehierarchicalVisualization-streamlit-red)](https://multitype-visualizations-advanced-thermoelectricsclassification.streamlit.app/) 
 
 
 
