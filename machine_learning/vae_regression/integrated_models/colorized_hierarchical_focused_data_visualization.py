@@ -795,10 +795,16 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                 return None, None
             highlight_materials = valid_highlights
             update_log(f"Generating highlighted sunburst for materials: {highlight_materials}")
+            # Filter data to include only highlighted materials and their parents
+            df = df[df['formula'].isin(highlight_materials) | df['material_type'].isin(['p-type', 'n-type'])]
+            if df.empty:
+                st.error("No data remains after filtering for highlighted materials. Check if materials exist in the selected year range.")
+                update_log("No data after filtering for highlighted materials")
+                return None, None
         else:
-            st.warning("No materials selected for highlighting. Showing standard sunburst chart.")
-            update_log("No materials selected for highlighting")
-        
+            st.info("No materials selected for highlighting. Generating standard sunburst chart.")
+            update_log("No materials selected for highlighting, using all data")
+
         if 'count' in df.columns:
             df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
         
@@ -807,14 +813,6 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
             df['year'] = pd.to_numeric(df['year'], errors='coerce')
             if year_range:
                 df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
-        
-        # Filter data to include only highlighted materials and their parents
-        if highlight_materials:
-            df = df[df['formula'].isin(highlight_materials) | df['material_type'].isin(['p-type', 'n-type'])]
-            if df.empty:
-                st.error("No data remains after filtering for highlighted materials. Check if materials exist in the selected year range.")
-                update_log("No data after filtering for highlighted materials")
-                return None, None
         
         # Create hierarchy data
         if 'year' in df.columns:
@@ -902,10 +900,16 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         hierarchy_data['font_size'] = hierarchy_data['label'].apply(lambda x: int(label_fontsize * 2.0) if x in highlight_materials else label_fontsize)
         hierarchy_data['font_weight'] = hierarchy_data['label'].apply(lambda x: 'bold' if x in highlight_materials else 'normal')
         
-        # Add outline for highlighted materials
-        line_widths = hierarchy_data['label'].apply(lambda x: 3 if x in highlight_materials else 0).tolist()
-        line_colors = hierarchy_data['label'].apply(lambda x: '#000000' if x in highlight_materials else '').tolist()
-        
+        # Add outline for highlighted materials only if highlight_materials is not empty
+        if highlight_materials:
+            line_widths = hierarchy_data['label'].apply(lambda x: 3 if x in highlight_materials else 0).tolist()
+            line_colors = hierarchy_data['label'].apply(lambda x: '#000000' if x in highlight_materials else '#FFFFFF').tolist()
+            update_log(f"Line colors assigned: {line_colors[:10]}...")  # Log first 10 for brevity
+        else:
+            line_widths = [0] * len(hierarchy_data)  # No outlines if no highlights
+            line_colors = ['#FFFFFF'] * len(hierarchy_data)  # Default to white (no visible outline)
+            update_log("No highlighted materials, using default line colors (white)")
+
         if discrete_mode:
             hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
             hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'
