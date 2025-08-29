@@ -131,7 +131,6 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
         highlight_colors = HIGHLIGHT_COLORS
         for i, label in enumerate(labels):
             if label in highlight_materials:
-                # Use bright, distinct colors for highlighted materials
                 color_map[label] = highlight_colors[i % len(highlight_colors)]
             elif label not in color_map:
                 if label.startswith('Other') or label.startswith('Sub-Other'):
@@ -140,13 +139,11 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
                     other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                     color_map[label] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
                 else:
-                    # Use faded colors for non-highlighted materials
                     color_map[label] = colors[i % len(colors)]
     else:
         colors = validate_color_scale(colormap_choice if colormap_choice in COLOR_SCALES else 'cividis')
         for label in labels:
             if label in highlight_materials:
-                # Use bright colors for highlighted materials
                 color_map[label] = HIGHLIGHT_COLORS[labels.tolist().index(label) % len(HIGHLIGHT_COLORS)]
             elif label not in color_map and (label.startswith('Other') or label.startswith('Sub-Other')):
                 mtype = label.split(' ')[1].split('L')[0] if 'L' in label else label.split(' ')[1]
@@ -154,8 +151,7 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
                 other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                 color_map[label] = other_colors[-1]
             elif label not in color_map:
-                # Use light gray for non-highlighted materials
-                color_map[label] = '#D3D3D3'
+                color_map[label] = '#808080'  # Darker gray for better contrast
     return color_map
 
 def filter_excluded_labels(df, excluded_labels, update_log=None):
@@ -757,7 +753,7 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
 def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discrete_mode, show_labels, label_fontsize, 
                                excluded_labels, year_range=None, chart_height=800, branchvalues='total',
                                label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, 
-                               colorblind_safe=False, min_count_scale=5.0):
+                               colorblind_safe=False, min_count_scale=10.0):
     try:
         if df is None or df.empty:
             st.error("No data available for visualization")
@@ -785,8 +781,24 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
             update_log(f"Missing required columns for highlighted sunburst: {', '.join(missing)}")
             return None, None
         
-        update_log(f"Generating highlighted sunburst for materials: {highlight_materials}")
-
+        # Validate highlighted materials
+        if highlight_materials:
+            available_formulas = df['formula'].unique().tolist()
+            valid_highlights = [m for m in highlight_materials if m in available_formulas]
+            invalid_highlights = [m for m in highlight_materials if m not in valid_highlights]
+            if invalid_highlights:
+                st.warning(f"The following highlighted materials are not in the dataset: {', '.join(invalid_highlights)}")
+                update_log(f"Invalid highlighted materials: {invalid_highlights}")
+            if not valid_highlights:
+                st.error("No valid materials selected for highlighting. Please choose materials present in the dataset.")
+                update_log("No valid materials selected for highlighting")
+                return None, None
+            highlight_materials = valid_highlights
+            update_log(f"Generating highlighted sunburst for materials: {highlight_materials}")
+        else:
+            st.warning("No materials selected for highlighting. Showing standard sunburst chart.")
+            update_log("No materials selected for highlighting")
+        
         if 'count' in df.columns:
             df['count'] = pd.to_numeric(df['count'], errors='coerce').fillna(0)
         
@@ -795,6 +807,14 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
             df['year'] = pd.to_numeric(df['year'], errors='coerce')
             if year_range:
                 df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
+        
+        # Filter data to include only highlighted materials and their parents
+        if highlight_materials:
+            df = df[df['formula'].isin(highlight_materials) | df['material_type'].isin(['p-type', 'n-type'])]
+            if df.empty:
+                st.error("No data remains after filtering for highlighted materials. Check if materials exist in the selected year range.")
+                update_log("No data after filtering for highlighted materials")
+                return None, None
         
         # Create hierarchy data
         if 'year' in df.columns:
@@ -878,6 +898,14 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe, highlight_materials))
         st.session_state.color_map = color_map
         
+        # Add font size and style columns for highlighted materials
+        hierarchy_data['font_size'] = hierarchy_data['label'].apply(lambda x: int(label_fontsize * 2.0) if x in highlight_materials else label_fontsize)
+        hierarchy_data['font_weight'] = hierarchy_data['label'].apply(lambda x: 'bold' if x in highlight_materials else 'normal')
+        
+        # Add outline for highlighted materials
+        line_widths = hierarchy_data['label'].apply(lambda x: 3 if x in highlight_materials else 0).tolist()
+        line_colors = hierarchy_data['label'].apply(lambda x: '#000000' if x in highlight_materials else '').tolist()
+        
         if discrete_mode:
             hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
             hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'
@@ -892,7 +920,10 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                 parents=hierarchy_data['parent'],
                 values=hierarchy_data['scaled_count'],  # Use scaled_count for visibility
                 branchvalues=branchvalues,
-                marker=dict(colors=hierarchy_data['color']),
+                marker=dict(
+                    colors=hierarchy_data['color'],
+                    line=dict(width=line_widths, color=line_colors)
+                ),
                 hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                 textinfo="label+text" if show_labels else "none",
                 texttemplate=(
@@ -900,7 +931,11 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     ("<br>%{value}" if show_values else "") + 
                     ("<br>%{percentParent:.1%}" if show_percentages else "")
                 ),
-                textfont=dict(size=label_fontsize),
+                textfont=dict(
+                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
+                    family="Arial, sans-serif",
+                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
+                ),
                 insidetextorientation='horizontal'
             ))
         else:
@@ -923,7 +958,8 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     showscale=True,
                     colorbar=dict(title="Log(Scaled Count+1)"),
                     cmin=colors.min(),
-                    cmax=colors.max()
+                    cmax=colors.max(),
+                    line=dict(width=line_widths, color=line_colors)
                 ),
                 hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
                 textinfo="label+text" if show_labels else "none",
@@ -932,7 +968,11 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     ("<br>%{value}" if show_values else "") + 
                     ("<br>%{percentParent:.1%}" if show_percentages else "")
                 ),
-                textfont=dict(size=label_fontsize),
+                textfont=dict(
+                    size=[hierarchy_data['font_size'].iloc[i] for i in range(len(hierarchy_data))],
+                    family="Arial, sans-serif",
+                    weight=[hierarchy_data['font_weight'].iloc[i] for i in range(len(hierarchy_data))]
+                ),
                 insidetextorientation='horizontal'
             ))
 
@@ -955,7 +995,7 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         return fig, hierarchy_data
 
     except Exception as e:
-        st.error(f"Failed to generate highlighted sunburst chart: {str(e)}")
+        st.error(f"Failed to generate highlighted sunburst chart: {str(e)}. Check if highlighted materials exist in the dataset and review logs for details.")
         update_log(f"Highlighted sunburst chart error: {str(e)}")
         import traceback
         update_log(traceback.format_exc())
@@ -1083,12 +1123,12 @@ if st.session_state.data_df is not None:
         formula_options.extend(st.session_state.data_df['material'].unique().tolist())
     formula_options = list(set(formula_options))
     highlight_materials = st.sidebar.multiselect("Select Materials to Highlight", options=formula_options,
-                                                help="Select materials to highlight with distinct colors in the sunburst chart.")
-    min_count_scale = st.sidebar.slider("Minimum Count Scale for Small Segments", 1.0, 10.0, 5.0,
+                                                help="Select materials to highlight with distinct colors, bold labels, and outlines in the sunburst chart.")
+    min_count_scale = st.sidebar.slider("Minimum Count Scale for Small Segments", 1.0, 20.0, 10.0,
                                         help="Scales the visual size of segments with counts of 1 or 2 for better visibility.")
 else:
     highlight_materials = []
-    min_count_scale = 5.0
+    min_count_scale = 10.0
     st.sidebar.info("Load data to select materials for highlighting")
 
 # Data summary
@@ -1205,7 +1245,7 @@ if st.session_state.data_df is not None:
             if fig_highlighted:
                 st.plotly_chart(fig_highlighted, use_container_width=True)
             else:
-                st.warning("Unable to generate highlighted sunburst chart. Check selected materials or logs for details.")
+                st.warning("Unable to generate highlighted sunburst chart. Check if selected materials exist in the dataset or review logs for details.")
     
     if fig_sunburst:
         st.subheader("Export Options")
