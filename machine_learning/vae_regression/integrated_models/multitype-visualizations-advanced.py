@@ -1,4 +1,3 @@
-```python
 import os
 import pandas as pd
 import plotly.express as px
@@ -1285,6 +1284,7 @@ if st.session_state.data_df is not None:
         st.dataframe(st.session_state.data_df.head(100))
 
 # Generate charts
+# Generate charts
 if st.session_state.data_df is not None:
     # Apply publication-quality settings to all charts
     layout_settings = dict(
@@ -1559,7 +1559,7 @@ if st.session_state.data_df is not None:
         if 'radar_n' in locals() and radar_n:
             html_content += radar_n.to_html()
         if 'hist_all' in locals() and hist_all:
-            html_content += hist_all.to_html()
+            hist_all.to_html()
         if 'hist_p' in locals() and hist_p:
             html_content += hist_p.to_html()
         if 'hist_n' in locals() and hist_n:
@@ -1577,4 +1577,164 @@ if st.session_state.data_df is not None:
         else:
             st.warning("No charts available for HTML export. Generate charts first.")
     
-    with st.expander("Publication
+    with st.expander("Publication-Quality Export and Settings"):
+        st.write("### High-Resolution Chart Exports")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.write("Sunburst Charts")
+            if 'fig_sunburst' in locals() and fig_sunburst:
+                buf = BytesIO()
+                fig_sunburst.write_image(buf, format="png", scale=export_dpi/100)
+                st.download_button(
+                    label="Download Full Sunburst as PNG",
+                    data=buf.getvalue(),
+                    file_name="full_sunburst.png",
+                    mime="image/png"
+                )
+                buf = BytesIO()
+                fig_sunburst.write_image(buf, format="svg")
+                st.download_button(
+                    label="Download Full Sunburst as SVG",
+                    data=buf.getvalue(),
+                    file_name="full_sunburst.svg",
+                    mime="image/svg+xml"
+                )
+            if 'fig_top_n' in locals() and fig_top_n:
+                buf = BytesIO()
+                fig_top_n.write_image(buf, format="png", scale=export_dpi/100)
+                st.download_button(
+                    label=f"Download Top {top_n} Sunburst as PNG",
+                    data=buf.getvalue(),
+                    file_name=f"top_{top_n}_sunburst.png",
+                    mime="image/png"
+                )
+                buf = BytesIO()
+                fig_top_n.write_image(buf, format="svg")
+                st.download_button(
+                    label=f"Download Top {top_n} Sunburst as SVG",
+                    data=buf.getvalue(),
+                    file_name=f"top_{top_n}_sunburst.svg",
+                    mime="image/svg+xml"
+                )
+            if 'fig_highlighted' in locals() and fig_highlighted:
+                buf = BytesIO()
+                fig_highlighted.write_image(buf, format="png", scale=export_dpi/100)
+                st.download_button(
+                    label="Download Highlighted Sunburst as PNG",
+                    data=buf.getvalue(),
+                    file_name="highlighted_sunburst.png",
+                    mime="image/png"
+                )
+                buf = BytesIO()
+                fig_highlighted.write_image(buf, format="svg")
+                st.download_button(
+                    label="Download Highlighted Sunburst as SVG",
+                    data=buf.getvalue(),
+                    file_name="highlighted_sunburst.svg",
+                    mime="image/svg+xml"
+                )
+        
+        with col2:
+            st.write("Radar and Histogram Charts")
+            if 'radar_all' in locals() and radar_all:
+                buf = BytesIO()
+                radar_all.write_image(buf, format="png", scale=export_dpi/100)
+                st.download_button(
+                    label="Download All Materials Radar as PNG",
+                    data=buf.getvalue(),
+                    file_name="radar_all.png",
+                    mime="image/png"
+                )
+                buf = BytesIO()
+                radar_all.write_image(buf, format="svg")
+                st.download_button(
+                    label="Download All Materials Radar as SVG",
+                    data=buf.getvalue(),
+                    file_name="radar_all.svg",
+                    mime="image/svg+xml"
+                )
+            if 'hist_all' in locals() and hist_all:
+                buf = BytesIO()
+                hist_all.write_image(buf, format="png", scale=export_dpi/100)
+                st.download_button(
+                    label="Download All Materials Histogram as PNG",
+                    data=buf.getvalue(),
+                    file_name="histogram_all.png",
+                    mime="image/png"
+                )
+                buf = BytesIO()
+                hist_all.write_image(buf, format="svg")
+                st.download_button(
+                    label="Download All Materials Histogram as SVG",
+                    data=buf.getvalue(),
+                    file_name="histogram_all.svg",
+                    mime="image/svg+xml"
+                )
+        
+        with col3:
+            st.write("Word Clouds and Network")
+            if 'wordcloud_all' in locals() and wordcloud_all:
+                st.download_button(
+                    label="Download All Materials Word Cloud as PNG",
+                    data=wordcloud_all,
+                    file_name="wordcloud_all.png",
+                    mime="image/png"
+                )
+            if 'network_result' in locals() and network_result and viz_type == 'graphviz':
+                st.download_button(
+                    label="Download Network as PNG (Graphviz)",
+                    data=network_result,
+                    file_name="network_graphviz.png",
+                    mime="image/png"
+                )
+            elif 'network_result' in locals() and network_result and viz_type == 'networkx':
+                buf = BytesIO()
+                network_result.write_image(buf, format="png", scale=export_dpi/100)
+                st.download_button(
+                    label="Download Network as PNG (NetworkX)",
+                    data=buf.getvalue(),
+                    file_name="network_networkx.png",
+                    mime="image/png"
+                )
+                buf = BytesIO()
+                network_result.write_image(buf, format="svg")
+                st.download_button(
+                    label="Download Network as SVG (NetworkX)",
+                    data=buf.getvalue(),
+                    file_name="network_networkx.svg",
+                    mime="image/svg+xml"
+                )
+        
+        st.write("### Visualization Settings Summary")
+        settings_summary = {
+            "Color Mode": "Discrete" if discrete_mode else "Continuous",
+            "Colormap": colormap_choice,
+            "Colorblind Safe": "Yes" if colorblind_safe else "No",
+            "Chart Height": chart_height,
+            "Chart Width": chart_width,
+            "Title Font Size": chart_title_fontsize,
+            "Label Font Size": label_fontsize,
+            "Background Color": background_color,
+            "Font Family": font_family,
+            "Show Gridlines": "Yes" if show_grid else "No",
+            "Export DPI": export_dpi,
+            "Curve Thickness": curve_thickness,
+            "Grid Thickness": grid_thickness,
+            "Outline Thickness": outline_thickness,
+            "Label Threshold (%)": label_threshold,
+            "Show Labels": "Yes" if show_labels else "No",
+            "Show Values": "Yes" if show_values else "No",
+            "Show Percentages": "Yes" if show_percentages else "No",
+            "Top N Materials": top_n,
+            "Highlighted Materials": ", ".join(highlight_materials) if highlight_materials else "None",
+            "Excluded Labels": ", ".join(excluded_labels) if excluded_labels else "None",
+            "Year Range": f"{year_range[0]}-{year_range[1]}" if year_range else "All Years"
+        }
+        st.table(settings_summary)
+        
+        st.write("### Application Logs")
+        if 'log_buffer' in st.session_state and st.session_state.log_buffer:
+            st.text_area("Log Entries (Last 20)", "\n".join(st.session_state.log_buffer), height=200)
+        else:
+            st.info("No logs available.")
