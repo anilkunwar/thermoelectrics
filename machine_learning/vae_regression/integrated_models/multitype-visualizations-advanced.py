@@ -524,7 +524,7 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
             years['parent'] = ''
             years['id'] = years['year_id']
             
-            types = sunburst_data[['type_id', 'material_type', 'year_id]].drop_duplicates()
+            types = sunburst_data[['type_id', 'material_type', 'year_id']].drop_duplicates()
             types['parent'] = types['year_id']
             types['id'] = types['type_id']
             
