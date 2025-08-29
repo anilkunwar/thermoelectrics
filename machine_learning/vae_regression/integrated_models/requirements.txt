@@ -30,6 +30,6 @@ fuzzywuzzy
 cleantext==1.1.4
 psutil
 h5py
-graphviz
+#graphviz
 
 
