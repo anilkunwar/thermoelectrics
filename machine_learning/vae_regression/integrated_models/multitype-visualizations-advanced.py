@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 from plotly.subplots import make_subplots
 import networkx as nx
-from networkx.drawing.nx_agraph import graphviz_layout
 
 # Directory setup
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -114,7 +113,7 @@ COLOR_SCALES = [
 DISCRETE_COLORS = px.colors.qualitative.D3 + px.colors.qualitative.Set3
 COLORBLIND_DISCRETE = px.colors.qualitative.Safe
 HIGHLIGHT_COLORS = px.colors.qualitative.Plotly
-OTHER_COLOR_SCALES = {'p-type': 'Blues', 'n-type': 'Reds'}
+OTHER_COLOR_SCALES = {'p-type': 'Reds', 'n-type': 'Blues'}
 
 def validate_color_scale(scale_name):
     try:
@@ -174,8 +173,6 @@ def filter_excluded_labels(df, excluded_labels, update_log=None):
         mask |= df["material"].isin(excluded_labels)
     if 'classification' in df.columns:
         mask |= df["classification"].isin(excluded_labels)
-    if 'formula' in df.columns:
-        mask |= df["formula"].isin(excluded_labels)
 
     if isinstance(mask, pd.Series) and mask.any():
         df = df[~mask]
@@ -426,8 +423,6 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         update_log(traceback.format_exc())
         return None, None
 
-
-
 def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels, label_fontsize, 
                          excluded_labels, year_range=None, chart_height=800, branchvalues='total',
                          label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, 
@@ -511,7 +506,6 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         if not grouped_data:
             st.error("No data available after filtering for top N materials")
             update_log("No data available after filtering for top N materials")
-            return Babel
             return None, None, None
         
         sunburst_data = pd.concat(grouped_data, ignore_index=True)
@@ -573,15 +567,15 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
         
         custom_colors = custom_colors or {}
-        color_map = {'p-type': '#1f77b4', 'n-type': '#d62728'}  # Blue for p-type, Red for n-type
+        color_map = {'p-type': '#d62728', 'n-type': '#1f77b4'}  # Red for p-type, Blue for n-type
         for label in hierarchy_data['label']:
             if label.startswith('Other p-type'):
-                color_map[label] = '#6baed6'
-            elif label.startswith('Other n-type'):
                 color_map[label] = '#fd8d3c'
+            elif label.startswith('Other n-type'):
+                color_map[label] = '#6baed6'
             elif label not in color_map and label not in ['p-type', 'n-type']:
                 mtype = hierarchy_data[hierarchy_data['label'] == label]['parent'].iloc[0].split('_')[-1] if '_' in hierarchy_data[hierarchy_data['label'] == label]['parent'].iloc[0] else hierarchy_data[hierarchy_data['label'] == label]['parent'].iloc[0]
-                color_map[label] = '#1f77b4' if mtype == 'p-type' else '#d62728'
+                color_map[label] = '#d62728' if mtype == 'p-type' else '#1f77b4'
         st.session_state.color_map = color_map
         
         hierarchy_data['display_text'] = hierarchy_data['label']
@@ -638,13 +632,11 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         update_log(traceback.format_exc())
         return None, None, None
 
-def create_word_cloud(df, top_n, material_type=None, year_range=None, excluded_labels=None, color_map=None):
+def create_word_cloud(df, top_n, material_type=None, year_range=None):
     try:
         if df is None or df.empty:
             st.error("No data available for word cloud")
             return None
-        
-        df = filter_excluded_labels(df, excluded_labels, update_log)
         
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
@@ -659,13 +651,9 @@ def create_word_cloud(df, top_n, material_type=None, year_range=None, excluded_l
         top_words = word_data.nlargest(top_n, 'count')
         word_freq = dict(zip(top_words['formula'], top_words['count']))
         
-        def color_func(word, font_size, position, orientation, random_state=None, **kwargs):
-            return color_map.get(word, '#808080') if color_map else '#808080'
-        
         wordcloud = WordCloud(
             width=800, height=400, background_color='white',
-            min_font_size=10, max_font_size=100, random_state=42,
-            color_func=color_func
+            min_font_size=10, max_font_size=100, random_state=42
         ).generate_from_frequencies(word_freq)
         
         fig, ax = plt.subplots(figsize=(10, 5))
@@ -687,13 +675,11 @@ def create_word_cloud(df, top_n, material_type=None, year_range=None, excluded_l
         update_log(traceback.format_exc())
         return None
 
-def create_radar_chart(df, top_n, material_type=None, year_range=None, excluded_labels=None, color_map=None, curve_thickness=2):
+def create_radar_chart(df, top_n, material_type=None, year_range=None, curve_thickness=2):
     try:
         if df is None or df.empty:
             st.error("No data available for radar chart")
             return None
-        
-        df = filter_excluded_labels(df, excluded_labels, update_log)
         
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
@@ -714,10 +700,12 @@ def create_radar_chart(df, top_n, material_type=None, year_range=None, excluded_
             st.error("Need at least 3 materials for a radar chart")
             return None
         
+        # Normalize values for better visualization
         max_value = max(values)
         values = [v / max_value * 100 if max_value > 0 else 0 for v in values]
         
-        color = color_map.get(material_type, '#808080') if material_type and color_map else '#808080'
+        color_map = st.session_state.get('color_map', {'p-type': '#d62728', 'n-type': '#1f77b4'})
+        color = color_map.get(material_type, '#808080') if material_type else '#808080'
         
         fig = go.Figure()
         fig.add_trace(go.Scatterpolar(
@@ -730,8 +718,8 @@ def create_radar_chart(df, top_n, material_type=None, year_range=None, excluded_
         
         fig.update_layout(
             polar=dict(
-                radialaxis=dict(visible=True, range=[0, 100]),
-                angularaxis=dict(rotation=90, direction="clockwise")
+                radialaxis=dict(visible=True, range=[0, 100], gridwidth=curve_thickness),
+                angularaxis=dict(rotation=90, direction="clockwise", gridwidth=curve_thickness)
             ),
             showlegend=True,
             height=400,
@@ -754,13 +742,11 @@ def create_radar_chart(df, top_n, material_type=None, year_range=None, excluded_
         update_log(traceback.format_exc())
         return None
 
-def create_histogram(df, top_n, material_type=None, year_range=None, excluded_labels=None, color_map=None, outline_thickness=1):
+def create_histogram(df, top_n, material_type=None, year_range=None, outline_thickness=1):
     try:
         if df is None or df.empty:
             st.error("No data available for histogram")
             return None
-        
-        df = filter_excluded_labels(df, excluded_labels, update_log)
         
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
@@ -774,21 +760,21 @@ def create_histogram(df, top_n, material_type=None, year_range=None, excluded_la
         data = df.groupby('formula').size().reset_index(name='count')
         top_data = data.nlargest(top_n, 'count')
         
-        # Assign colors based on material type
+        color_map = st.session_state.get('color_map', {'p-type': '#d62728', 'n-type': '#1f77b4'})
         top_data['color'] = top_data['formula'].apply(
-            lambda x: color_map.get(x, '#1f77b4' if material_type == 'p-type' else '#d62728' if material_type == 'n-type' else '#808080')
+            lambda x: color_map.get(x, '#d62728' if material_type == 'p-type' else '#1f77b4' if material_type == 'n-type' else '#808080')
         )
         
         fig = go.Figure()
-        for formula, row in top_data.iterrows():
+        for _, row in top_data.iterrows():
             fig.add_trace(go.Bar(
-                x=[formula],
+                x=[row['formula']],
                 y=[row['count']],
+                name=row['formula'],
                 marker=dict(
                     color=row['color'],
                     line=dict(width=outline_thickness, color='#000000')
-                ),
-                name=formula
+                )
             ))
         
         fig.update_layout(
@@ -798,7 +784,8 @@ def create_histogram(df, top_n, material_type=None, year_range=None, excluded_la
             xaxis_tickangle=45,
             height=400,
             margin=dict(t=50, b=100, l=50, r=50),
-            showlegend=False
+            barmode='group',
+            showlegend=True
         )
         
         return fig
@@ -810,13 +797,11 @@ def create_histogram(df, top_n, material_type=None, year_range=None, excluded_la
         update_log(traceback.format_exc())
         return None
 
-def create_network(df, top_n, year_range=None, excluded_labels=None, color_map=None):
+def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
     try:
         if df is None or df.empty:
             st.error("No data available for network visualization")
             return None
-        
-        df = filter_excluded_labels(df, excluded_labels, update_log)
         
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
@@ -824,30 +809,41 @@ def create_network(df, top_n, year_range=None, excluded_labels=None, color_map=N
         if 'year' in df.columns and year_range:
             df = df[df['year'].notna() & (df['year'] >= year_range[0]) & (df['year'] <= year_range[1])]
         
-        data = df.groupby(['formula', 'material_type']).size().reset_index(name='count')
-        top_data = data.groupby('formula')['count'].sum().nlargest(top_n).reset_index()
-        top_formulas = top_data['formula'].tolist()
-        data = data[data['formula'].isin(top_formulas)]
+        data = df.groupby(['material_type', 'formula']).size().reset_index(name='count')
+        top_data = data.groupby('material_type').apply(lambda x: x.nlargest(top_n, 'count')).reset_index(drop=True)
         
         G = nx.Graph()
+        color_map = st.session_state.get('color_map', {'p-type': '#d62728', 'n-type': '#1f77b4'})
         
-        # Add nodes
-        for formula in top_formulas:
-            total_count = data[data['formula'] == formula]['count'].sum()
-            p_count = data[(data['formula'] == formula) & (data['material_type'] == 'p-type')]['count'].sum()
-            n_count = data[(data['formula'] == formula) & (data['material_type'] == 'n-type')]['count'].sum()
-            p_prop = p_count / total_count if total_count > 0 else 0
-            n_prop = n_count / total_count if total_count > 0 else 0
-            G.add_node(formula, size=total_count * 10, color=color_map.get(formula, '#808080'),
-                       label=f"{formula}\n{p_prop:.1%} p-type, {n_prop:.1%} n-type")
-        G.add_node('p-type', size=1000, color='#1f77b4', label='p-type')
-        G.add_node('n-type', size=1000, color='#d62728', label='n-type')
+        # Add nodes for material types
+        for mtype in top_data['material_type'].unique():
+            G.add_node(mtype, size=20, color=color_map.get(mtype, '#808080'))
         
-        # Add edges
-        for _, row in data.iterrows():
-            G.add_edge(row['formula'], row['material_type'], weight=row['count'])
+        # Add nodes for materials and edges
+        for _, row in top_data.iterrows():
+            formula = row['formula']
+            mtype = row['material_type']
+            count = row['count']
+            G.add_node(formula, size=max(count * 10, 5), color=color_map.get(formula, color_map.get(mtype, '#808080')))
+            G.add_edge(mtype, formula, weight=count)
         
-        pos = graphviz_layout(G, prog='neato')
+        # Calculate proportions for hover text
+        total_counts = top_data.groupby('material_type')['count'].sum().to_dict()
+        node_labels = {}
+        for node in G.nodes():
+            if node in ['p-type', 'n-type']:
+                total_count = total_counts.get(node, 1)
+                node_labels[node] = f"{node}\nCount: {total_count}"
+            else:
+                p_count = top_data[(top_data['formula'] == node) & (top_data['material_type'] == 'p-type')]['count'].sum()
+                n_count = top_data[(top_data['formula'] == node) & (top_data['material_type'] == 'n-type')]['count'].sum()
+                total = p_count + n_count
+                p_prop = p_count / total if total > 0 else 0
+                n_prop = n_count / total if total > 0 else 0
+                node_labels[node] = f"{node}\n{p_prop:.1%} p-type, {n_prop:.1%} n-type"
+        
+        # Create layout
+        pos = nx.spring_layout(G, seed=42)
         
         edge_x = []
         edge_y = []
@@ -862,7 +858,7 @@ def create_network(df, top_n, year_range=None, excluded_labels=None, color_map=N
         max_weight = max(edge_weights) if edge_weights else 1
         edge_trace = go.Scatter(
             x=edge_x, y=edge_y,
-            line=dict(width=[w/max_weight*5 for w in edge_weights], color='#888'),
+            line=dict(width=[w/max_weight*edge_thickness_scale for w in edge_weights], color='#888'),
             hoverinfo='none',
             mode='lines'
         )
@@ -872,36 +868,37 @@ def create_network(df, top_n, year_range=None, excluded_labels=None, color_map=N
         node_sizes = []
         node_colors = []
         node_text = []
-        for node in G.nodes(data=True):
-            x, y = pos[node[0]]
+        for node in G.nodes():
+            x, y = pos[node]
             node_x.append(x)
             node_y.append(y)
-            node_sizes.append(node[1]['size'])
-            node_colors.append(node[1]['color'])
-            node_text.append(node[1]['label'])
+            node_sizes.append(G.nodes[node]['size'])
+            node_colors.append(G.nodes[node]['color'])
+            node_text.append(node_labels[node])
         
         node_trace = go.Scatter(
             x=node_x, y=node_y,
             mode='markers+text',
             text=node_text,
-            textposition='top center',
+            hoverinfo='text',
             marker=dict(
-                size=node_sizes,
+                showscale=False,
                 color=node_colors,
-                line=dict(width=1, color='#000000')
-            ),
-            hoverinfo='text'
+                size=node_sizes,
+                line_width=2
+            )
         )
         
         fig = go.Figure(data=[edge_trace, node_trace],
                         layout=go.Layout(
-                            title='Network of Top Materials and Types',
-                            title_x=0.5,
+                            title=f"Network of Top {top_n} Materials per Type",
+                            titlefont_size=20,
                             showlegend=False,
                             hovermode='closest',
-                            margin=dict(b=20,l=5,r=5,t=40),
+                            margin=dict(b=20, l=20, r=20, t=80),
                             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
+                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                            height=600
                         ))
         
         return fig
@@ -966,7 +963,12 @@ st.sidebar.header("Chart Customization")
 discrete_mode = st.sidebar.radio("Color Mode", ["Discrete (by type)", "Continuous (by count)"]) == "Discrete (by type)"
 colorblind_safe = st.sidebar.checkbox("Use Colorblind-Safe Palette", value=True)
 colormap_choice = st.sidebar.selectbox("Choose Color Map (Continuous mode)", COLOR_SCALES, index=COLOR_SCALES.index('cividis'))
-branchvalues = st.sidebar.selectbox("Branch Values", ["total", "remainder"], index=0)
+
+# Line and grid thickness
+st.sidebar.header("Line and Grid Settings")
+curve_thickness = st.sidebar.slider("Curve Thickness", 1, 5, 2)
+grid_thickness = st.sidebar.slider("Grid Thickness", 1, 5, 1)
+outline_thickness = st.sidebar.slider("Outline Thickness", 1, 5, 1)
 
 # Publication-quality settings
 st.sidebar.header("Publication-Quality Settings")
@@ -977,9 +979,6 @@ chart_width = st.sidebar.slider("Chart Width", 400, 1200, 800)
 background_color = st.sidebar.color_picker("Background Color", "#FFFFFF")
 font_family = st.sidebar.selectbox("Font Family", ["Arial, sans-serif", "Times New Roman, serif", "Helvetica, sans-serif"], index=0)
 show_grid = st.sidebar.checkbox("Show Gridlines", value=False)
-curve_thickness = st.sidebar.slider("Radar Curve Thickness", 1, 5, 2)
-grid_thickness = st.sidebar.slider("Grid Thickness", 0.5, 3.0, 1.0)
-outline_thickness = st.sidebar.slider("Outline Thickness", 0.5, 5.0, 1.0)
 export_dpi = st.sidebar.slider("Export DPI", 100, 600, 300)
 
 # Custom color selection
@@ -1090,6 +1089,7 @@ if st.session_state.data_df is not None:
 
 # Generate charts
 if st.session_state.data_df is not None:
+    # Apply publication-quality settings to all charts
     layout_settings = dict(
         height=chart_height,
         width=chart_width,
@@ -1099,8 +1099,7 @@ if st.session_state.data_df is not None:
         showlegend=True,
         margin=dict(t=80, l=50, r=50, b=50),
         xaxis=dict(showgrid=show_grid, gridwidth=grid_thickness),
-        yaxis=dict(showgrid=show_grid, gridwidth=grid_thickness),
-        polar=dict(radialaxis=dict(showgrid=show_grid, gridwidth=grid_thickness))
+        yaxis=dict(showgrid=show_grid, gridwidth=grid_thickness)
     )
 
     st.subheader("Highlighted Materials Sunburst Chart")
@@ -1116,10 +1115,10 @@ if st.session_state.data_df is not None:
                 excluded_labels,
                 year_range,
                 chart_height,
-                branchvalues,
-                label_threshold,
-                show_values,
-                show_percentages,
+                branchvalues='total',
+                label_threshold=label_threshold,
+                show_values=show_values,
+                show_percentages=show_percentages,
                 custom_colors=st.session_state.custom_colors,
                 colorblind_safe=colorblind_safe,
                 min_count_scale=min_count_scale,
@@ -1132,6 +1131,7 @@ if st.session_state.data_df is not None:
                     **layout_settings
                 )
                 st.plotly_chart(fig_highlighted, use_container_width=True)
+                st.session_state.hierarchy_data = highlighted_hierarchy_data
             else:
                 st.warning("Unable to generate highlighted sunburst chart. Check if selected materials exist in the dataset or review logs for details.")
     
@@ -1148,10 +1148,10 @@ if st.session_state.data_df is not None:
                 excluded_labels,
                 year_range,
                 chart_height,
-                branchvalues,
-                label_threshold,
-                show_values,
-                show_percentages,
+                branchvalues='total',
+                label_threshold=label_threshold,
+                show_values=show_values,
+                show_percentages=show_percentages,
                 custom_colors=st.session_state.custom_colors,
                 colorblind_safe=colorblind_safe,
                 outline_thickness=outline_thickness
@@ -1163,6 +1163,7 @@ if st.session_state.data_df is not None:
                     **layout_settings
                 )
                 st.plotly_chart(fig_top_n, use_container_width=True)
+                st.session_state.hierarchy_data = top_n_hierarchy_data
             else:
                 st.warning("Unable to generate top N sunburst chart. Check data format.")
     
@@ -1172,28 +1173,19 @@ if st.session_state.data_df is not None:
         with st.spinner("Generating word clouds..."):
             with col1:
                 st.write("All Materials")
-                wordcloud_all = create_word_cloud(
-                    st.session_state.data_df, top_n, year_range=year_range, 
-                    excluded_labels=excluded_labels, color_map=st.session_state.color_map
-                )
+                wordcloud_all = create_word_cloud(st.session_state.data_df, top_n, year_range=year_range)
                 if wordcloud_all:
                     st.image(wordcloud_all, use_column_width=True)
             
             with col2:
                 st.write("p-type Materials")
-                wordcloud_p = create_word_cloud(
-                    st.session_state.data_df, top_n, material_type='p-type', year_range=year_range,
-                    excluded_labels=excluded_labels, color_map=st.session_state.color_map
-                )
+                wordcloud_p = create_word_cloud(st.session_state.data_df, top_n, material_type='p-type', year_range=year_range)
                 if wordcloud_p:
                     st.image(wordcloud_p, use_column_width=True)
             
             with col3:
                 st.write("n-type Materials")
-                wordcloud_n = create_word_cloud(
-                    st.session_state.data_df, top_n, material_type='n-type', year_range=year_range,
-                    excluded_labels=excluded_labels, color_map=st.session_state.color_map
-                )
+                wordcloud_n = create_word_cloud(st.session_state.data_df, top_n, material_type='n-type', year_range=year_range)
                 if wordcloud_n:
                     st.image(wordcloud_n, use_column_width=True)
     
@@ -1203,11 +1195,7 @@ if st.session_state.data_df is not None:
         with st.spinner("Generating radar charts..."):
             with col1:
                 st.write("All Materials")
-                radar_all = create_radar_chart(
-                    st.session_state.data_df, top_n, year_range=year_range,
-                    excluded_labels=excluded_labels, color_map=st.session_state.color_map,
-                    curve_thickness=curve_thickness
-                )
+                radar_all = create_radar_chart(st.session_state.data_df, top_n, year_range=year_range, curve_thickness=curve_thickness)
                 if radar_all:
                     radar_all.update_layout(
                         title_font_size=chart_title_fontsize,
@@ -1217,11 +1205,7 @@ if st.session_state.data_df is not None:
             
             with col2:
                 st.write("p-type Materials")
-                radar_p = create_radar_chart(
-                    st.session_state.data_df, top_n, material_type='p-type', year_range=year_range,
-                    excluded_labels=excluded_labels, color_map=st.session_state.color_map,
-                    curve_thickness=curve_thickness
-                )
+                radar_p = create_radar_chart(st.session_state.data_df, top_n, material_type='p-type', year_range=year_range, curve_thickness=curve_thickness)
                 if radar_p:
                     radar_p.update_layout(
                         title_font_size=chart_title_fontsize,
@@ -1231,11 +1215,7 @@ if st.session_state.data_df is not None:
             
             with col3:
                 st.write("n-type Materials")
-                radar_n = create_radar_chart(
-                    st.session_state.data_df, top_n, material_type='n-type', year_range=year_range,
-                    excluded_labels=excluded_labels, color_map=st.session_state.color_map,
-                    curve_thickness=curve_thickness
-                )
+                radar_n = create_radar_chart(st.session_state.data_df, top_n, material_type='n-type', year_range=year_range, curve_thickness=curve_thickness)
                 if radar_n:
                     radar_n.update_layout(
                         title_font_size=chart_title_fontsize,
@@ -1249,11 +1229,7 @@ if st.session_state.data_df is not None:
         with st.spinner("Generating histograms..."):
             with col1:
                 st.write("All Materials")
-                hist_all = create_histogram(
-                    st.session_state.data_df, top_n, year_range=year_range,
-                    excluded_labels=excluded_labels, color_map=st.session_state.color_map,
-                    outline_thickness=outline_thickness
-                )
+                hist_all = create_histogram(st.session_state.data_df, top_n, year_range=year_range, outline_thickness=outline_thickness)
                 if hist_all:
                     hist_all.update_layout(
                         title_font_size=chart_title_fontsize,
@@ -1263,11 +1239,7 @@ if st.session_state.data_df is not None:
             
             with col2:
                 st.write("p-type Materials")
-                hist_p = create_histogram(
-                    st.session_state.data_df, top_n, material_type='p-type', year_range=year_range,
-                    excluded_labels=excluded_labels, color_map=st.session_state.color_map,
-                    outline_thickness=outline_thickness
-                )
+                hist_p = create_histogram(st.session_state.data_df, top_n, material_type='p-type', year_range=year_range, outline_thickness=outline_thickness)
                 if hist_p:
                     hist_p.update_layout(
                         title_font_size=chart_title_fontsize,
@@ -1277,11 +1249,7 @@ if st.session_state.data_df is not None:
             
             with col3:
                 st.write("n-type Materials")
-                hist_n = create_histogram(
-                    st.session_state.data_df, top_n, material_type='n-type', year_range=year_range,
-                    excluded_labels=excluded_labels, color_map=st.session_state.color_map,
-                    outline_thickness=outline_thickness
-                )
+                hist_n = create_histogram(st.session_state.data_df, top_n, material_type='n-type', year_range=year_range, outline_thickness=outline_thickness)
                 if hist_n:
                     hist_n.update_layout(
                         title_font_size=chart_title_fontsize,
@@ -1292,10 +1260,7 @@ if st.session_state.data_df is not None:
     st.subheader("Network Visualization")
     if st.sidebar.button("Generate Network Visualization"):
         with st.spinner("Generating network visualization..."):
-            network_fig = create_network(
-                st.session_state.data_df, top_n, year_range=year_range,
-                excluded_labels=excluded_labels, color_map=st.session_state.color_map
-            )
+            network_fig = create_network(st.session_state.data_df, top_n, year_range=year_range, edge_thickness_scale=curve_thickness)
             if network_fig:
                 network_fig.update_layout(
                     title_font_size=chart_title_fontsize,
@@ -1341,29 +1306,27 @@ if st.session_state.data_df is not None:
             update_log(f"JSON export error: {str(e)}")
     
     with col4:
-        if 'fig_highlighted' in locals() and fig_highlighted:
-            st.download_button(
-                label="Download Charts as HTML",
-                data=fig_highlighted.to_html(),
-                file_name="thermoelectric_charts.html",
-                mime="text/html"
-            )
+        st.download_button(
+            label="Download Charts as HTML",
+            data=fig_highlighted.to_html() if 'fig_highlighted' in locals() else "",
+            file_name="thermoelectric_charts.html",
+            mime="text/html"
+        )
     
     with st.expander("Publication Quality Tips"):
         st.markdown("""
         **For publication-quality figures:**
         
-        1. Adjust **Chart Title Font Size**, **Label Font Size**, **Chart Height**, and **Chart Width** for optimal proportions.
+        1. Adjust the **Chart Title Font Size**, **Label Font Size**, **Chart Height**, and **Chart Width** for optimal proportions.
         2. Choose a **Font Family** suitable for your publication (e.g., Arial for clarity).
         3. Use the **Background Color** picker to match your publication's style.
         4. Set **Export DPI** to 300 or higher for high-resolution outputs.
-        5. Adjust **Curve Thickness**, **Grid Thickness**, and **Outline Thickness** for visual clarity.
-        6. Use the **camera icon** in Plotly charts to export as high-resolution PNG.
-        7. Enable **Colorblind-Safe Palette** for accessibility.
-        8. Adjust **Label Threshold** to reduce clutter from small segments.
-        9. Use **Custom Colors** to highlight specific materials or types.
-        10. Export data as **CSV** or **JSON** for further analysis in other tools.
-        11. Check **logs** below for any data or rendering issues.
+        5. Use the **camera icon** in Plotly charts to export as high-resolution PNG.
+        6. Enable **Colorblind-Safe Palette** for accessibility.
+        7. Adjust **Label Threshold** to reduce clutter from small segments.
+        8. Use **Custom Colors** to highlight specific materials or types.
+        9. Adjust **Curve Thickness**, **Grid Thickness**, and **Outline Thickness** for visual clarity.
+        10. Check **logs** below for any data or rendering issues.
         """)
     
     with st.expander("View Application Logs"):
