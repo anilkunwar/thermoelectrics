@@ -12,7 +12,6 @@ import uuid
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 from io import BytesIO
-from plotly.subplots import make_subplots
 import networkx as nx
 
 # Directory setup
@@ -143,23 +142,23 @@ def create_color_map(labels, discrete_mode, colormap_choice, custom_colors, colo
                     other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                     color_map[label] = other_colors[min(i % len(other_colors), len(other_colors)-1)]
                 elif label in ['p-type', 'n-type']:
-                    color_map[label] = validate_color_scale(OTHER_COLOR_SCALES.get(label, 'Greys'))[4]
+                    color_map[label] = '#d62728' if label == 'p-type' else '#1f77b4'
                 else:
                     color_map[label] = colors[i % len(colors)]
     else:
         colors = validate_color_scale(colormap_choice if colormap_choice in COLOR_SCALES else 'cividis')
-        for label in labels:
+        for i, label in enumerate(labels):
             if label in highlight_materials:
-                color_map[label] = HIGHLIGHT_COLORS[labels.tolist().index(label) % len(HIGHLIGHT_COLORS)]
+                color_map[label] = HIGHLIGHT_COLORS[i % len(HIGHLIGHT_COLORS)]
             elif label not in color_map and (label.startswith('Other') or label.startswith('Sub-Other')):
                 mtype = label.split(' ')[1].split('L')[0] if 'L' in label else label.split(' ')[1]
                 mtype = mtype if mtype in ['p-type', 'n-type'] else 'p-type'
                 other_colors = validate_color_scale(OTHER_COLOR_SCALES.get(mtype, 'Greys'))
                 color_map[label] = other_colors[-1]
             elif label not in color_map and label in ['p-type', 'n-type']:
-                color_map[label] = validate_color_scale(OTHER_COLOR_SCALES.get(label, 'Greys'))[4]
+                color_map[label] = '#d62728' if label == 'p-type' else '#1f77b4'
             elif label not in color_map:
-                color_map[label] = '#808080'
+                color_map[label] = colors[i % len(colors)]
     return color_map
 
 def filter_excluded_labels(df, excluded_labels, update_log=None):
@@ -186,7 +185,7 @@ def filter_excluded_labels(df, excluded_labels, update_log=None):
 def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discrete_mode, show_labels, label_fontsize, 
                                excluded_labels, year_range=None, chart_height=800, branchvalues='total',
                                label_threshold=1.0, show_values=True, show_percentages=True, custom_colors=None, 
-                               colorblind_safe=False, min_count_scale=10.0, outline_thickness=1):
+                               colorblind_safe=False, min_count_scale=10.0, highlight_line_thickness=3):
     try:
         if df is None or df.empty:
             st.error("No data available for visualization")
@@ -319,11 +318,11 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         color_map = st.session_state.get('color_map', create_color_map(unique_labels, discrete_mode, colormap_choice, custom_colors, colorblind_safe, highlight_materials))
         st.session_state.color_map = color_map
         
-        hierarchy_data['font_size'] = hierarchy_data['label'].apply(lambda x: int(label_fontsize * 1.5) if x in highlight_materials else label_fontsize)
+        hierarchy_data['font_size'] = hierarchy_data['label'].apply(lambda x: int(label_fontsize * 2.0) if x in highlight_materials else label_fontsize)
         hierarchy_data['font_weight'] = hierarchy_data['label'].apply(lambda x: 'bold' if x in highlight_materials else 'normal')
         
         if highlight_materials:
-            line_widths = hierarchy_data['label'].apply(lambda x: outline_thickness if x in highlight_materials else 0).tolist()
+            line_widths = hierarchy_data['label'].apply(lambda x: highlight_line_thickness if x in highlight_materials else 0).tolist()
             line_colors = hierarchy_data['label'].apply(lambda x: '#000000' if x in highlight_materials else '#FFFFFF').tolist()
             update_log(f"Line colors assigned: {line_colors[:10]}...")
         else:
@@ -335,8 +334,9 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
         if label_threshold > 0:
             hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
         
+        # Only show parent labels (year or material_type) inside
         hierarchy_data['text_template'] = hierarchy_data.apply(
-            lambda row: (
+            lambda row: '' if row['parent'] != '' and row['label'] not in highlight_materials else (
                 f"{row['label']}<br>Count: {row['count']}<br>Type: {row['parent'].split('_')[-1] if '_' in row['parent'] else row['parent']}"
                 if row['label'] in highlight_materials else row['display_text']
             ), axis=1
@@ -356,7 +356,8 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     colors=hierarchy_data['color'],
                     line=dict(width=line_widths, color=line_colors)
                 ),
-                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<br>Type: %{customdata}<extra></extra>',
+                customdata=hierarchy_data['parent'].apply(lambda x: x.split('_')[-1] if '_' in x else x),
                 textinfo="label+text" if show_labels else "none",
                 texttemplate=hierarchy_data['text_template'],
                 textfont=dict(
@@ -386,7 +387,8 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                     cmax=colors.max(),
                     line=dict(width=line_widths, color=line_colors)
                 ),
-                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<br>Type: %{customdata}<extra></extra>',
+                customdata=hierarchy_data['parent'].apply(lambda x: x.split('_')[-1] if '_' in x else x),
                 textinfo="label+text" if show_labels else "none",
                 texttemplate=hierarchy_data['text_template'],
                 textfont=dict(
@@ -397,6 +399,28 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                 insidetextorientation='radial',
                 sort=False
             ))
+
+        # Add annotations for formula labels (outside periphery)
+        annotations = []
+        if highlight_materials:
+            formula_data = hierarchy_data[hierarchy_data['label'].isin(highlight_materials)]
+            angles = np.linspace(0, 2 * np.pi, len(formula_data) + 1)[:-1]
+            for i, (_, row) in enumerate(formula_data.iterrows()):
+                label = row['label']
+                angle = angles[i]
+                x = 0.5 + 0.55 * np.cos(angle)
+                y = 0.5 + 0.55 * np.sin(angle)
+                annotations.append(dict(
+                    text=label,
+                    x=x,
+                    y=y,
+                    xref="paper",
+                    yref="paper",
+                    showarrow=False,
+                    font=dict(size=int(label_fontsize * 1.5), family="Arial, sans-serif", color=color_map.get(label, '#000000')),
+                    textangle=-np.degrees(angle),
+                    align='center'
+                ))
 
         fig.update_layout(
             height=chart_height,
@@ -411,7 +435,8 @@ def create_highlighted_sunburst(df, highlight_materials, colormap_choice, discre
                 xanchor='center',
                 yanchor='top',
                 font=dict(size=20, family="Arial, sans-serif")
-            )
+            ),
+            annotations=annotations
         )
 
         return fig, hierarchy_data
@@ -567,7 +592,7 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         hierarchy_data['percentage'] = (hierarchy_data['count'] / total_count) * 100
         
         custom_colors = custom_colors or {}
-        color_map = {'p-type': '#d62728', 'n-type': '#1f77b4'}  # Red for p-type, Blue for n-type
+        color_map = {'p-type': '#d62728', 'n-type': '#1f77b4'}
         for label in hierarchy_data['label']:
             if label.startswith('Other p-type'):
                 color_map[label] = '#fd8d3c'
@@ -582,30 +607,88 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
         if label_threshold > 0:
             hierarchy_data.loc[hierarchy_data['percentage'] < label_threshold, 'display_text'] = ''
         
-        fig = go.Figure(go.Sunburst(
-            ids=hierarchy_data['id'],
-            labels=hierarchy_data['display_text'],
-            parents=hierarchy_data['parent'],
-            values=hierarchy_data['count'],
-            branchvalues=branchvalues,
-            marker=dict(
-                colors=hierarchy_data['label'].map(color_map),
-                line=dict(width=[outline_thickness if label not in ['p-type', 'n-type'] else 0 for label in hierarchy_data['label']], color=['#FFFFFF'] * len(hierarchy_data))
-            ),
-            hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<extra></extra>',
-            textinfo="label+text" if show_labels else "none",
-            texttemplate=(
-                "%{label}" + 
-                ("<br>%{value}" if show_values else "") + 
-                ("<br>%{percentParent:.1%}" if show_percentages else "")
-            ),
-            textfont=dict(
-                size=label_fontsize,
-                family="Arial, sans-serif"
-            ),
-            insidetextorientation='radial',
-            sort=False
-        ))
+        # Only show parent labels inside
+        hierarchy_data['text_template'] = hierarchy_data.apply(
+            lambda row: row['display_text'] if row['parent'] == '' else '', axis=1
+        )
+
+        if discrete_mode:
+            hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
+            hierarchy_data.loc[hierarchy_data['parent'] == '', 'color'] = '#E5ECF6'
+            
+            fig = go.Figure(go.Sunburst(
+                ids=hierarchy_data['id'],
+                labels=hierarchy_data['display_text'],
+                parents=hierarchy_data['parent'],
+                values=hierarchy_data['count'],
+                branchvalues=branchvalues,
+                marker=dict(
+                    colors=hierarchy_data['color'],
+                    line=dict(width=[outline_thickness if label not in ['p-type', 'n-type'] else 0 for label in hierarchy_data['label']], color=['#FFFFFF'] * len(hierarchy_data))
+                ),
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<br>Type: %{customdata}<extra></extra>',
+                customdata=hierarchy_data['parent'].apply(lambda x: x.split('_')[-1] if '_' in x else x),
+                textinfo="label+text" if show_labels else "none",
+                texttemplate=hierarchy_data['text_template'],
+                textfont=dict(
+                    size=label_fontsize,
+                    family="Arial, sans-serif"
+                ),
+                insidetextorientation='radial',
+                sort=False
+            ))
+        else:
+            colors = np.log1p(hierarchy_data['count'].astype(float))
+            hierarchy_data['color'] = hierarchy_data['label'].map(color_map)
+            
+            fig = go.Figure(go.Sunburst(
+                ids=hierarchy_data['id'],
+                labels=hierarchy_data['display_text'],
+                parents=hierarchy_data['parent'],
+                values=hierarchy_data['count'],
+                branchvalues=branchvalues,
+                marker=dict(
+                    colors=hierarchy_data['color'],
+                    colorscale=colormap_choice.lower(),
+                    showscale=True,
+                    colorbar=dict(title="Log(Count+1)"),
+                    cmin=colors.min(),
+                    cmax=colors.max(),
+                    line=dict(width=[outline_thickness if label not in ['p-type', 'n-type'] else 0 for label in hierarchy_data['label']], color=['#FFFFFF'] * len(hierarchy_data))
+                ),
+                hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percentParent:.2%}<br>Type: %{customdata}<extra></extra>',
+                customdata=hierarchy_data['parent'].apply(lambda x: x.split('_')[-1] if '_' in x else x),
+                textinfo="label+text" if show_labels else "none",
+                texttemplate=hierarchy_data['text_template'],
+                textfont=dict(
+                    size=label_fontsize,
+                    family="Arial, sans-serif"
+                ),
+                insidetextorientation='radial',
+                sort=False
+            ))
+
+        # Add annotations for formula labels (outside periphery)
+        annotations = []
+        formula_data = hierarchy_data[hierarchy_data['parent'].str.contains('_') | (hierarchy_data['parent'] == '')]
+        angles = np.linspace(0, 2 * np.pi, len(formula_data) + 1)[:-1]
+        for i, (_, row) in enumerate(formula_data.iterrows()):
+            if row['parent'] != '' or 'year' in df.columns:
+                label = row['label']
+                angle = angles[i]
+                x = 0.5 + 0.55 * np.cos(angle)
+                y = 0.5 + 0.55 * np.sin(angle)
+                annotations.append(dict(
+                    text=label,
+                    x=x,
+                    y=y,
+                    xref="paper",
+                    yref="paper",
+                    showarrow=False,
+                    font=dict(size=int(label_fontsize * 1.5), family="Arial, sans-serif", color=color_map.get(label, '#000000')),
+                    textangle=-np.degrees(angle),
+                    align='center'
+                ))
 
         fig.update_layout(
             height=chart_height,
@@ -620,7 +703,8 @@ def create_top_n_sunburst(df, top_n, colormap_choice, discrete_mode, show_labels
                 xanchor='center',
                 yanchor='top',
                 font=dict(size=20, family="Arial, sans-serif")
-            )
+            ),
+            annotations=annotations
         )
 
         return fig, hierarchy_data, sunburst_data
@@ -700,7 +784,6 @@ def create_radar_chart(df, top_n, material_type=None, year_range=None, curve_thi
             st.error("Need at least 3 materials for a radar chart")
             return None
         
-        # Normalize values for better visualization
         max_value = max(values)
         values = [v / max_value * 100 if max_value > 0 else 0 for v in values]
         
@@ -709,7 +792,7 @@ def create_radar_chart(df, top_n, material_type=None, year_range=None, curve_thi
         
         fig = go.Figure()
         fig.add_trace(go.Scatterpolar(
-            r=values + [values[0]],  # Close the radar chart
+            r=values + [values[0]],
             theta=categories + [categories[0]],
             fill='toself',
             name=material_type if material_type else 'All Materials',
@@ -815,11 +898,9 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
         G = nx.Graph()
         color_map = st.session_state.get('color_map', {'p-type': '#d62728', 'n-type': '#1f77b4'})
         
-        # Add nodes for material types
         for mtype in top_data['material_type'].unique():
             G.add_node(mtype, size=20, color=color_map.get(mtype, '#808080'))
         
-        # Add nodes for materials and edges
         for _, row in top_data.iterrows():
             formula = row['formula']
             mtype = row['material_type']
@@ -827,7 +908,6 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
             G.add_node(formula, size=max(count * 10, 5), color=color_map.get(formula, color_map.get(mtype, '#808080')))
             G.add_edge(mtype, formula, weight=count)
         
-        # Calculate proportions for hover text
         total_counts = top_data.groupby('material_type')['count'].sum().to_dict()
         node_labels = {}
         for node in G.nodes():
@@ -842,23 +922,19 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
                 n_prop = n_count / total if total > 0 else 0
                 node_labels[node] = f"{node}\n{p_prop:.1%} p-type, {n_prop:.1%} n-type"
         
-        # Create layout
         pos = nx.spring_layout(G, seed=42)
         
         edge_x = []
         edge_y = []
-        edge_weights = []
         for edge in G.edges(data=True):
             x0, y0 = pos[edge[0]]
             x1, y1 = pos[edge[1]]
             edge_x.extend([x0, x1, None])
             edge_y.extend([y0, y1, None])
-            edge_weights.append(edge[2]['weight'])
         
-        max_weight = max(edge_weights) if edge_weights else 1
         edge_trace = go.Scatter(
             x=edge_x, y=edge_y,
-            line=dict(width=[w/max_weight*edge_thickness_scale for w in edge_weights], color='#888'),
+            line=dict(width=edge_thickness_scale, color='#888'),
             hoverinfo='none',
             mode='lines'
         )
@@ -966,14 +1042,15 @@ colormap_choice = st.sidebar.selectbox("Choose Color Map (Continuous mode)", COL
 
 # Line and grid thickness
 st.sidebar.header("Line and Grid Settings")
-curve_thickness = st.sidebar.slider("Curve Thickness", 1, 5, 2)
-grid_thickness = st.sidebar.slider("Grid Thickness", 1, 5, 1)
-outline_thickness = st.sidebar.slider("Outline Thickness", 1, 5, 1)
+curve_thickness = st.sidebar.slider("Curve Thickness (Radar/Network)", 1, 5, 2)
+grid_thickness = st.sidebar.slider("Grid Thickness (Radar/Histogram)", 1, 5, 1)
+outline_thickness = st.sidebar.slider("Outline Thickness (Sunburst/Histogram)", 1, 5, 1)
+highlight_line_thickness = st.sidebar.slider("Highlight Outline Thickness", 1, 5, 3)
 
 # Publication-quality settings
 st.sidebar.header("Publication-Quality Settings")
 chart_title_fontsize = st.sidebar.slider("Chart Title Font Size", 12, 30, 20)
-label_fontsize = st.sidebar.slider("Label Font Size", 8, 24, 12)
+label_fontsize = st.sidebar.slider("Label Font Size", 8, 100, 12)
 chart_height = st.sidebar.slider("Chart Height", 400, 1200, 800)
 chart_width = st.sidebar.slider("Chart Width", 400, 1200, 800)
 background_color = st.sidebar.color_picker("Background Color", "#FFFFFF")
@@ -1089,7 +1166,6 @@ if st.session_state.data_df is not None:
 
 # Generate charts
 if st.session_state.data_df is not None:
-    # Apply publication-quality settings to all charts
     layout_settings = dict(
         height=chart_height,
         width=chart_width,
@@ -1122,7 +1198,7 @@ if st.session_state.data_df is not None:
                 custom_colors=st.session_state.custom_colors,
                 colorblind_safe=colorblind_safe,
                 min_count_scale=min_count_scale,
-                outline_thickness=outline_thickness
+                highlight_line_thickness=highlight_line_thickness
             )
             
             if fig_highlighted:
@@ -1325,7 +1401,7 @@ if st.session_state.data_df is not None:
         6. Enable **Colorblind-Safe Palette** for accessibility.
         7. Adjust **Label Threshold** to reduce clutter from small segments.
         8. Use **Custom Colors** to highlight specific materials or types.
-        9. Adjust **Curve Thickness**, **Grid Thickness**, and **Outline Thickness** for visual clarity.
+        9. Adjust **Highlight Outline Thickness** for emphasized materials.
         10. Check **logs** below for any data or rendering issues.
         """)
     
