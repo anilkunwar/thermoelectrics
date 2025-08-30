@@ -961,7 +961,7 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
     try:
         if df is None or df.empty:
             st.error("No data available for network visualization")
-            return None, None
+            return None, None, False
         
         if 'material' in df.columns and 'classification' in df.columns:
             df = df.rename(columns={'material': 'formula', 'classification': 'material_type'})
@@ -1007,7 +1007,7 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
                 buf = BytesIO(img_data)
                 buf.seek(0)
                 update_log(f"Generated Graphviz network visualization with {len(top_data)} nodes and {len(edge_weights)} edges")
-                return buf, 'graphviz'
+                return buf, 'graphviz', True
             except Exception as e:
                 st.warning(
                     f"Graphviz rendering failed: {str(e)}. Falling back to NetworkX visualization. "
@@ -1118,15 +1118,27 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
             )
         )
         
+        # Test if static export is possible
+        can_export_static = True
+        try:
+            import kaleido
+            buf = BytesIO()
+            fig.write_image(buf, format="png", scale=1)  # Test export
+            buf.close()
+        except Exception as e:
+            st.warning(f"Static image export for NetworkX visualization is not supported in this environment: {str(e)}. Interactive plot will be displayed.")
+            update_log(f"NetworkX static export test failed: {str(e)}")
+            can_export_static = False
+        
         update_log(f"Generated NetworkX network visualization with {len(G.nodes())} nodes and {len(G.edges())} edges")
-        return fig, 'networkx'
+        return fig, 'networkx', can_export_static
     
     except Exception as e:
         st.error(f"Failed to generate network visualization: {str(e)}")
         update_log(f"Network visualization error: {str(e)}")
         import traceback
         update_log(traceback.format_exc())
-        return None, None
+        return None, None, False
 
 # Streamlit UI
 st.set_page_config(page_title="Advanced Thermoelectric Material Analysis", layout="wide")
