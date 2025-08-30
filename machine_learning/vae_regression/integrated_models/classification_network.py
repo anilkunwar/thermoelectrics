@@ -1,25 +1,34 @@
+import os
+import tempfile
 import streamlit as st
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 from pyvis.network import Network
 from graphviz import Digraph
-import tempfile
 
 # ===========================
-# Load your dataset
+# App config
 # ===========================
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="Formula Classification Graph Explorer")
 st.title("📊 Formula Classification Graph Explorer")
 
-df = pd.read_csv("formula_classifications_via_nlp.csv")
+# ===========================
+# Load dataset safely (works on Streamlit Cloud)
+# ===========================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, "formula_classifications_via_nlp.csv")
+
+@st.cache_data
+def load_data(path):
+    return pd.read_csv(path)
+
+df = load_data(CSV_PATH)
 
 # ===========================
 # Build a bipartite graph
 # ===========================
 G = nx.Graph()
-formulas = df["formula"].unique()
-
 for _, row in df.iterrows():
     f = row["formula"]
     t = row["material_type"]
@@ -58,7 +67,6 @@ with tab2:
     net = Network(height="600px", width="100%", bgcolor="#ffffff", font_color="black")
     net.from_nx(G)
 
-    # Save to temp HTML
     with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
         net.save_graph(tmp_file.name)
         html_code = open(tmp_file.name, "r", encoding="utf-8").read()
