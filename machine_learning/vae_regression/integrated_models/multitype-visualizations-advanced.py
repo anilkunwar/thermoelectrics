@@ -978,11 +978,11 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
         if Digraph is not None:
             try:
                 dot = Digraph('network', format='png')
-                dot.attr(rankdir='LR', size='8,8', bgcolor='white', fontname='Arial')
+                dot.attr(rankdir='LR', size='8,8', bgcolor=background_color, fontname=font_family)
                 
                 # Add nodes for material types
                 for mtype in top_data['material_type'].unique():
-                    dot.node(mtype, mtype, shape='box', style='filled', fillcolor=color_map.get(mtype, '#808080'), fontname='Arial', fontsize='12')
+                    dot.node(mtype, mtype, shape='box', style='filled', fillcolor=color_map.get(mtype, '#808080'), fontname=font_family, fontsize='12')
                 
                 # Add nodes for materials and edges
                 edge_weights = []
@@ -990,7 +990,7 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
                     formula = row['formula']
                     mtype = row['material_type']
                     count = row['count']
-                    dot.node(formula, formula, shape='ellipse', style='filled', fillcolor=color_map.get(formula, color_map.get(mtype, '#808080')), fontname='Arial', fontsize='10')
+                    dot.node(formula, formula, shape='ellipse', style='filled', fillcolor=color_map.get(formula, color_map.get(mtype, '#808080')), fontname=font_family, fontsize='10')
                     edge_weights.append(count)
                 
                 # Scale edge thicknesses
@@ -1000,7 +1000,7 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
                     mtype = row['material_type']
                     weight = row['count']
                     penwidth = max(1.0, (weight / max_weight) * edge_thickness_scale)
-                    dot.edge(mtype, formula, label=f'{weight}', penwidth=str(penwidth), color='#888888', fontname='Arial', fontsize='8')
+                    dot.edge(mtype, formula, label=f'{weight}', penwidth=str(penwidth), color='#888888', fontname=font_family, fontsize='8')
                 
                 # Render the graph to a BytesIO buffer
                 img_data = dot.pipe(format='png')
@@ -1009,34 +1009,40 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
                 update_log(f"Generated Graphviz network visualization with {len(top_data)} nodes and {len(edge_weights)} edges")
                 return buf, 'graphviz'
             except Exception as e:
-                st.warning(f"Graphviz rendering failed: {str(e)}. Falling back to NetworkX visualization. Ensure Graphviz executables (e.g., 'dot') are installed and in your system PATH. Install via 'apt-get install graphviz' (Linux), 'brew install graphviz' (macOS), or download from graphviz.org (Windows).")
+                st.warning(
+                    f"Graphviz rendering failed: {str(e)}. Falling back to NetworkX visualization. "
+                    "Ensure Graphviz is installed and its executables (e.g., 'dot') are in your system PATH. "
+                    "Install via 'apt-get install graphviz' (Linux), 'brew install graphviz' (macOS), "
+                    "or download from graphviz.org (Windows)."
+                )
                 update_log(f"Graphviz rendering error: {str(e)}. Falling back to NetworkX.")
         
         # Fallback to NetworkX
         G = nx.Graph()
+        total_counts = top_data.groupby('material_type')['count'].sum().to_dict()
+        total_sum = sum(total_counts.values()) if total_counts else 1
+        
         for mtype in top_data['material_type'].unique():
-            G.add_node(mtype, size=20, color=color_map.get(mtype, '#808080'))
+            count = total_counts.get(mtype, 0)
+            percentage = (count / total_sum * 100) if total_sum > 0 else 0
+            G.add_node(mtype, size=20, color=color_map.get(mtype, '#808080'), type='material_type', count=count, percentage=percentage)
         
         for _, row in top_data.iterrows():
             formula = row['formula']
             mtype = row['material_type']
             count = row['count']
-            G.add_node(formula, size=max(count * 10, 5), color=color_map.get(formula, color_map.get(mtype, '#808080')))
+            percentage = (count / total_sum * 100) if total_sum > 0 else 0
+            G.add_node(formula, size=max(count * 10, 5), color=color_map.get(formula, color_map.get(mtype, '#808080')), type='formula', count=count, percentage=percentage)
             G.add_edge(mtype, formula, weight=count)
         
-        total_counts = top_data.groupby('material_type')['count'].sum().to_dict()
         node_labels = {}
         for node in G.nodes():
+            count = G.nodes[node]['count']
+            percentage = G.nodes[node]['percentage']
             if node in ['p-type', 'n-type']:
-                total_count = total_counts.get(node, 1)
-                node_labels[node] = f"{node}\nCount: {total_count}"
+                node_labels[node] = f"{node}\nCount: {count}\n{percentage:.1f}%"
             else:
-                p_count = top_data[(top_data['formula'] == node) & (top_data['material_type'] == 'p-type')]['count'].sum()
-                n_count = top_data[(top_data['formula'] == node) & (top_data['material_type'] == 'n-type')]['count'].sum()
-                total = p_count + n_count
-                p_prop = p_count / total if total > 0 else 0
-                n_prop = n_count / total if total > 0 else 0
-                node_labels[node] = f"{node}\n{p_prop:.1%} p-type, {n_prop:.1%} n-type"
+                node_labels[node] = f"{node}\nCount: {count}\n{percentage:.1f}%"
         
         pos = nx.spring_layout(G, seed=42)
         
@@ -1052,8 +1058,10 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
                     x=[x0, x1, None],
                     y=[y0, y1, None],
                     mode='lines',
-                    line=dict(width=weight/max_weight*edge_thickness_scale, color='#888'),
-                    hoverinfo='none'
+                    line=dict(width=max(1.0, (weight / max_weight) * edge_thickness_scale), color='#888888'),
+                    hoverinfo='text',
+                    text=[f"Weight: {weight}"],
+                    hovertemplate='Weight: %{text}<extra></extra>'
                 )
             )
         
@@ -1075,26 +1083,40 @@ def create_network(df, top_n, year_range=None, edge_thickness_scale=5):
             y=node_y,
             mode='markers+text',
             text=node_text,
+            textposition='top center',
             hoverinfo='text',
+            hovertemplate='%{text}<extra></extra>',
             marker=dict(
                 showscale=False,
                 color=node_colors,
                 size=node_sizes,
-                line_width=2
+                line=dict(width=outline_thickness, color='#000000')
             )
         )
         
-        fig = go.Figure(data=edge_traces + [node_trace],
-                        layout=go.Layout(
-                            title=f"Network of Top {top_n} Materials per Type (NetworkX)",
-                            titlefont_size=20,
-                            showlegend=False,
-                            hovermode='closest',
-                            margin=dict(b=20, l=20, r=20, t=80),
-                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                            height=600
-                        ))
+        fig = go.Figure(
+            data=edge_traces + [node_trace],
+            layout=go.Layout(
+                title=dict(
+                    text=f"Network of Top {top_n} Materials per Type (NetworkX)",
+                    x=0.5,
+                    y=0.95,
+                    xanchor='center',
+                    yanchor='top',
+                    font=dict(size=chart_title_fontsize, family=font_family)
+                ),
+                showlegend=False,
+                hovermode='closest',
+                margin=dict(b=20, l=20, r=20, t=80),
+                xaxis=dict(showgrid=show_grid, gridwidth=grid_thickness, zeroline=False, showticklabels=False),
+                yaxis=dict(showgrid=show_grid, gridwidth=grid_thickness, zeroline=False, showticklabels=False),
+                height=chart_height,
+                width=chart_width,
+                plot_bgcolor=background_color,
+                paper_bgcolor=background_color,
+                font=dict(family=font_family, size=12, color="#000000")
+            )
+        )
         
         update_log(f"Generated NetworkX network visualization with {len(G.nodes())} nodes and {len(G.edges())} edges")
         return fig, 'networkx'
