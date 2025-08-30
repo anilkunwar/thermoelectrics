@@ -86,6 +86,11 @@ Formula Classifier and Visualization
 [![machinelearningthermoelectricity](https://img.shields.io/badge/advancedmultitypehierarchicalVisualization-streamlit-red)](https://multitype-visualizations-advanced-thermoelectricsclassification.streamlit.app/) 
 
 
+Graph classifier
+[![machinelearningthermoelectricity](https://img.shields.io/badge/thermoelectricsgraph-streamlit-red)](https://thermoelectrics-graphs.streamlit.app/) 
+
+
+
 
 
 # Informatics approach to classify p-type and n-type thermoelectric materials
