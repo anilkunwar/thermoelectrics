@@ -87,7 +87,12 @@ Formula Classifier and Visualization
 
 
 Graph classifier
+
+Tutorial of data representation in Graph
 [![machinelearningthermoelectricity](https://img.shields.io/badge/thermoelectricsgraph-streamlit-red)](https://thermoelectrics-graphs.streamlit.app/) 
+P-type and n-type classifier usig GNN
+[![machinelearningthermoelectricity](https://img.shields.io/badge/thermoelectricstypegnnclassifier-streamlit-red)](https://materialtype-gnnclassification.streamlit.app/) 
+
 
 
 
