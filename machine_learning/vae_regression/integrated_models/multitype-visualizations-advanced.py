@@ -1318,7 +1318,6 @@ if st.session_state.data_df is not None:
         st.dataframe(st.session_state.data_df.head(100))
 
 # Generate charts
-# Generate charts
 if st.session_state.data_df is not None:
     # Apply publication-quality settings to all charts
     layout_settings = dict(
@@ -1521,7 +1520,7 @@ if st.session_state.data_df is not None:
     st.subheader("Network Visualization")
     if st.sidebar.button("Generate Network Visualization"):
         with st.spinner("Generating network visualization..."):
-            network_result, viz_type = create_network(st.session_state.data_df, top_n, year_range=year_range, edge_thickness_scale=curve_thickness)
+            network_result, viz_type, can_export_static = create_network(st.session_state.data_df, top_n, year_range=year_range, edge_thickness_scale=curve_thickness)
             if network_result:
                 if viz_type == 'graphviz':
                     st.image(network_result, caption=f"Network of Top {top_n} Materials per Type (Graphviz)", use_column_width=True)
@@ -1537,6 +1536,8 @@ if st.session_state.data_df is not None:
                         **layout_settings
                     )
                     st.plotly_chart(network_result, use_container_width=True)
+                    if not can_export_static:
+                        st.warning("Static image export for NetworkX visualization is not supported in this environment. Use interactive plot or Graphviz rendering.")
             else:
                 st.warning("Unable to generate network visualization. Check logs for details.")
     
@@ -1593,7 +1594,7 @@ if st.session_state.data_df is not None:
         if 'radar_n' in locals() and radar_n:
             html_content += radar_n.to_html()
         if 'hist_all' in locals() and hist_all:
-            hist_all.to_html()
+            html_content += hist_all.to_html()  # Fixed: Correctly include hist_all in HTML export
         if 'hist_p' in locals() and hist_p:
             html_content += hist_p.to_html()
         if 'hist_n' in locals() and hist_n:
@@ -1619,92 +1620,160 @@ if st.session_state.data_df is not None:
             st.write("Sunburst Charts")
             if 'fig_sunburst' in locals() and fig_sunburst:
                 buf = BytesIO()
-                fig_sunburst.write_image(buf, format="png", scale=export_dpi/100)
-                st.download_button(
-                    label="Download Full Sunburst as PNG",
-                    data=buf.getvalue(),
-                    file_name="full_sunburst.png",
-                    mime="image/png"
-                )
+                try:
+                    fig_sunburst.write_image(buf, format="png", scale=export_dpi/100)
+                    st.download_button(
+                        label="Download Full Sunburst as PNG",
+                        data=buf.getvalue(),
+                        file_name="full_sunburst.png",
+                        mime="image/png"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export Full Sunburst as PNG: {str(e)}")
+                    update_log(f"Full Sunburst PNG export error: {str(e)}")
+                finally:
+                    buf.close()
+                
                 buf = BytesIO()
-                fig_sunburst.write_image(buf, format="svg")
-                st.download_button(
-                    label="Download Full Sunburst as SVG",
-                    data=buf.getvalue(),
-                    file_name="full_sunburst.svg",
-                    mime="image/svg+xml"
-                )
+                try:
+                    fig_sunburst.write_image(buf, format="svg")
+                    st.download_button(
+                        label="Download Full Sunburst as SVG",
+                        data=buf.getvalue(),
+                        file_name="full_sunburst.svg",
+                        mime="image/svg+xml"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export Full Sunburst as SVG: {str(e)}")
+                    update_log(f"Full Sunburst SVG export error: {str(e)}")
+                finally:
+                    buf.close()
+            
             if 'fig_top_n' in locals() and fig_top_n:
                 buf = BytesIO()
-                fig_top_n.write_image(buf, format="png", scale=export_dpi/100)
-                st.download_button(
-                    label=f"Download Top {top_n} Sunburst as PNG",
-                    data=buf.getvalue(),
-                    file_name=f"top_{top_n}_sunburst.png",
-                    mime="image/png"
-                )
+                try:
+                    fig_top_n.write_image(buf, format="png", scale=export_dpi/100)
+                    st.download_button(
+                        label=f"Download Top {top_n} Sunburst as PNG",
+                        data=buf.getvalue(),
+                        file_name=f"top_{top_n}_sunburst.png",
+                        mime="image/png"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export Top {top_n} Sunburst as PNG: {str(e)}")
+                    update_log(f"Top {top_n} Sunburst PNG export error: {str(e)}")
+                finally:
+                    buf.close()
+                
                 buf = BytesIO()
-                fig_top_n.write_image(buf, format="svg")
-                st.download_button(
-                    label=f"Download Top {top_n} Sunburst as SVG",
-                    data=buf.getvalue(),
-                    file_name=f"top_{top_n}_sunburst.svg",
-                    mime="image/svg+xml"
-                )
+                try:
+                    fig_top_n.write_image(buf, format="svg")
+                    st.download_button(
+                        label=f"Download Top {top_n} Sunburst as SVG",
+                        data=buf.getvalue(),
+                        file_name=f"top_{top_n}_sunburst.svg",
+                        mime="image/svg+xml"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export Top {top_n} Sunburst as SVG: {str(e)}")
+                    update_log(f"Top {top_n} Sunburst SVG export error: {str(e)}")
+                finally:
+                    buf.close()
+            
             if 'fig_highlighted' in locals() and fig_highlighted:
                 buf = BytesIO()
-                fig_highlighted.write_image(buf, format="png", scale=export_dpi/100)
-                st.download_button(
-                    label="Download Highlighted Sunburst as PNG",
-                    data=buf.getvalue(),
-                    file_name="highlighted_sunburst.png",
-                    mime="image/png"
-                )
+                try:
+                    fig_highlighted.write_image(buf, format="png", scale=export_dpi/100)
+                    st.download_button(
+                        label="Download Highlighted Sunburst as PNG",
+                        data=buf.getvalue(),
+                        file_name="highlighted_sunburst.png",
+                        mime="image/png"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export Highlighted Sunburst as PNG: {str(e)}")
+                    update_log(f"Highlighted Sunburst PNG export error: {str(e)}")
+                finally:
+                    buf.close()
+                
                 buf = BytesIO()
-                fig_highlighted.write_image(buf, format="svg")
-                st.download_button(
-                    label="Download Highlighted Sunburst as SVG",
-                    data=buf.getvalue(),
-                    file_name="highlighted_sunburst.svg",
-                    mime="image/svg+xml"
-                )
+                try:
+                    fig_highlighted.write_image(buf, format="svg")
+                    st.download_button(
+                        label="Download Highlighted Sunburst as SVG",
+                        data=buf.getvalue(),
+                        file_name="highlighted_sunburst.svg",
+                        mime="image/svg+xml"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export Highlighted Sunburst as SVG: {str(e)}")
+                    update_log(f"Highlighted Sunburst SVG export error: {str(e)}")
+                finally:
+                    buf.close()
         
         with col2:
             st.write("Radar and Histogram Charts")
             if 'radar_all' in locals() and radar_all:
                 buf = BytesIO()
-                radar_all.write_image(buf, format="png", scale=export_dpi/100)
-                st.download_button(
-                    label="Download All Materials Radar as PNG",
-                    data=buf.getvalue(),
-                    file_name="radar_all.png",
-                    mime="image/png"
-                )
+                try:
+                    radar_all.write_image(buf, format="png", scale=export_dpi/100)
+                    st.download_button(
+                        label="Download All Materials Radar as PNG",
+                        data=buf.getvalue(),
+                        file_name="radar_all.png",
+                        mime="image/png"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export All Materials Radar as PNG: {str(e)}")
+                    update_log(f"All Materials Radar PNG export error: {str(e)}")
+                finally:
+                    buf.close()
+                
                 buf = BytesIO()
-                radar_all.write_image(buf, format="svg")
-                st.download_button(
-                    label="Download All Materials Radar as SVG",
-                    data=buf.getvalue(),
-                    file_name="radar_all.svg",
-                    mime="image/svg+xml"
-                )
+                try:
+                    radar_all.write_image(buf, format="svg")
+                    st.download_button(
+                        label="Download All Materials Radar as SVG",
+                        data=buf.getvalue(),
+                        file_name="radar_all.svg",
+                        mime="image/svg+xml"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export All Materials Radar as SVG: {str(e)}")
+                    update_log(f"All Materials Radar SVG export error: {str(e)}")
+                finally:
+                    buf.close()
+            
             if 'hist_all' in locals() and hist_all:
                 buf = BytesIO()
-                hist_all.write_image(buf, format="png", scale=export_dpi/100)
-                st.download_button(
-                    label="Download All Materials Histogram as PNG",
-                    data=buf.getvalue(),
-                    file_name="histogram_all.png",
-                    mime="image/png"
-                )
+                try:
+                    hist_all.write_image(buf, format="png", scale=export_dpi/100)
+                    st.download_button(
+                        label="Download All Materials Histogram as PNG",
+                        data=buf.getvalue(),
+                        file_name="histogram_all.png",
+                        mime="image/png"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export All Materials Histogram as PNG: {str(e)}")
+                    update_log(f"All Materials Histogram PNG export error: {str(e)}")
+                finally:
+                    buf.close()
+                
                 buf = BytesIO()
-                hist_all.write_image(buf, format="svg")
-                st.download_button(
-                    label="Download All Materials Histogram as SVG",
-                    data=buf.getvalue(),
-                    file_name="histogram_all.svg",
-                    mime="image/svg+xml"
-                )
+                try:
+                    hist_all.write_image(buf, format="svg")
+                    st.download_button(
+                        label="Download All Materials Histogram as SVG",
+                        data=buf.getvalue(),
+                        file_name="histogram_all.svg",
+                        mime="image/svg+xml"
+                    )
+                except Exception as e:
+                    st.warning(f"Failed to export All Materials Histogram as SVG: {str(e)}")
+                    update_log(f"All Materials Histogram SVG export error: {str(e)}")
+                finally:
+                    buf.close()
         
         with col3:
             st.write("Word Clouds and Network")
@@ -1723,22 +1792,36 @@ if st.session_state.data_df is not None:
                     mime="image/png"
                 )
             elif 'network_result' in locals() and network_result and viz_type == 'networkx':
-                buf = BytesIO()
-                network_result.write_image(buf, format="png", scale=export_dpi/100)
-                st.download_button(
-                    label="Download Network as PNG (NetworkX)",
-                    data=buf.getvalue(),
-                    file_name="network_networkx.png",
-                    mime="image/png"
-                )
-                buf = BytesIO()
-                network_result.write_image(buf, format="svg")
-                st.download_button(
-                    label="Download Network as SVG (NetworkX)",
-                    data=buf.getvalue(),
-                    file_name="network_networkx.svg",
-                    mime="image/svg+xml"
-                )
+                if can_export_static:
+                    try:
+                        buf = BytesIO()
+                        network_result.write_image(buf, format="png", scale=export_dpi/100)
+                        st.download_button(
+                            label="Download Network as PNG (NetworkX)",
+                            data=buf.getvalue(),
+                            file_name="network_networkx.png",
+                            mime="image/png"
+                        )
+                        buf.close()
+                    except Exception as e:
+                        st.warning(f"Failed to export NetworkX as PNG: {str(e)}")
+                        update_log(f"NetworkX PNG export error: {str(e)}")
+                    
+                    try:
+                        buf = BytesIO()
+                        network_result.write_image(buf, format="svg")
+                        st.download_button(
+                            label="Download Network as SVG (NetworkX)",
+                            data=buf.getvalue(),
+                            file_name="network_networkx.svg",
+                            mime="image/svg+xml"
+                        )
+                        buf.close()
+                    except Exception as e:
+                        st.warning(f"Failed to export NetworkX as SVG: {str(e)}")
+                        update_log(f"NetworkX SVG export error: {str(e)}")
+                else:
+                    st.warning("Static image export for NetworkX visualization is not supported in this environment. Use interactive plot or Graphviz rendering.")
         
         st.write("### Visualization Settings Summary")
         settings_summary = {
