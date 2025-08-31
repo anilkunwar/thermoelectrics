@@ -14,8 +14,6 @@ import joblib
 import colorsys
 from itertools import combinations
 import logging
-import sys, os
-sys.path.append(os.path.dirname(__file__))
 from material_classification import classify_formula, extract_material_classifications
 
 # Set up logging
@@ -347,7 +345,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 08:53 AM CEST, Sunday, August 31, 2025
+**Date and Time**: 09:05 AM CEST, Sunday, August 31, 2025
 """)
 
 # Sidebar for figure customization
