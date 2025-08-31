@@ -48,6 +48,7 @@ THERMOELECTRIC_ELEMENTS = [
     'In', 'Sn', 'Sb', 'Te', 'I', 'Cs', 'Ba', 'La', 'Ce', 'Nd', 'Sm', 'Gd', 'Tb', 'Dy',
     'Ho', 'Er', 'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Pb', 'Bi'
 ]  # 65 elements
+assert len(THERMOELECTRIC_ELEMENTS) == 65, f"Expected 65 elements, got {len(THERMOELECTRIC_ELEMENTS)}"
 
 # Initialize session state
 if 'log_buffer' not in st.session_state:
@@ -97,7 +98,7 @@ class GNNClassifier(nn.Module):
         x = F.relu(x)
         x = self.conv2(x, edge_index)
         x = F.relu(x)
-        x = global_mean_pool(x, data.batch)  # Use imported global_mean_pool
+        x = global_mean_pool(x, data.batch)
         x = self.fc(x)
         return F.softmax(x, dim=-1)
 
@@ -431,7 +432,7 @@ st.set_page_config(page_title="Thermoelectric Material Analysis", layout="wide")
 st.title("Thermoelectric Material Analysis Tool")
 st.markdown("""
 This tool predicts thermoelectric properties using a VAE and regression model, with material classification based on p-type/n-type.
-**Date and Time**: 09:40 AM CEST, Sunday, August 31, 2025
+**Date and Time**: 09:42 AM CEST, Sunday, August 31, 2025
 **Dependencies**: `pip install streamlit pandas numpy torch torch-geometric sklearn plotly matplotlib pymatgen joblib`
 """)
 
@@ -490,6 +491,7 @@ try:
     regressor_model = torch.load(regressor_model_path, map_location='cpu')
     scaler = joblib.load(scaler_path)
     y_scaler = joblib.load(y_scaler_path)
+    update_log(f"Scaler expects {scaler.n_features_in_} features")
 except Exception as e:
     st.error(f"Error loading models: {str(e)}")
     st.stop()
@@ -520,8 +522,13 @@ if st.button("Predict Thermoelectric Properties"):
             comp = Composition(formula)
             features = []
             for el in THERMOELECTRIC_ELEMENTS:
-                features.append(comp.get_el_amt_dict().get(el, 0))
-            features.append(temperature)  # Add temperature as the 66th feature
+                amount = comp.get_el_amt_dict().get(el, 0)
+                features.append(amount)
+                update_log(f"Element {el}: {amount}")
+            features.append(temperature)
+            update_log(f"Feature vector length before scaling: {len(features)}")
+            if len(features) != 66:
+                raise ValueError(f"Expected 66 features (65 elements + temperature), got {len(features)}")
             
             X = np.array([features])
             X_scaled = scaler.transform(X)
