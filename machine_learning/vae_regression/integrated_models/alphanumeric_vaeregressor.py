@@ -3,22 +3,38 @@ import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.impute import SimpleImputer
 import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 from pymatgen.core.composition import Composition
+from pymatgen.core.periodic_table import Element
+from pymatgen.core.structure import Structure
+from pymatgen.analysis.graphs import StructureGraph
+from pymatgen.analysis.local_env import MinimumDistanceNN
 import os
 import joblib
 import colorsys
 from itertools import combinations
 import logging
-from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv
+try:
+    from torch_geometric.data import Data
+    from torch_geometric.nn import GCNConv, global_mean_pool
+    PYTORCH_GEOMETRIC_AVAILABLE = True
+except ImportError:
+    PYTORCH_GEOMETRIC_AVAILABLE = False
+    st.error("PyTorch Geometric is required for GNN classification. Install with: `pip install torch-geometric`")
+    st.stop()
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+logging.basicConfig(
+    level=logging.INFO,
+    filename=os.path.join(script_dir, 'thermoelectric_app.log'),
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Set random seed for reproducibility
@@ -90,11 +106,11 @@ class Regressor(nn.Module):
 
 # GNN Classifier Model
 class GNNClassifier(nn.Module):
-    def __init__(self, input_dim=3, hidden_dim=16, num_classes=3):
+    def __init__(self, input_dim=5, hidden_dim=64, output_dim=2):
         super(GNNClassifier, self).__init__()
         self.conv1 = GCNConv(input_dim, hidden_dim)
         self.conv2 = GCNConv(hidden_dim, hidden_dim)
-        self.fc = nn.Linear(hidden_dim, num_classes)
+        self.fc = nn.Linear(hidden_dim, output_dim)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(0.3)
 
@@ -105,51 +121,121 @@ class GNNClassifier(nn.Module):
         x = self.dropout(x)
         x = self.conv2(x, edge_index)
         x = self.relu(x)
-        x = x.mean(dim=0)  # Global mean pooling
+        x = global_mean_pool(x, data.batch)
         x = self.fc(x)
-        return x
+        return F.softmax(x, dim=-1)
 
-# Preprocessing for prediction
+# Initialize session state
+if 'selected_elements' not in st.session_state:
+    st.session_state.selected_elements = []
+if 'proportions' not in st.session_state:
+    st.session_state.proportions = {}
+if 'compositions' not in st.session_state:
+    st.session_state.compositions = {}
+if 'temperature' not in st.session_state:
+    st.session_state.temperature = 800
+if 'sign_bias' not in st.session_state:
+    st.session_state.sign_bias = 'Neutral'
+if 'use_manual_material_type' not in st.session_state:
+    st.session_state.use_manual_material_type = False
+if 'log_buffer' not in st.session_state:
+    st.session_state.log_buffer = []
+if 'error_summary' not in st.session_state:
+    st.session_state.error_summary = []
+
+# Featurize composition for VAE
 def featurize_composition(composition_dict, available_elements, temperature):
     feature_vector = {element: composition_dict.get(element, 0) for element in available_elements}
     feature_vector['temperature(K)'] = temperature
     if len(feature_vector) != 66:
         logger.error(f"Feature vector has {len(feature_vector)} features, expected 66: {list(feature_vector.keys())}")
         raise ValueError(f"Expected 66 features, got {len(feature_vector)}")
+    logger.info(f"Feature vector created with {len(feature_vector)} features")
     return pd.DataFrame([feature_vector])
 
+# Preprocess data for VAE
 def preprocess_new_data(df, available_elements, scaler):
     features_df = df
     imputer = SimpleImputer(strategy='mean')
     X_imputed = imputer.fit_transform(features_df)
     X_scaled = scaler.transform(X_imputed)
+    logger.info(f"Preprocessed data shape: {X_scaled.shape}")
     return X_scaled
 
 # Construct graph for GNN
 def construct_graph(elements, composition_dict):
-    node_features = []
-    for element in elements:
-        x = [
-            electronegativity.get(element, 1.0),
-            thermoelectric_weights.get(element, 1.0),
-            composition_dict.get(element, 0.0)
-        ]
-        node_features.append(x)
-    x = torch.tensor(node_features, dtype=torch.float).to(device)
-    
-    edge_index = []
-    edge_attr = []
-    for i, j in combinations(range(len(elements)), 2):
-        edge_index.append([i, j])
-        edge_index.append([j, i])
-        electroneg_diff = abs(electronegativity.get(elements[i], 1.0) - electronegativity.get(elements[j], 1.0))
-        edge_attr.append([electroneg_diff])
-        edge_attr.append([electroneg_diff])
-    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
-    edge_attr = torch.tensor(edge_attr, dtype=torch.float).to(device)
-    
-    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
-    return data
+    try:
+        # Create a simplified structure
+        species = []
+        frac_coords = []
+        pos = 0
+        for el, amt in composition_dict.items():
+            if amt > 0:
+                for _ in range(max(1, round(amt * 10))):  # Scale composition for graph
+                    species.append(el)
+                    frac_coords.append([pos * 0.1, 0, 0])
+                    pos += 1
+        if len(species) < 2:
+            logger.warning(f"Insufficient atoms for graph: {composition_dict}")
+            return None
+
+        lattice = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]
+        structure = Structure(lattice, species, frac_coords, coords_are_cartesian=False)
+        strategy = MinimumDistanceNN(cutoff=10.0)
+        sg = StructureGraph.with_local_env_strategy(structure, strategy)
+
+        # Node features: [atomic number, electronegativity, group, row, atomic mass]
+        element_properties = {
+            el.symbol: [
+                float(el.Z or 0),
+                electronegativity.get(el.symbol, 1.0),
+                float(el.group or 0),
+                float(el.row or 0),
+                float(el.atomic_mass or 0)
+            ] for el in Element
+        }
+        node_features = []
+        for site in structure:
+            el = site.specie.symbol
+            props = element_properties.get(el, [0.0] * 5)
+            node_features.append(props)
+        node_features = torch.tensor(node_features, dtype=torch.float).to(device)
+
+        # Edge indices and weights
+        edge_index = []
+        edge_weights = []
+        adjacency = list(sg.graph.adjacency())
+        if not adjacency or len(structure) < 2:
+            logger.warning(f"No edges found for {composition_dict}; using fully connected graph")
+            for i in range(len(structure)):
+                for j in range(i + 1, len(structure)):
+                    edge_index.append([i, j])
+                    edge_index.append([j, i])
+                    edge_weights.append(1.0)
+        else:
+            for i, neighbor_dict in enumerate(adjacency):
+                for neighbor_idx, data in neighbor_dict[1].items():
+                    edge_index.append([i, neighbor_idx])
+                    edge_weights.append(data.get('weight', 1.0))
+
+        if not edge_index:
+            logger.error(f"No valid edges for {composition_dict}")
+            return None
+
+        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
+        edge_weights = torch.tensor(edge_weights, dtype=torch.float).to(device)
+
+        data = Data(
+            x=node_features,
+            edge_index=edge_index,
+            edge_attr=edge_weights.unsqueeze(-1),
+            batch=torch.zeros(node_features.size(0), dtype=torch.long).to(device)
+        )
+        logger.info(f"Constructed graph with {len(node_features)} nodes, {len(edge_index[0])} edges")
+        return data
+    except Exception as e:
+        logger.error(f"Failed to construct graph: {e}")
+        return None
 
 # GNN-based material type classification
 def classify_formula_gnn(elements, composition_dict, gnn_model):
@@ -157,17 +243,24 @@ def classify_formula_gnn(elements, composition_dict, gnn_model):
         gnn_model.eval()
         with torch.no_grad():
             data = construct_graph(elements, composition_dict)
+            if data is None:
+                logger.error("Graph construction failed")
+                return 'Neutral', {'p_type_prob': 0.0, 'n_type_prob': 0.0, 'total_graphs': 0, 'valid_predictions': 0}, None
             output = gnn_model(data)
-            probabilities = torch.softmax(output, dim=0)
-            material_type_idx = torch.argmax(probabilities).item()
-            material_types = {0: 'Neutral', 1: 'p-type', 2: 'n-type'}
+            probabilities = output.cpu().numpy()
+            material_type_idx = np.argmax(probabilities)
+            material_types = {0: 'n-type', 1: 'p-type'}  # Updated for output_dim=2
             material_type = material_types.get(material_type_idx, 'Neutral')
+            confidence = probabilities[material_type_idx]
+            if confidence < 0.6:  # Threshold for Neutral
+                material_type = 'Neutral'
             summary_dict = {
-                'p_type_prob': probabilities[1].item(),
-                'n_type_prob': probabilities[2].item(),
+                'p_type_prob': probabilities[1],
+                'n_type_prob': probabilities[0],
                 'total_graphs': 1,
                 'valid_predictions': 1
             }
+            logger.info(f"GNN predicted {material_type} with probabilities: {probabilities.tolist()}")
             return material_type, summary_dict, probabilities
     except Exception as e:
         logger.error(f"GNN classification failed: {e}")
@@ -342,11 +435,10 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
         return None, None
 
 # Load models and scalers
-script_dir = os.path.dirname(os.path.abspath(__file__))
 try:
     vae = VAE().to(device)
     regressor = Regressor().to(device)
-    gnn_classifier = GNNClassifier().to(device)
+    gnn_classifier = GNNClassifier(input_dim=5, hidden_dim=64, output_dim=2).to(device)
     vae.load_state_dict(torch.load(os.path.join(script_dir, 'vae_model.pt'), map_location=device))
     regressor.load_state_dict(torch.load(os.path.join(script_dir, 'regressor_model.pt'), map_location=device))
     gnn_classifier.load_state_dict(torch.load(os.path.join(script_dir, 'gnn_model.pt'), map_location=device))
@@ -354,9 +446,11 @@ try:
     y_scaler = joblib.load(os.path.join(script_dir, 'y_scaler.pkl'))
 except FileNotFoundError as e:
     st.error(f"Required files not found: {e}")
+    st.session_state.error_summary.append(f"File not found: {e}")
     st.stop()
 except RuntimeError as e:
     st.error(f"Error loading model: {e}")
+    st.session_state.error_summary.append(f"Model load error: {e}")
     st.stop()
 
 # Available elements (exactly 65 elements)
@@ -408,7 +502,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 10:07 AM CEST, Sunday, August 31, 2025
+**Date and Time**: 10:11 AM CEST, Sunday, August 31, 2025
 """)
 
 # Sidebar for figure customization
@@ -433,29 +527,6 @@ ternary_axes_color = st.sidebar.color_picker("Ternary Axes Color", '#000000')
 point_size = st.sidebar.slider("Point Size (Ternary/Temperature)", 5, 20, 10)
 axes_box_thickness = st.sidebar.slider("Axes Box Thickness", 1, 5, 2)
 legend_spacing = st.sidebar.slider("Legend Spacing (Point Legend to Ternary)", 0.0, 0.5, 0.3, step=0.05)
-
-# Initialize session state with fallback
-try:
-    if 'selected_elements' not in st.session_state:
-        st.session_state.selected_elements = []
-    if 'proportions' not in st.session_state:
-        st.session_state.proportions = {}
-    if 'compositions' not in st.session_state:
-        st.session_state.compositions = {}
-    if 'temperature' not in st.session_state:
-        st.session_state.temperature = 800
-    if 'sign_bias' not in st.session_state:
-        st.session_state.sign_bias = 'Neutral'
-    if 'use_manual_material_type' not in st.session_state:
-        st.session_state.use_manual_material_type = False
-except Exception as e:
-    st.warning(f"Session state initialization failed: {e}. Resetting to defaults.")
-    st.session_state.selected_elements = []
-    st.session_state.proportions = {}
-    st.session_state.compositions = {}
-    st.session_state.temperature = 800
-    st.session_state.sign_bias = 'Neutral'
-    st.session_state.use_manual_material_type = False
 
 # Periodic Table for Reference
 st.header("Periodic Table Reference")
@@ -600,6 +671,7 @@ else:
         except Exception as e:
             st.error(f"Failed to get GNN prediction: {e}. Defaulting to Neutral.")
             logger.error(f"GNN material type error: {e}")
+            st.session_state.error_summary.append(f"GNN prediction error: {e}")
             st.session_state.sign_bias = 'Neutral'
     else:
         st.warning("Please select elements and normalize proportions to get a GNN prediction.")
@@ -952,3 +1024,6 @@ if st.button("Generate Ternary Diagram"):
                 )
     else:
         st.error("Please select at least one element.")
+
+# Display logs
+st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="logs")
