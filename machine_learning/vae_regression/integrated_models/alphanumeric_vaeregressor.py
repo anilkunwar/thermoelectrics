@@ -17,6 +17,7 @@ from pymatgen.analysis.local_env import MinimumDistanceNN
 import os
 import sqlite3
 import joblib
+import re
 import colorsys
 from itertools import combinations
 import logging
@@ -38,6 +39,15 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Define 65 thermoelectric elements
+THERMOELECTRIC_ELEMENTS = [
+    'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'K',
+    'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As',
+    'Se', 'Br', 'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd',
+    'In', 'Sn', 'Sb', 'Te', 'I', 'Cs', 'Ba', 'La', 'Ce', 'Nd', 'Sm', 'Gd', 'Tb', 'Dy',
+    'Ho', 'Er', 'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Pb', 'Bi'
+]  # 65 elements
 
 # Initialize session state
 if 'log_buffer' not in st.session_state:
@@ -421,7 +431,7 @@ st.set_page_config(page_title="Thermoelectric Material Analysis", layout="wide")
 st.title("Thermoelectric Material Analysis Tool")
 st.markdown("""
 This tool predicts thermoelectric properties using a VAE and regression model, with material classification based on p-type/n-type.
-**Date and Time**: 09:23 AM CEST, Sunday, August 31, 2025
+**Date and Time**: 09:35 AM CEST, Sunday, August 31, 2025
 **Dependencies**: `pip install streamlit pandas numpy torch torch-geometric sklearn plotly matplotlib pymatgen joblib`
 """)
 
@@ -431,7 +441,7 @@ load_material_data()
 # Sidebar for element selection
 with st.sidebar:
     st.header("Element Selection")
-    elements = sorted(list(Element.__members__.keys()))
+    elements = sorted(THERMOELECTRIC_ELEMENTS)
     selected_elements = st.multiselect("Select Elements", elements, default=["Bi", "Te"])
     if selected_elements != st.session_state.selected_elements:
         st.session_state.selected_elements = selected_elements
@@ -509,11 +519,9 @@ if st.button("Predict Thermoelectric Properties"):
             formula = "".join(f"{e}{comp_dict[e]:.2f}" if comp_dict[e] > 0 else "" for e in comp_dict)
             comp = Composition(formula)
             features = []
-            for el in elements:
+            for el in THERMOELECTRIC_ELEMENTS:
                 features.append(comp.get_el_amt_dict().get(el, 0))
-            
-            sign_bias = 1 if st.session_state.sign_bias == "p-type" else -1 if st.session_state.sign_bias == "n-type" else 0
-            features.extend([temperature, carrier_concentration, sign_bias])
+            features.append(temperature)  # Add temperature as the 66th feature
             
             X = np.array([features])
             X_scaled = scaler.transform(X)
