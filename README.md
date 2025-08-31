@@ -94,6 +94,10 @@ P-type and n-type classifier usig GNN
 [![machinelearningthermoelectricity](https://img.shields.io/badge/thermoelectricstypegnnclassifier-streamlit-red)](https://materialtype-gnnclassification.streamlit.app/) 
 
 
+GNN classifier (Alpha) + VAE-predictor (Numeric)
+[![machinelearningthermoelectricity](https://img.shields.io/badge/alphanumericmodel-streamlit-red)](https://alphanumeric-vaepredictor-seebeckcoefficient.streamlit.app/) 
+
+
 
 
 
