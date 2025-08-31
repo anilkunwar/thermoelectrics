@@ -14,6 +14,8 @@ import joblib
 import colorsys
 from itertools import combinations
 import logging
+import sys, os
+sys.path.append(os.path.dirname(__file__))
 from material_classification import classify_formula, extract_material_classifications
 
 # Set up logging
