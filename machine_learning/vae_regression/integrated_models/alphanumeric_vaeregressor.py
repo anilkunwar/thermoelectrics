@@ -135,7 +135,7 @@ if 'compositions' not in st.session_state:
 if 'temperature' not in st.session_state:
     st.session_state.temperature = 800
 if 'sign_bias' not in st.session_state:
-    st.session_state.sign_bias = 'n-type'  # Default to n-type
+    st.session_state.sign_bias = 'Neutral'
 if 'use_manual_material_type' not in st.session_state:
     st.session_state.use_manual_material_type = False
 if 'log_buffer' not in st.session_state:
@@ -165,7 +165,7 @@ def preprocess_new_data(df, available_elements, scaler):
 # Construct graph for GNN
 def construct_graph(elements, composition_dict):
     try:
-        # Standardize composition to integer stoichiometry
+        # Standardize composition to integer stoichiometry, similar to featurize_formulas
         comp_dict = {k: max(1, round(v)) for k, v in composition_dict.items() if v > 0}
         if sum(comp_dict.values()) < 2:
             logger.warning(f"Insufficient atoms for graph: {comp_dict}")
@@ -178,8 +178,7 @@ def construct_graph(elements, composition_dict):
         for el, amt in comp_dict.items():
             for _ in range(int(amt)):
                 species.append(el)
-                # Use 3D coordinates to avoid linear arrangement issues
-                frac_coords.append([(pos % 3) * 0.3, ((pos // 3) % 3) * 0.3, (pos // 9) * 0.3])
+                frac_coords.append([pos * 0.1, 0, 0])
                 pos += 1
 
         if len(species) < 2:
@@ -190,15 +189,7 @@ def construct_graph(elements, composition_dict):
         structure = Structure(lattice, species, frac_coords, coords_are_cartesian=False)
         logger.info(f"Created structure with {len(species)} atoms: {species}")
 
-        # Validate structure
-        try:
-            comp = Composition({el: species.count(el) for el in set(species)})
-            logger.info(f"Structure composition: {comp.reduced_formula}")
-        except Exception as e:
-            logger.error(f"Invalid structure composition: {e}")
-            return None
-
-        strategy = MinimumDistanceNN(cutoff=5.0)  # Reduced cutoff for robustness
+        strategy = MinimumDistanceNN(cutoff=10.0)
         sg = StructureGraph.with_local_env_strategy(structure, strategy)
 
         # Node features: [atomic number, electronegativity, group, row, atomic mass]
@@ -264,25 +255,27 @@ def classify_formula_gnn(elements, composition_dict, gnn_model):
         with torch.no_grad():
             data = construct_graph(elements, composition_dict)
             if data is None:
-                logger.error("Graph construction failed, defaulting to n-type")
-                return 'n-type', {'p_type_prob': 0.0, 'n_type_prob': 1.0, 'total_graphs': 0, 'valid_predictions': 0}, None
+                logger.error("Graph construction failed")
+                return 'Neutral', {'p_type_prob': 0.0, 'n_type_prob': 0.0, 'total_graphs': 0, 'valid_predictions': 0}, None
             output = gnn_model(data)
-            probabilities = output.cpu().numpy()[0]  # Single graph, so take first row
+            probabilities = output.cpu().numpy()
             material_type_idx = np.argmax(probabilities)
-            material_types = {0: 'n-type', 1: 'p-type'}  # output_dim=2
-            material_type = material_types[material_type_idx]
+            material_types = {0: 'n-type', 1: 'p-type'}  # Updated for output_dim=2
+            material_type = material_types.get(material_type_idx, 'Neutral')
+            confidence = probabilities[material_type_idx]
+            if confidence < 0.6:  # Threshold for Neutral
+                material_type = 'Neutral'
             summary_dict = {
-                'p_type_prob': float(probabilities[1]),
-                'n_type_prob': float(probabilities[0]),
+                'p_type_prob': probabilities[1],
+                'n_type_prob': probabilities[0],
                 'total_graphs': 1,
                 'valid_predictions': 1
             }
             logger.info(f"GNN predicted {material_type} with probabilities: {probabilities.tolist()}")
             return material_type, summary_dict, probabilities
     except Exception as e:
-        logger.error(f"GNN classification failed: {e}, defaulting to n-type")
-        st.session_state.error_summary.append(f"GNN classification error: {str(e)}")
-        return 'n-type', {'p_type_prob': 0.0, 'n_type_prob': 1.0, 'total_graphs': 0, 'valid_predictions': 0}, None
+        logger.error(f"GNN classification failed: {e}")
+        return 'Neutral', {'p_type_prob': 0.0, 'n_type_prob': 0.0, 'total_graphs': 0, 'valid_predictions': 0}, None
 
 # Compute z_mean statistics and bias vector
 def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _scaler, _vae, steps=30):
@@ -514,13 +507,13 @@ default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_e
 # Streamlit UI
 st.title("Ternary Seebeck Coefficient Predictor with GNN Classification")
 st.markdown("""
-This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and choose a material type (p-type, n-type, or Neutral) either manually or using a GNN-based classifier. The GNN classifier predicts only p-type or n-type, with Neutral reserved for manual selection. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart and uses a direction-specific bias vector to control the Seebeck coefficient's sign. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and choose a material type (p-type, n-type, or Neutral) either manually or using a GNN-based classifier. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart and uses a direction-specific bias vector to control the Seebeck coefficient's sign. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
 
-**Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is predicted by a GNN classifier (p-type or n-type only). The bias vector (p-type to n-type) is scaled to 0.5 * avg(std(z_mean)) to ensure sign flipping while keeping values ~50–300 μV/K. Biased predictions are normalized to match the unbiased magnitude, with n-type enforced to be negative.
+**Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is predicted by a GNN classifier based on the composition graph. The bias vector (p-type to n-type) is scaled to 0.5 * avg(std(z_mean)) to ensure sign flipping while keeping values ~50–300 μV/K. Biased predictions are normalized to match the unbiased magnitude, with n-type enforced to be negative.
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 10:32 AM CEST, Sunday, August 31, 2025
+**Date and Time**: 10:11 AM CEST, Sunday, August 31, 2025
 """)
 
 # Sidebar for figure customization
@@ -674,7 +667,7 @@ if st.session_state.use_manual_material_type:
         key='sign_bias_selector'
     )
 else:
-    st.write("Using GNN-based material type prediction (p-type or n-type only).")
+    st.write("Using GNN-based material type prediction.")
     if st.session_state.selected_elements and sum(st.session_state.compositions.values()) > 0:
         try:
             elements = st.session_state.selected_elements.copy()
@@ -687,13 +680,13 @@ else:
             st.write(f"**Total Graphs Processed**: {summary_dict['total_graphs']}")
             st.write(f"**Valid Predictions**: {summary_dict['valid_predictions']}")
         except Exception as e:
-            st.error(f"Failed to get GNN prediction: {e}. Defaulting to n-type.")
+            st.error(f"Failed to get GNN prediction: {e}. Defaulting to Neutral.")
             logger.error(f"GNN material type error: {e}")
             st.session_state.error_summary.append(f"GNN prediction error: {e}")
-            st.session_state.sign_bias = 'n-type'
+            st.session_state.sign_bias = 'Neutral'
     else:
         st.warning("Please select elements and normalize proportions to get a GNN prediction.")
-        st.session_state.sign_bias = 'n-type'
+        st.session_state.sign_bias = 'Neutral'
 
 # Complete to three elements if fewer are selected
 def complete_to_three_elements(selected_elements, proportions, compositions, available_elements):
@@ -987,7 +980,7 @@ if st.button("Generate Ternary Diagram"):
             st.write(f"**User Signed Seebeck Coefficient (Biased)**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
             st.write(f"**User |Seebeck Coefficient| (Unbiased)**: {abs(user_seebeck_unbiased):.2f} μV/K")
             st.write(f"**User Signed Seebeck Coefficient (Unbiased)**: {user_seebeck_unbiased:.2f} μV/K ({'p-type' if user_seebeck_unbiased > 0 else 'n-type' if user_seebeck_unbiased < 0 else 'neutral'})")
-            st.write(f"**Maximum |Seebeck| Composition**: {elements[0]:.2f}, {elements[1]}: {max_comp[1]:.2f}, {elements[2]}: {max_comp[2]:.2f}")
+            st.write(f"**Maximum |Seebeck| Composition**: {elements[0]}: {max_comp[0]:.2f}, {elements[1]}: {max_comp[1]:.2f}, {elements[2]}: {max_comp[2]:.2f}")
             st.write(f"**Maximum |Seebeck Coefficient|**: {max_seebeck_abs:.2f} μV/K")
             st.write(f"**Maximum Signed Seebeck Coefficient**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
             # Plot ternary diagram
