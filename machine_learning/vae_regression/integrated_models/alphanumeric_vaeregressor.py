@@ -24,7 +24,7 @@ import logging
 from difflib import SequenceMatcher
 try:
     from torch_geometric.data import Data
-    from torch_geometric.nn import GCNConv
+    from torch_geometric.nn import GCNConv, global_mean_pool
     PYTORCH_GEOMETRIC_AVAILABLE = True
 except ImportError:
     PYTORCH_GEOMETRIC_AVAILABLE = False
@@ -97,7 +97,7 @@ class GNNClassifier(nn.Module):
         x = F.relu(x)
         x = self.conv2(x, edge_index)
         x = F.relu(x)
-        x = torch_geometric.nn.global_mean_pool(x, data.batch)
+        x = global_mean_pool(x, data.batch)  # Use imported global_mean_pool
         x = self.fc(x)
         return F.softmax(x, dim=-1)
 
@@ -431,7 +431,7 @@ st.set_page_config(page_title="Thermoelectric Material Analysis", layout="wide")
 st.title("Thermoelectric Material Analysis Tool")
 st.markdown("""
 This tool predicts thermoelectric properties using a VAE and regression model, with material classification based on p-type/n-type.
-**Date and Time**: 09:35 AM CEST, Sunday, August 31, 2025
+**Date and Time**: 09:40 AM CEST, Sunday, August 31, 2025
 **Dependencies**: `pip install streamlit pandas numpy torch torch-geometric sklearn plotly matplotlib pymatgen joblib`
 """)
 
