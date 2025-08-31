@@ -398,14 +398,18 @@ def plot_periodic_table(available_elements, selected_elements, element_color_map
         'Sc': (5, 3), 'Y': (6, 3), 'La': (8, 3), 'Ce': (8, 4), 'Pr': (8, 5), 'Nd': (8, 6),
         'Sm': (8, 7), 'Eu': (8, 8), 'Gd': (8, 9), 'Tb': (8, 10), 'Dy': (8, 11), 'Ho': (8, 12),
         'Er': (8, 13), 'Tm': (8, 14), 'Yb': (8, 15), 'Lu': (8, 16),
-        'Ti': (5, 4), 'Zr': (6, 4), 'Hf': (7, 4), 'V': (achines, 'Nb': (6, 5), 'Ta': (7, 5),
+        'Ti': (5, 4), 'Zr': (6, 4), 'Hf': (7, 4),
+        'V': (5, 5), 'Nb': (6, 5), 'Ta': (7, 5),
         'Cr': (5, 6), 'Mo': (6, 6), 'Mn': (5, 7), 'Fe': (5, 8), 'Co': (5, 9), 'Ni': (5, 10),
         'Cu': (5, 11), 'Zn': (5, 12), 'B': (3, 13), 'Al': (4, 13), 'Ga': (5, 13), 'In': (6, 13),
         'Tl': (7, 13), 'Si': (4, 14), 'Ge': (5, 14), 'Sn': (6, 14), 'Pb': (7, 14),
-        'P': (4, 15), 'As': (5, 15), 'Sb': (6, 15), 'Bi': (7, 15), 'S': (4, 16), 'Se': (5, 16),
-        'Te': (6, 16), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17), 'Au': (7, 11), 'Ag': (6, 11),
-        'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8), 'N': (3, 15), 'Na': (3, 1), 'K': (4, 1)
+        'P': (4, 15), 'As': (5, 15), 'Sb': (6, 15), 'Bi': (7, 15),
+        'S': (4, 16), 'Se': (5, 16), 'Te': (6, 16),
+        'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17),
+        'Au': (7, 11), 'Ag': (6, 11), 'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8),
+        'N': (3, 15)
     }
+
     elements_to_plot = all_elements if show_all_elements else [e for e in all_elements if e in available_elements or e in selected_elements]
     fig = go.Figure()
     for element in elements_to_plot:
