@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.impute import SimpleImputer
 import plotly.express as px
 import plotly.graph_objects as go
@@ -48,7 +48,6 @@ THERMOELECTRIC_ELEMENTS = [
     'In', 'Sn', 'Sb', 'Te', 'I', 'Cs', 'Ba', 'La', 'Ce', 'Nd', 'Sm', 'Gd', 'Tb', 'Dy',
     'Ho', 'Er', 'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Pb', 'Bi'
 ]  # 65 elements
-assert len(THERMOELECTRIC_ELEMENTS) == 65, f"Expected 65 elements, got {len(THERMOELECTRIC_ELEMENTS)}"
 
 # Initialize session state
 if 'log_buffer' not in st.session_state:
@@ -381,6 +380,21 @@ def classify_formula(formula, material_df, fuzzy_match=False):
         update_log(f"Error classifying formula '{formula}': {str(e)}")
         return None, f"Error classifying formula: {str(e)}", None
 
+# Featurize composition for VAE
+def featurize_composition(composition_dict, available_elements, temperature):
+    feature_vector = {element: composition_dict.get(element, 0) for element in available_elements}
+    feature_vector['temperature(K)'] = temperature
+    update_log(f"Feature vector created with {len(feature_vector)} features: {list(feature_vector.keys())}")
+    return pd.DataFrame([feature_vector])
+
+# Preprocess data for VAE
+def preprocess_new_data(df, scaler):
+    imputer = SimpleImputer(strategy='mean')
+    X_imputed = imputer.fit_transform(df)
+    X_scaled = scaler.transform(X_imputed)
+    update_log(f"Preprocessed data shape: {X_scaled.shape}")
+    return X_scaled
+
 # Load material classifications and models
 def load_material_data():
     db_path = os.path.join(script_dir, 'thermoelectric_universe.db')
@@ -432,7 +446,7 @@ st.set_page_config(page_title="Thermoelectric Material Analysis", layout="wide")
 st.title("Thermoelectric Material Analysis Tool")
 st.markdown("""
 This tool predicts thermoelectric properties using a VAE and regression model, with material classification based on p-type/n-type.
-**Date and Time**: 09:42 AM CEST, Sunday, August 31, 2025
+**Date and Time**: 09:52 AM CEST, Sunday, August 31, 2025
 **Dependencies**: `pip install streamlit pandas numpy torch torch-geometric sklearn plotly matplotlib pymatgen joblib`
 """)
 
@@ -443,7 +457,7 @@ load_material_data()
 with st.sidebar:
     st.header("Element Selection")
     elements = sorted(THERMOELECTRIC_ELEMENTS)
-    selected_elements = st.multiselect("Select Elements", elements, default=["Bi", "Te"])
+    selected_elements = st.multiselect("Select Elements", elements, default=["Bi", "Te", "Ag"])
     if selected_elements != st.session_state.selected_elements:
         st.session_state.selected_elements = selected_elements
         st.session_state.compositions = {e: st.session_state.compositions.get(e, 1.0) for e in selected_elements}
@@ -494,6 +508,7 @@ try:
     update_log(f"Scaler expects {scaler.n_features_in_} features")
 except Exception as e:
     st.error(f"Error loading models: {str(e)}")
+    update_log(f"Error loading models: {str(e)}")
     st.stop()
 
 # Main content
@@ -520,18 +535,20 @@ if st.button("Predict Thermoelectric Properties"):
             comp_dict = {e: st.session_state.compositions[e] for e in st.session_state.selected_elements}
             formula = "".join(f"{e}{comp_dict[e]:.2f}" if comp_dict[e] > 0 else "" for e in comp_dict)
             comp = Composition(formula)
-            features = []
-            for el in THERMOELECTRIC_ELEMENTS:
-                amount = comp.get_el_amt_dict().get(el, 0)
-                features.append(amount)
-                update_log(f"Element {el}: {amount}")
-            features.append(temperature)
-            update_log(f"Feature vector length before scaling: {len(features)}")
-            if len(features) != 66:
-                raise ValueError(f"Expected 66 features (65 elements + temperature), got {len(features)}")
+            update_log(f"Processing formula: {formula}")
             
-            X = np.array([features])
-            X_scaled = scaler.transform(X)
+            # Featurize composition
+            df = featurize_composition(comp_dict, THERMOELECTRIC_ELEMENTS, temperature)
+            if df.shape[1] != 66:
+                update_log(f"Feature vector has {df.shape[1]} features, expected 66")
+                st.error(f"Feature vector has {df.shape[1]} features, expected 66")
+                st.stop()
+            
+            X_scaled = preprocess_new_data(df, scaler)
+            if X_scaled.shape[1] != 66:
+                update_log(f"Scaled data has {X_scaled.shape[1]} features, expected 66")
+                st.error(f"Scaled data has {X_scaled.shape[1]} features, expected 66")
+                st.stop()
             
             with torch.no_grad():
                 vae_model.eval()
