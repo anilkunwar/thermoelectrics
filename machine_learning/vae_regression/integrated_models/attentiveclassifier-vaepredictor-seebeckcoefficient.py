@@ -412,9 +412,11 @@ try:
     vae.load_state_dict(torch.load(os.path.join(script_dir, 'vae_model.pt'), map_location=device))
     regressor.load_state_dict(torch.load(os.path.join(script_dir, 'regressor_model.pt'), map_location=device))
     classifier.load_state_dict(torch.load(os.path.join(script_dir, 'material_classifier.pt'), map_location=device))
-    scaler_vae = joblib.load(os.path.join(script_dir, 'scaler_vae.pkl'))
+    #scaler_vae = joblib.load(os.path.join(script_dir, 'scaler_vae.pkl'))
+    scaler_vae = joblib.load(os.path.join(script_dir, 'vrnumeric_scaler.pkl'))
     scaler_classifier = joblib.load(os.path.join(script_dir, 'scaler_classifier.pkl'))
-    y_scaler = joblib.load(os.path.join(script_dir, 'y_scaler.pkl'))
+    #y_scaler = joblib.load(os.path.join(script_dir, 'y_scaler.pkl'))
+    y_scaler = joblib.load(os.path.join(script_dir, 'y_vrnumeric_scaler.pkl'))
     thermoelectric_db = load_thermoelectric_db(os.path.join(script_dir, 'thermoelectric_universe.db'))
     material_classification_df = load_material_classification_csv(os.path.join(script_dir, 'material_classification.csv'))
 except FileNotFoundError as e:
