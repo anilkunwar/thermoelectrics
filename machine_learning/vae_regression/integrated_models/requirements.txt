@@ -20,6 +20,7 @@ PyMuPDF
 plotly
 transformers
 torch
+torch-geometric
 torchvision
 torchaudio
 kaleido
