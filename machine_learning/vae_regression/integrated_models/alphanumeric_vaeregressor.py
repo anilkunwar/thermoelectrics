@@ -165,22 +165,30 @@ def preprocess_new_data(df, available_elements, scaler):
 # Construct graph for GNN
 def construct_graph(elements, composition_dict):
     try:
+        # Standardize composition to integer stoichiometry, similar to featurize_formulas
+        comp_dict = {k: max(1, round(v)) for k, v in composition_dict.items() if v > 0}
+        if sum(comp_dict.values()) < 2:
+            logger.warning(f"Insufficient atoms for graph: {comp_dict}")
+            return None
+
         # Create a simplified structure
         species = []
         frac_coords = []
         pos = 0
-        for el, amt in composition_dict.items():
-            if amt > 0:
-                for _ in range(max(1, round(amt * 10))):  # Scale composition for graph
-                    species.append(el)
-                    frac_coords.append([pos * 0.1, 0, 0])
-                    pos += 1
+        for el, amt in comp_dict.items():
+            for _ in range(int(amt)):
+                species.append(el)
+                frac_coords.append([pos * 0.1, 0, 0])
+                pos += 1
+
         if len(species) < 2:
-            logger.warning(f"Insufficient atoms for graph: {composition_dict}")
+            logger.warning(f"No valid species for graph: {comp_dict}")
             return None
 
         lattice = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]
         structure = Structure(lattice, species, frac_coords, coords_are_cartesian=False)
+        logger.info(f"Created structure with {len(species)} atoms: {species}")
+
         strategy = MinimumDistanceNN(cutoff=10.0)
         sg = StructureGraph.with_local_env_strategy(structure, strategy)
 
@@ -200,13 +208,14 @@ def construct_graph(elements, composition_dict):
             props = element_properties.get(el, [0.0] * 5)
             node_features.append(props)
         node_features = torch.tensor(node_features, dtype=torch.float).to(device)
+        logger.info(f"Generated {len(node_features)} node features")
 
         # Edge indices and weights
         edge_index = []
         edge_weights = []
         adjacency = list(sg.graph.adjacency())
         if not adjacency or len(structure) < 2:
-            logger.warning(f"No edges found for {composition_dict}; using fully connected graph")
+            logger.warning(f"No edges found for {comp_dict}; using fully connected graph")
             for i in range(len(structure)):
                 for j in range(i + 1, len(structure)):
                     edge_index.append([i, j])
@@ -219,11 +228,12 @@ def construct_graph(elements, composition_dict):
                     edge_weights.append(data.get('weight', 1.0))
 
         if not edge_index:
-            logger.error(f"No valid edges for {composition_dict}")
+            logger.error(f"No valid edges for {comp_dict} after fallback")
             return None
 
         edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
         edge_weights = torch.tensor(edge_weights, dtype=torch.float).to(device)
+        logger.info(f"Generated {len(edge_index[0])} edges")
 
         data = Data(
             x=node_features,
@@ -234,7 +244,8 @@ def construct_graph(elements, composition_dict):
         logger.info(f"Constructed graph with {len(node_features)} nodes, {len(edge_index[0])} edges")
         return data
     except Exception as e:
-        logger.error(f"Failed to construct graph: {e}")
+        logger.error(f"Failed to construct graph for {comp_dict}: {str(e)}")
+        st.session_state.error_summary.append(f"Graph construction error for {comp_dict}: {str(e)}")
         return None
 
 # GNN-based material type classification
