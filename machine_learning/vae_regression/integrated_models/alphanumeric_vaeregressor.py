@@ -416,7 +416,7 @@ def plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, output_path='z_mean
         logger.error(f"Failed to save Matplotlib figure: {e}")
     return fig
 
-def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
+def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_vrnumeric_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
     try:
         df = featurize_composition(composition_dict, available_elements, temperature)
         X_scaled = preprocess_new_data(df, available_elements, _scaler)
@@ -430,7 +430,7 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
             _, z_mean, _ = _vae(X_tensor)
             z_mean_original = z_mean.clone()
             y_scaled_pred_unbiased = _regressor(z_mean_original)
-            y_pred_unbiased = _y_scaler.inverse_transform(y_scaled_pred_unbiased.cpu().numpy().reshape(-1, 1)).ravel()
+            y_pred_unbiased = _y_vrnumeric_scaler.inverse_transform(y_scaled_pred_unbiased.cpu().numpy().reshape(-1, 1)).ravel()
             y_pred_unbiased = np.clip(y_pred_unbiased, -300, 300)
             logger.debug(f"Unbiased z_mean: {z_mean_original.cpu().numpy().tolist()}, y_pred_unbiased: {y_pred_unbiased.tolist()}")
             if sign_bias is not None and bias_vector is not None:
@@ -442,7 +442,7 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
                     z_mean = z_mean - bias_vector
                     logger.info(f"Applied n-type bias: {bias_vector.tolist()}")
                 y_scaled_pred = _regressor(z_mean)
-                y_pred = _y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
+                y_pred = _y_vrnumeric_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
                 y_pred = np.clip(y_pred, -300, 300)
                 if sign_bias == 'n-type' and y_pred[0] > 0:
                     y_pred = -y_pred
@@ -457,7 +457,7 @@ def predict_seebeck(composition_dict, temperature, available_elements, _scaler, 
         logger.error(f"Prediction failed: {e}")
         if sign_bias is not None:
             logger.warning(f"Retrying prediction without sign bias due to error with {sign_bias} bias.")
-            return predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=bias_magnitude)
+            return predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_vrnumeric_scaler, sign_bias=None, bias_vector=None, bias_magnitude=bias_magnitude)
         return None, None
 
 # Load models and scalers
@@ -723,7 +723,7 @@ def complete_to_three_elements(selected_elements, proportions, compositions, ava
 
 # Generate ternary data with caching
 @st.cache_resource
-def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, sign_bias, bias_vector, bias_magnitude, steps=30):
+def generate_ternary_data(_vae, _regressor, _scaler, _y_vrnumeric_scaler, elements, temperature, available_elements, sign_bias, bias_vector, bias_magnitude, steps=30):
     compositions = []
     seebeck_values = []
     for a in np.linspace(0, 1, steps):
@@ -731,7 +731,7 @@ def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temper
             c = 1 - a - b
             if c >= 0:
                 comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
-                seebeck, _ = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
+                seebeck, _ = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_vrnumeric_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
                 if seebeck is not None:
                     compositions.append([a, b, c])
                     seebeck_values.append(abs(seebeck))
@@ -825,13 +825,13 @@ def plot_ternary_diagram(compositions, seebeck_values, elements, user_compositio
         return None
     return fig
 
-def plot_temperature_variance(elements, user_composition, max_comp, temp_range, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias, bias_vector, bias_magnitude, font_size, axes_line_width, grid_width, user_point_color, max_point_color, point_size, axes_box_thickness):
+def plot_temperature_variance(elements, user_composition, max_comp, temp_range, available_elements, _scaler, _vae, _regressor, _y_vrnumeric_scaler, sign_bias, bias_vector, bias_magnitude, font_size, axes_line_width, grid_width, user_point_color, max_point_color, point_size, axes_box_thickness):
     temps = np.linspace(temp_range[0], temp_range[1], 20)
     user_seebeck = []
     max_seebeck = []
     for temp in temps:
-        user_val, _ = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
-        max_val, _ = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
+        user_val, _ = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_vrnumeric_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
+        max_val, _ = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_vrnumeric_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
         user_seebeck.append(abs(user_val) if user_val is not None else np.nan)
         max_seebeck.append(abs(max_val) if max_val is not None else np.nan)
     fig = go.Figure()
