@@ -1,4 +1,3 @@
-import streamlit as st
 import pandas as pd
 import numpy as np
 import torch
@@ -15,6 +14,7 @@ import colorsys
 from itertools import combinations
 import logging
 from material_classification import classify_formula, extract_material_classifications
+import streamlit as st
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, filename=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'thermoelectric_app.log'))
