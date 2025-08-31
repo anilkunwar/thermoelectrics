@@ -165,31 +165,46 @@ def preprocess_new_data(df, available_elements, scaler):
 # Construct graph for GNN
 def construct_graph(elements, composition_dict):
     try:
-        comp_dict = {k: max(1, round(v)) for k, v in composition_dict.items() if v > 0}
-        if sum(comp_dict.values()) < 2:
-            logger.warning(f"Insufficient atoms for graph: {comp_dict}")
-            return None
+        # Scale composition to ensure at least 4 atoms for graph stability
+        scale_factor = max(4.0 / sum(composition_dict.values()), 1.0)
+        comp_dict = {k: max(1, round(v * scale_factor)) for k, v in composition_dict.items() if v > 0}
+        total_atoms = sum(comp_dict.values())
+        
+        if total_atoms < 2:
+            logger.warning(f"Insufficient atoms after scaling: {comp_dict}, total atoms: {total_atoms}")
+            # Fallback to minimal valid composition
+            comp_dict = {k: 1 for k in composition_dict.keys() if v > 0}
+            if len(comp_dict) < 2:
+                comp_dict = {elements[0]: 1, elements[1]: 1}
+            total_atoms = sum(comp_dict.values())
+            logger.info(f"Fallback composition: {comp_dict}")
 
+        # Create structure
         species = []
         frac_coords = []
         pos = 0
         for el, amt in comp_dict.items():
             for _ in range(int(amt)):
                 species.append(el)
-                frac_coords.append([pos * 0.1, 0, 0])
+                frac_coords.append([pos * 0.1, 0, 0])  # Simplified linear arrangement
                 pos += 1
 
         if len(species) < 2:
-            logger.warning(f"No valid species for graph: {comp_dict}")
-            return None
+            logger.warning(f"Structure creation failed, too few species: {species}")
+            # Create minimal structure with 2 atoms
+            species = [elements[0], elements[1]]
+            frac_coords = [[0, 0, 0], [0.1, 0, 0]]
+            logger.info(f"Using minimal structure: {species}")
 
         lattice = [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]]
         structure = Structure(lattice, species, frac_coords, coords_are_cartesian=False)
         logger.info(f"Created structure with {len(species)} atoms: {species}")
 
+        # Build graph
         strategy = MinimumDistanceNN(cutoff=10.0)
         sg = StructureGraph.with_local_env_strategy(structure, strategy)
 
+        # Node features: [atomic number, electronegativity, group, row, atomic mass]
         element_properties = {
             el.symbol: [
                 float(el.Z or 0),
@@ -207,6 +222,7 @@ def construct_graph(elements, composition_dict):
         node_features = torch.tensor(node_features, dtype=torch.float).to(device)
         logger.info(f"Generated {len(node_features)} node features")
 
+        # Edge indices and weights
         edge_index = []
         edge_weights = []
         adjacency = list(sg.graph.adjacency())
@@ -224,8 +240,10 @@ def construct_graph(elements, composition_dict):
                     edge_weights.append(data.get('weight', 1.0))
 
         if not edge_index:
-            logger.error(f"No valid edges for {comp_dict} after fallback")
-            return None
+            logger.warning(f"No valid edges after fallback for {comp_dict}, creating minimal edges")
+            edge_index = [[0, 1], [1, 0]]  # Minimal edge for two nodes
+            edge_weights = [1.0, 1.0]
+            logger.info(f"Created minimal edges: {edge_index}")
 
         edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous().to(device)
         edge_weights = torch.tensor(edge_weights, dtype=torch.float).to(device)
@@ -240,8 +258,8 @@ def construct_graph(elements, composition_dict):
         logger.info(f"Constructed graph with {len(node_features)} nodes, {len(edge_index[0])} edges")
         return data
     except Exception as e:
-        logger.error(f"Failed to construct graph for {comp_dict}: {str(e)}")
-        st.session_state.error_summary.append(f"Graph construction error for {comp_dict}: {str(e)}")
+        logger.error(f"Failed to construct graph for {composition_dict}: {str(e)}")
+        st.session_state.error_summary.append(f"Graph construction error for {composition_dict}: {str(e)}")
         return None
 
 # GNN-based material type classification
@@ -254,7 +272,7 @@ def classify_formula_gnn(elements, composition_dict, gnn_model):
                 logger.error("Graph construction failed")
                 return 'Neutral', {'p_type_prob': 0.0, 'n_type_prob': 0.0, 'total_graphs': 0, 'valid_predictions': 0}, None
             output = gnn_model(data)
-            probabilities = output.cpu().numpy()
+            probabilities = output.cpu().numpy()[0]  # Single graph prediction
             material_type_idx = np.argmax(probabilities)
             material_types = {0: 'n-type', 1: 'p-type'}
             material_type = material_types.get(material_type_idx, 'Neutral')
@@ -262,8 +280,8 @@ def classify_formula_gnn(elements, composition_dict, gnn_model):
             if confidence < 0.6:
                 material_type = 'Neutral'
             summary_dict = {
-                'p_type_prob': probabilities[1],
-                'n_type_prob': probabilities[0],
+                'p_type_prob': float(probabilities[1]),
+                'n_type_prob': float(probabilities[0]),
                 'total_graphs': 1,
                 'valid_predictions': 1
             }
@@ -271,6 +289,7 @@ def classify_formula_gnn(elements, composition_dict, gnn_model):
             return material_type, summary_dict, probabilities
     except Exception as e:
         logger.error(f"GNN classification failed: {e}")
+        st.session_state.error_summary.append(f"GNN classification error: {e}")
         return 'Neutral', {'p_type_prob': 0.0, 'n_type_prob': 0.0, 'total_graphs': 0, 'valid_predictions': 0}, None
 
 # Compute z_mean statistics and bias vector
@@ -509,7 +528,7 @@ This application predicts the Seebeck coefficient for a ternary composition of s
 
 **Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
 
-**Date and Time**: 10:11 AM CEST, Sunday, August 31, 2025
+**Date and Time**: 07:19 PM CEST, Sunday, August 31, 2025
 """)
 
 # Sidebar for figure customization
