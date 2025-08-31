@@ -468,7 +468,9 @@ try:
     vae.load_state_dict(torch.load(os.path.join(script_dir, 'vae_model.pt'), map_location=device))
     regressor.load_state_dict(torch.load(os.path.join(script_dir, 'regressor_model.pt'), map_location=device))
     gnn_classifier.load_state_dict(torch.load(os.path.join(script_dir, 'gnn_model.pt'), map_location=device))
-    scaler = joblib.load(os.path.join(script_dir, 'scaler.pkl'))
+    #scaler = joblib.load(os.path.join(script_dir, 'scaler.pkl'))
+    scaler = joblib.load(os.path.join(script_dir, 'vrnumeric_scaler.pkl'))
+    #y_scaler = joblib.load(os.path.join(script_dir, 'y_vrnumeric_scaler.pkl'))
     y_scaler = joblib.load(os.path.join(script_dir, 'y_scaler.pkl'))
 except FileNotFoundError as e:
     st.error(f"Required files not found: {e}")
