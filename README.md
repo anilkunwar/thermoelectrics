@@ -100,6 +100,10 @@ GNN classifier (Alpha) + VAE-predictor (Numeric)
 ANN classifier (Alpha) + VAE-predictor (Numeric)
 [![machinelearningthermoelectricity](https://img.shields.io/badge/alphanumericannmodel-streamlit-red)](https://annclassifier-vaepredictor.streamlit.app/) 
 
+ANN or GNN classifier (Alpha) + VAE-predictor (Numeric)
+[![machinelearningthermoelectricity](https://img.shields.io/badge/alphanumericannmodelintegrated-streamlit-red)](https://integrated-alphanumericvaepredictor.streamlit.app/
+) 
+
 
 
 
