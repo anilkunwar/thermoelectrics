@@ -1,1449 +1,972 @@
-import os
-import sqlite3
 import streamlit as st
 import pandas as pd
-import spacy
-from spacy.language import Language
-from spacy.tokens import Span, Doc
-from spacy.util import filter_spans
-from spacy.matcher import PhraseMatcher
-import re
-import logging
-import plotly.express as px
-import plotly.graph_objects as go
-import uuid
-import psutil
-from datetime import datetime
 import numpy as np
-from collections import Counter
-import glob
-from difflib import SequenceMatcher
-from sklearn.neural_network import MLPClassifier
-from sklearn.preprocessing import StandardScaler
-import joblib
 import torch
 import torch.nn as nn
-import h5py
+import torch.nn.functional as F
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.impute import SimpleImputer
+from sklearn.neural_network import MLPClassifier
+import plotly.express as px
+import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+from pymatgen.core.composition import Composition
+from pymatgen.core.periodic_table import Element
+import os
+import joblib
+import colorsys
+from itertools import combinations
+import logging
 
-# Try to import pymatgen for material formula parsing
-try:
-    from pymatgen.core.composition import Composition
-    from pymatgen.core.periodic_table import Element
-    PYMAGEN_AVAILABLE = True
-except ImportError:
-    PYMAGEN_AVAILABLE = False
-    st.error("pymatgen is required for formula standardization and featurization. Install with: `pip install pymatgen`")
-    st.stop()
-
-# Define valid chemical elements
-VALID_ELEMENTS = set(Element.__members__.keys())
-
-# Invalid terms to exclude from formula detection
-INVALID_TERMS = {
-    'p-type', 'n-type', 'doping', 'doped', 'thermoelectric', 'material', 'the', 'and',
-    'is', 'exhibits', 'type', 'based', 'sample', 'compound', 'system', 'properties',
-    'references', 'acknowledgments', 'data', 'matrix', 'experimental', 'note', 'level',
-    'conflict', 'result', 'captions', 'average', 'teg', 'tegs', 'marco', 'skeaf',
-    'equation', 'figure', 'table', 'section', 'method', 'results', 'discussion'
-}
-
-# -----------------------------
-# Regex NER for formulas with fixed pattern
-# -----------------------------
-@Language.component("formula_ner")
-def formula_ner(doc):
-    formula_pattern = r'\b(?:[A-Z][a-z]?[0-9]*\.?[0-9]*)+(?::[A-Z][a-z]?[0-9]*\.?[0-9]*)?\b'
-    spans = []
-    for match in re.finditer(formula_pattern, doc.text):
-        formula = match.group(0)
-        if validate_formula(formula):
-            span = doc.char_span(match.start(), match.end(), label="FORMULA")
-            if span:
-                spans.append(span)
-    doc.ents = filter_spans(list(doc.ents) + spans)
-    return doc
-
-# -----------------------------
-# Enhanced formula validation
-# -----------------------------
-def validate_formula(formula):
-    """Validate if a string is a plausible chemical formula."""
-    if not formula or not isinstance(formula, str):
-        return False
-    
-    base_formula = re.sub(r':.+', '', formula)
-    
-    if any(term.lower() in formula.lower() for term in INVALID_TERMS):
-        return False
-    if re.match(r'^[A-Z](?:-[A-Z]|\.\d+|)$', formula) or len(formula) <= 2:
-        return False
-    
-    element_pattern = r'[A-Z][a-z]?[0-9]*\.?[0-9]*'
-    elements = re.findall(element_pattern, base_formula)
-    if not elements:
-        return False
-    
-    for el in elements:
-        el_symbol = re.match(r'[A-Z][a-z]?', el).group(0)
-        if el_symbol not in VALID_ELEMENTS:
-            return False
-    
-    if re.search(r'\b[X-Z][0-9]*\b', formula) and not re.match(r'^[A-Z][a-z]?[0-9]*$', formula):
-        return False
-    
-    return True
-
-# -----------------------------
-# Attention-based formula scoring
-# -----------------------------
-def score_formula_context(formula, text, synonyms):
-    """Score a formula based on its context to determine if it's a valid chemical formula."""
-    score = 0.0
-    context_window = 100
-    start_idx = max(0, text.lower().find(formula.lower()) - context_window)
-    end_idx = min(len(text), text.lower().find(formula.lower()) + len(formula) + context_window)
-    context = text[start_idx:end_idx].lower()
-    
-    positive_terms = ['thermoelectric', 'p-type', 'n-type', 'material', 'compound', 'semiconductor']
-    positive_terms += [syn for syn_list in synonyms.values() for syn in syn_list]
-    common_materials = ['Bi2Te3', 'PbTe', 'SnSe', 'CoSb3', 'SiGe', 'Skutterudite', 'Half-Heusler']
-    
-    for term in positive_terms + common_materials:
-        if term.lower() in context:
-            score += 0.2
-    
-    negative_terms = ['figure', 'table', 'references', 'acknowledgments', 'section', 'equation']
-    for term in negative_terms:
-        if term.lower() in context:
-            score -= 0.3
-    
-    return max(0.0, min(score, 1.0))
-
-# -----------------------------
-# Material matcher with synonyms
-# -----------------------------
-def build_material_matcher(nlp, synonyms):
-    matcher = PhraseMatcher(nlp.vocab, attr="LOWER")
-    for canonical, variants in synonyms.items():
-        patterns = [nlp.make_doc(v) for v in variants]
-        matcher.add(canonical, patterns)
-    return matcher
-
-@Language.component("material_matcher")
-def material_matcher(doc):
-    matcher = doc._.material_matcher
-    matches = matcher(doc)
-    spans = []
-    for match_id, start, end in matches:
-        canonical = doc.vocab.strings[match_id]
-        span = Span(doc, start, end, label="MATERIAL_TYPE")
-        span._.norm = canonical
-        spans.append(span)
-    doc.ents = filter_spans(list(doc.ents) + spans)
-    return doc
-
-# -----------------------------
-# Load spaCy model
-# -----------------------------
-def load_spacy_model(synonyms):
-    try:
-        nlp = spacy.load("en_core_web_sm", disable=["ner"])
-    except Exception as e:
-        st.error(f"Failed to load spaCy: {e}. Install: `python -m spacy download en_core_web_sm`")
-        st.stop()
-    
-    nlp.add_pipe("formula_ner", last=True)
-    matcher = build_material_matcher(nlp, synonyms)
-    nlp.add_pipe("material_matcher", last=True)
-    
-    if not Doc.has_extension("material_matcher"):
-        Doc.set_extension("material_matcher", default=None)
-    Doc.set_extension("material_matcher", default=matcher, force=True)
-    
-    if not Span.has_extension("norm"):
-        Span.set_extension("norm", default=None)
-    
-    return nlp
-
-# -----------------------------
-# Link formulas to material type
-# -----------------------------
-def link_formula_to_material(doc):
-    formulas = [(ent, score_formula_context(ent.text, doc.text, st.session_state.synonyms)) 
-                for ent in doc.ents if ent.label_ == "FORMULA"]
-    formulas = [f for f, score in formulas if score > 0.3]
-    materials = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
-    pairs = []
-    for f in formulas:
-        nearest_material = None
-        min_distance = float("inf")
-        for m in materials:
-            distance = abs(f.start_char - m.start_char)
-            if distance < min_distance:
-                min_distance = distance
-                nearest_material = m
-        pairs.append({
-            "Formula": f.text,
-            "Material_Type": nearest_material._.norm if nearest_material else "-"
-        })
-    return pairs
-
-# Directory and logging setup
-DB_DIR = os.path.dirname(os.path.abspath(__file__))
-# Ensure DB_DIR exists and is writable
-try:
-    os.makedirs(DB_DIR, exist_ok=True)
-    test_file = os.path.join(DB_DIR, "test_write.txt")
-    with open(test_file, 'w') as f:
-        f.write("test")
-    os.remove(test_file)
-except PermissionError:
-    st.error(f"Permission denied: Cannot write to directory {DB_DIR}. Please ensure the directory is writable.")
-    st.stop()
-except Exception as e:
-    st.error(f"Failed to access directory {DB_DIR}: {str(e)}")
-    st.stop()
-
+# Set up logging
+script_dir = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(
-    filename=os.path.join(DB_DIR, 'thermoelectric_ner_analysis.log'),
     level=logging.INFO,
+    filename=os.path.join(script_dir, 'thermoelectric_app.log'),
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger(__name__)
 
-# Streamlit configuration
-st.set_page_config(page_title="Thermoelectric Material Classification Tool", layout="wide")
-st.title("Thermoelectric Material Classification and Analysis Tool")
-st.markdown("""
-This tool extracts p-type and n-type material classifications from SQLite databases and allows classification of user-input chemical formulas using NLP, ANN, or GNN.
+# Set random seed for reproducibility
+np.random.seed(42)
 
-**Date and Time**: 05:25 AM CEST, Monday, September 1, 2025
+# Check for GPU (used for VAE and regressor, not ANN)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+st.write(f"Using device: {device}")
 
-**Dependencies**:
-- `pip install streamlit pandas sqlite3 spacy plotly psutil pymatgen scikit-learn joblib torch h5py`
-- `python -m spacy download en_core_web_sm`
-""")
+# Electronegativity and thermoelectric weights
+electronegativity = {
+    'O': 3.44, 'Cl': 3.16, 'N': 3.04, 'Br': 2.96, 'I': 2.66, 'S': 2.58, 'Se': 2.55, 'Te': 2.1, 'P': 2.19, 'As': 2.18,
+    'Sb': 2.05, 'Bi': 2.02, 'Si': 1.90, 'Ge': 2.01, 'Sn': 1.96, 'Pb': 2.33, 'B': 2.04, 'Al': 1.61, 'Ga': 1.81,
+    'In': 1.78, 'Tl': 2.04, 'Mg': 1.31, 'Ca': 1.00, 'Sr': 0.95, 'Ba': 0.89, 'Li': 0.98, 'Na': 0.93, 'K': 0.82,
+    'Rb': 0.82, 'Cs': 0.79, 'Sc': 1.36, 'Y': 1.22, 'La': 1.10, 'Ce': 1.12, 'Pr': 1.13, 'Nd': 1.14, 'Sm': 1.17,
+    'Eu': 1.2, 'Gd': 1.2, 'Tb': 1.1, 'Dy': 1.22, 'Ho': 1.23, 'Er': 1.24, 'Tm': 1.25, 'Yb': 1.1, 'Lu': 1.27,
+    'Ti': 1.54, 'Zr': 1.33, 'Hf': 1.3, 'V': 1.63, 'Nb': 1.6, 'Ta': 1.5, 'Cr': 1.66, 'Mo': 2.16, 'Mn': 1.55,
+    'Fe': 1.83, 'Co': 1.88, 'Ni': 1.91, 'Cu': 1.90, 'Zn': 1.65, 'Cd': 1.69, 'Ag': 1.93, 'Au': 2.54, 'Pd': 2.20, 'Ru': 2.2
+}
+
+thermoelectric_weights = {
+    'Bi': 2.0, 'Te': 2.0, 'Sb': 1.8, 'Pb': 1.8, 'Se': 1.5, 'Sn': 1.5, 'Ge': 1.3, 'Si': 1.3, 'Mg': 1.2
+}
+
+# VAE Model
+class VAE(nn.Module):
+    def __init__(self, input_dim=66, latent_dim=8):
+        super(VAE, self).__init__()
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 128), nn.ReLU(), nn.BatchNorm1d(128, momentum=0.05), nn.Dropout(0.4),
+            nn.Linear(128, 64), nn.ReLU(), nn.BatchNorm1d(64, momentum=0.05), nn.Dropout(0.4),
+        )
+        self.z_mean = nn.Linear(64, latent_dim)
+        self.z_log_var = nn.Linear(64, latent_dim)
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, 64), nn.ReLU(), nn.BatchNorm1d(64, momentum=0.05), nn.Dropout(0.4),
+            nn.Linear(64, 128), nn.ReLU(), nn.BatchNorm1d(128, momentum=0.05), nn.Dropout(0.4),
+            nn.Linear(128, input_dim), nn.Sigmoid(),
+        )
+
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        h = self.encoder(x)
+        mu = self.z_mean(h)
+        log_var = self.z_log_var(h)
+        z = self.reparameterize(mu, log_var)
+        x_recon = self.decoder(z)
+        return x_recon, mu, log_var
+
+# Regressor Model
+class Regressor(nn.Module):
+    def __init__(self, latent_dim=8):
+        super(Regressor, self).__init__()
+        self.model = nn.Sequential(
+            nn.Linear(latent_dim, 16), nn.ReLU(), nn.BatchNorm1d(16, momentum=0.05), nn.Dropout(0.4),
+            nn.Linear(16, 8), nn.ReLU(), nn.BatchNorm1d(8, momentum=0.05), nn.Dropout(0.4),
+            nn.Linear(8, 1), nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        return self.model(x)
 
 # Initialize session state
-if "log_buffer" not in st.session_state:
+if 'selected_elements' not in st.session_state:
+    st.session_state.selected_elements = []
+if 'proportions' not in st.session_state:
+    st.session_state.proportions = {}
+if 'compositions' not in st.session_state:
+    st.session_state.compositions = {}
+if 'temperature' not in st.session_state:
+    st.session_state.temperature = 800
+if 'sign_bias' not in st.session_state:
+    st.session_state.sign_bias = 'Neutral'
+if 'use_manual_material_type' not in st.session_state:
+    st.session_state.use_manual_material_type = False
+if 'log_buffer' not in st.session_state:
     st.session_state.log_buffer = []
-if "material_classifications" not in st.session_state:
-    st.session_state.material_classifications = None
-if "db_file" not in st.session_state:
-    st.session_state.db_file = None
-if "error_summary" not in st.session_state:
+if 'error_summary' not in st.session_state:
     st.session_state.error_summary = []
-if "progress_log" not in st.session_state:
-    st.session_state.progress_log = []
-if "text_column" not in st.session_state:
-    st.session_state.text_column = "content"
-if "synonyms" not in st.session_state:
-    st.session_state.synonyms = {
-        "p-type": ["p-type", "positive type", "positive thermoelectric", "hole conducting"],
-        "n-type": ["n-type", "negative type", "negative thermoelectric", "electron conducting"]
-    }
-if "ann_model" not in st.session_state:
-    st.session_state.ann_model = None
-if "scaler" not in st.session_state:
-    st.session_state.scaler = None
-if "save_formats" not in st.session_state:
-    st.session_state.save_formats = ["pkl", "db", "pt", "h5"]
-if "model_files" not in st.session_state:
-    st.session_state.model_files = {}
-if "gnn_model" not in st.session_state:
-    st.session_state.gnn_model = None
+if 'ann_classifier' not in st.session_state:
+    st.session_state.ann_classifier = None
+if 'ann_scaler' not in st.session_state:
+    st.session_state.ann_scaler = None
 
-def update_log(message):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    memory_usage = psutil.Process().memory_info().rss / 1024**2
-    log_message = f"[{timestamp}] {message} (Memory: {memory_usage:.2f} MB)"
-    st.session_state.log_buffer.append(log_message)
-    if len(st.session_state.log_buffer) > 30:
-        st.session_state.log_buffer.pop(0)
-    logging.info(log_message)
+# Featurize composition for VAE
+def featurize_composition(composition_dict, available_elements, temperature):
+    feature_vector = {element: composition_dict.get(element, 0) for element in available_elements}
+    feature_vector['temperature(K)'] = temperature
+    if len(feature_vector) != 66:
+        logger.error(f"Feature vector has {len(feature_vector)} features, expected 66: {list(feature_vector.keys())}")
+        raise ValueError(f"Expected 66 features, got {len(feature_vector)}")
+    logger.info(f"Feature vector created with {len(feature_vector)} features")
+    return pd.DataFrame([feature_vector])
 
-def update_progress(message):
-    st.session_state.progress_log.append(message)
-    if len(st.session_state.progress_log) > 10:
-        st.session_state.progress_log.pop(0)
+# Preprocess data for VAE
+def preprocess_new_data(df, available_elements, scaler):
+    features_df = df
+    imputer = SimpleImputer(strategy='mean')
+    X_imputed = imputer.fit_transform(features_df)
+    X_scaled = scaler.transform(X_imputed)
+    logger.info(f"Preprocessed data shape: {X_scaled.shape}")
+    return X_scaled
 
-def standardize_material_formula(formula, preserve_stoichiometry=False, canonical_order=True):
-    if not formula or not isinstance(formula, str):
-        update_log(f"Invalid input formula: {formula}")
-        st.session_state.error_summary.append(f"Invalid formula: {formula}")
-        return None
-    
-    formula = re.sub(r'\s+', '', formula)
-    formula = re.sub(r'[\[\]\{\}]', '', formula)
-    
-    if not validate_formula(formula):
-        update_log(f"Invalid formula '{formula}': failed validation")
-        st.session_state.error_summary.append(f"Invalid formula '{formula}'")
-        return None
-    
-    doping_pattern = r'(.+?)(?::|doped\s+)([A-Za-z0-9,\.]+)'
-    doping_match = re.match(doping_pattern, formula, re.IGNORECASE)
-    dopants = None
-    if doping_match:
-        base_formula, dopants = doping_match.groups()
-        formula = base_formula.strip()
-        dopants = dopants.split(',')
-        update_log(f"Detected doped material: base='{formula}', dopants='{','.join(dopants)}'")
-    
+# Featurize composition for ANN classifier
+def featurize_composition_ann(elements, composition_dict):
     try:
-        comp = Composition(formula)
-        if not comp.valid:
-            update_log(f"Invalid chemical formula '{formula}': not a valid composition")
-            st.session_state.error_summary.append(f"Invalid formula '{formula}': not a valid composition")
-            return None
+        # Node features: [atomic number, electronegativity, group, row, atomic mass]
+        element_properties = {
+            el.symbol: [
+                float(el.Z or 0),
+                electronegativity.get(el.symbol, 1.0),
+                float(el.group or 0),
+                float(el.row or 0),
+                float(el.atomic_mass or 0)
+            ] for el in Element
+        }
+        total_weight = sum(composition_dict.get(el, 0) for el in elements)
+        if total_weight == 0:
+            logger.error("Total composition weight is zero")
+            raise ValueError("Total composition weight cannot be zero")
         
-        elements = comp.elements
-        if not all(isinstance(el, Element) for el in elements):
-            update_log(f"Invalid elements in formula '{formula}'")
-            st.session_state.error_summary.append(f"Invalid elements in formula '{formula}'")
-            return None
+        # Compute weighted average of properties
+        feature_vector = np.zeros(5)
+        for el in elements:
+            weight = composition_dict.get(el, 0) / total_weight
+            props = element_properties.get(el, [0.0] * 5)
+            feature_vector += np.array(props) * weight
         
-        if preserve_stoichiometry:
-            el_amt_dict = comp.get_el_amt_dict()
-            standardized_formula = ''.join(
-                f"{el}{amt:.2f}" if amt != int(amt) else f"{el}{int(amt)}"
-                for el, amt in (sorted(el_amt_dict.items()) if canonical_order else el_amt_dict.items())
-            )
-        else:
-            standardized_formula = comp.reduced_formula
+        if np.any(np.isnan(feature_vector)):
+            logger.error(f"NaN values in feature vector for {composition_dict}")
+            raise ValueError("NaN values in feature vector")
         
-        if dopants:
-            valid_dopants = []
-            for dopant in dopants:
-                if not validate_formula(dopant):
-                    update_log(f"Invalid dopant '{dopant}' in '{formula}'")
-                    st.session_state.error_summary.append(f"Invalid dopant '{dopant}' in '{formula}'")
-                    continue
-                try:
-                    dopant_comp = Composition(dopant.strip())
-                    valid_dopants.append(dopant_comp.reduced_formula)
-                except Exception as e:
-                    update_log(f"Failed to parse dopant '{dopant}' in '{formula}': {e}")
-                    st.session_state.error_summary.append(f"Failed to parse dopant '{dopant}' in '{formula}'")
-            if valid_dopants:
-                standardized_formula = f"{standardized_formula}:{','.join(valid_dopants)}"
-        
-        update_log(f"Standardized formula '{formula}' to '{standardized_formula}' using pymatgen")
-        return standardized_formula
+        logger.info(f"Generated ANN features for {composition_dict}: {feature_vector.tolist()}")
+        return feature_vector
     except Exception as e:
-        update_log(f"pymatgen could not parse formula '{formula}': {str(e)}")
-        st.session_state.error_summary.append(f"pymatgen failed for '{formula}': {str(e)}")
+        logger.error(f"Failed to featurize composition for ANN: {str(e)}")
+        st.session_state.error_summary.append(f"ANN featurization error: {str(e)}")
         return None
 
-def featurize_formulas(formulas, labels=None):
-    features = []
-    valid_formulas = []
-    valid_labels = []
-    
-    element_properties = {
-        el.symbol: [
-            float(el.Z or 0),
-            float(el.X or 0),
-            float(el.group or 0),
-            float(el.row or 0),
-            float(el.atomic_mass or 0)
-        ] for el in Element
-    }
-    
-    for i, formula in enumerate(formulas):
-        if not validate_formula(formula):
-            update_log(f"Skipped featurization for invalid formula '{formula}'")
-            st.session_state.error_summary.append(f"Invalid formula '{formula}' for featurization")
-            continue
-        
-        try:
-            comp = Composition(formula)
-            el_amt_dict = comp.get_el_amt_dict()
-            total_atoms = sum(el_amt_dict.values())
-            
-            feature_vector = np.zeros(5)
-            for el, amt in el_amt_dict.items():
-                weight = amt / total_atoms
-                props = element_properties.get(el, [0.0] * 5)
-                feature_vector += np.array(props) * weight
-            
-            if np.any(np.isnan(feature_vector)):
-                update_log(f"NaN features for formula '{formula}'")
-                st.session_state.error_summary.append(f"NaN features for formula '{formula}'")
-                continue
-            
-            features.append(feature_vector)
-            valid_formulas.append(formula)
-            if labels is not None:
-                valid_labels.append(labels[i])
-        except Exception as e:
-            update_log(f"Failed to featurize formula '{formula}': {str(e)}")
-            st.session_state.error_summary.append(f"Featurization failed for '{formula}': {str(e)}")
-    
-    if not features:
-        update_log("No valid features generated for ANN training")
-        return np.array([]), [], [] if labels is not None else None
-    
-    return np.array(features), valid_formulas, valid_labels if labels is not None else None
-
-def train_ann(formulas, labels):
-    if not formulas or not labels:
-        update_log("No valid data for ANN training")
-        st.error("No valid data for ANN training. Please check the input data.")
-        return None, None, {}
-    
-    X, valid_formulas, valid_labels = featurize_formulas(formulas, labels)
-    if len(X) < 2:
-        update_log("Insufficient data for ANN training")
-        st.error("Insufficient data for ANN training. At least two samples are required.")
-        return None, None, {}
-    
-    if np.any(np.isnan(X)):
-        update_log("NaN values detected in feature matrix, skipping ANN training")
-        st.error("NaN values detected in feature matrix. Cannot train ANN.")
-        return None, None, {}
-    
-    scaler = StandardScaler()
+# ANN-based material type classification
+def classify_formula_ann(elements, composition_dict, ann_classifier, ann_scaler):
     try:
-        X_scaled = scaler.fit_transform(X)
-    except ValueError as e:
-        update_log(f"Scaler error: {str(e)}")
-        st.error(f"Scaler error: {str(e)}")
-        return None, None, {}
-    
-    label_map = {"p-type": 1, "n-type": 0}
-    y = np.array([label_map[l] for l in valid_labels])
-    
-    model = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42)
-    try:
-        model.fit(X_scaled, y)
-    except ValueError as e:
-        update_log(f"ANN training failed: {str(e)}")
-        st.error(f"ANN training failed: {str(e)}")
-        return None, None, {}
-    
-    save_formats = st.session_state.get('save_formats', ["pkl", "db", "pt", "h5"])
-    model_files = {}
-    
-    # SQLite Database (.db)
-    if "db" in save_formats:
-        try:
-            conn = sqlite3.connect(st.session_state.db_file)
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS models (
-                    model_type TEXT,
-                    format TEXT,
-                    model_data BLOB
-                )
-            """)
-            for model_type, obj in [("ann_model", model), ("scaler", scaler)]:
-                model_bytes = joblib.dumps(obj)
-                cursor.execute(
-                    "INSERT INTO models (model_type, format, model_data) VALUES (?, ?, ?)",
-                    (model_type, "pkl", model_bytes)
-                )
-            conn.commit()
-            conn.close()
-            update_log("Saved models to SQLite database")
-        except Exception as e:
-            update_log(f"Failed to save models to SQLite database: {str(e)}")
-            st.session_state.error_summary.append(f"SQLite save error: {str(e)}")
-            st.error(f"Failed to save models to SQLite database: {str(e)}")
-    
-    # Pickle (.pkl)
-    if "pkl" in save_formats:
-        try:
-            model_path = os.path.join(DB_DIR, "ann_materialclassifier.pkl")
-            scaler_path = os.path.join(DB_DIR, "scaler_annclassifier.pkl")
-            joblib.dump(model, model_path)
-            joblib.dump(scaler, scaler_path)
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(f"Model file {model_path} was not created")
-            if not os.path.exists(scaler_path):
-                raise FileNotFoundError(f"Scaler file {scaler_path} was not created")
-            model_files["ann_materialclassifier.pkl"] = model_path
-            model_files["scaler_annclassifier.pkl"] = scaler_path
-            update_log(f"Saved ANN model to {model_path} and scaler to {scaler_path}")
-        except Exception as e:
-            update_log(f"Failed to save .pkl files: {str(e)}")
-            st.session_state.error_summary.append(f"Pickle save error: {str(e)}")
-            st.error(f"Failed to save .pkl files: {str(e)}. Please check directory permissions and ensure 'joblib' is installed.")
-            return None, None, {}
-    
-    # PyTorch (.pt)
-    if "pt" in save_formats:
-        try:
-            if not hasattr(torch, 'nn'):
-                raise ImportError("PyTorch is not properly installed. Install with `pip install torch`")
-            
-            class MLP(nn.Module):
-                def __init__(self, input_size=5, hidden_sizes=[100, 50], output_size=2):
-                    super(MLP, self).__init__()
-                    layers = []
-                    prev_size = input_size
-                    for size in hidden_sizes:
-                        layers.extend([
-                            nn.Linear(prev_size, size),
-                            nn.ReLU(),
-                        ])
-                        prev_size = size
-                    layers.append(nn.Linear(prev_size, output_size))
-                    self.layers = nn.Sequential(*layers)
-                
-                def forward(self, x):
-                    return self.layers(x)
-            
-            pytorch_model = MLP(input_size=5, hidden_sizes=[100, 50], output_size=2)
-            state_dict = pytorch_model.state_dict()
-            
-            try:
-                state_dict['layers.0.weight'] = torch.tensor(model.coefs_[0].T, dtype=torch.float32)
-                state_dict['layers.0.bias'] = torch.tensor(model.intercepts_[0], dtype=torch.float32)
-                state_dict['layers.2.weight'] = torch.tensor(model.coefs_[1].T, dtype=torch.float32)
-                state_dict['layers.2.bias'] = torch.tensor(model.intercepts_[1], dtype=torch.float32)
-                state_dict['layers.4.weight'] = torch.tensor(model.coefs_[2].T, dtype=torch.float32)
-                state_dict['layers.4.bias'] = torch.tensor(model.intercepts_[2], dtype=torch.float32)
-            except (IndexError, ValueError) as e:
-                update_log(f"Error transferring weights to PyTorch model: {str(e)}")
-                st.session_state.error_summary.append(f"PyTorch weight transfer error: {str(e)}")
-                st.error(f"Error transferring weights to PyTorch model: {str(e)}")
-                return None, None, {}
-            
-            pytorch_model.load_state_dict(state_dict)
-            
-            model_path = os.path.join(DB_DIR, "ann_materialclassifier.pt")
-            torch.save(pytorch_model.state_dict(), model_path)
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(f"PyTorch model file {model_path} was not created")
-            
-            scaler_params = {
-                'mean': torch.tensor(scaler.mean_, dtype=torch.float32),
-                'scale': torch.tensor(scaler.scale_, dtype=torch.float32)
-            }
-            scaler_path = os.path.join(DB_DIR, "scaler_classifier.pt")
-            torch.save(scaler_params, scaler_path)
-            if not os.path.exists(scaler_path):
-                raise FileNotFoundError(f"Scaler file {scaler_path} was not created")
-            
-            model_files["ann_materialclassifier.pt"] = model_path
-            model_files["scaler_classifier.pt"] = scaler_path
-            update_log(f"Saved PyTorch model to {model_path} and scaler to {scaler_path}")
-        except Exception as e:
-            update_log(f"Failed to save .pt files: {str(e)}")
-            st.session_state.error_summary.append(f"PyTorch save error: {str(e)}")
-            st.error(f"Failed to save .pt files: {str(e)}. Please ensure 'torch' is installed and directory is writable.")
-            return None, None, {}
-    
-    # HDF5 (.h5)
-    if "h5" in save_formats:
-        try:
-            h5_path = os.path.join(DB_DIR, "models.h5")
-            with h5py.File(h5_path, 'w') as f:
-                model_group = f.create_group('ann_model')
-                for i, (coef, intercept) in enumerate(zip(model.coefs_, model.intercepts_)):
-                    model_group.create_dataset(f'coef_{i}', data=coef)
-                    model_group.create_dataset(f'intercept_{i}', data=intercept)
-                
-                scaler_group = f.create_group('scaler')
-                scaler_group.create_dataset('mean', data=scaler.mean_)
-                scaler_group.create_dataset('scale', data=scaler.scale_)
-            
-            if not os.path.exists(h5_path):
-                raise FileNotFoundError(f"HDF5 file {h5_path} was not created")
-            model_files["models.h5"] = h5_path
-            update_log(f"Saved models to HDF5 file {h5_path}")
-        except Exception as e:
-            update_log(f"Failed to save .h5 file: {str(e)}")
-            st.session_state.error_summary.append(f"HDF5 save error: {str(e)}")
-            st.error(f"Failed to save .h5 file: {str(e)}. Please ensure 'h5py' is installed and directory is writable.")
-    
-    update_log(f"Trained ANN with {len(valid_formulas)} samples")
-    st.success(f"Trained ANN and saved models: {', '.join(model_files.keys())}")
-    return model, scaler, model_files
-
-def detect_text_column(conn):
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(papers)")
-    columns = {col[1] for col in cursor.fetchall()}
-    possible_text_columns = ['content', 'text', 'abstract', 'body']
-    for col in possible_text_columns:
-        if col in columns:
-            update_log(f"Detected text column: {col}")
-            return col
-    update_log("No text column found in 'papers' table")
-    return None
-
-def detect_id_column(conn):
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(papers)")
-    columns = {col[1] for col in cursor.fetchall()}
-    possible_id_columns = ['id', 'paper_id']
-    for col in possible_id_columns:
-        if col in columns:
-            update_log(f"Detected ID column: {col}")
-            return col
-    update_log("No ID column (id, paper_id) found in 'papers' table")
-    return None
-
-def extract_material_classifications(db_file, preserve_stoichiometry=False, year_range=None):
-    try:
-        update_log("Starting p-type/n-type material classification with NER")
-        update_progress("Connecting to database...")
+        # Featurize the composition
+        features = featurize_composition_ann(elements, composition_dict)
+        if features is None:
+            logger.error("Feature generation failed for ANN classification")
+            return 'Neutral', {'p_type_prob': 0.0, 'n_type_prob': 0.0, 'total_samples': 0, 'valid_predictions': 0}, None
         
-        conn = sqlite3.connect(db_file)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='papers'")
-        if not cursor.fetchone():
-            update_log("Database does not contain 'papers' table")
-            st.session_state.error_summary.append("Database does not contain 'papers' table")
-            st.error("Database does not contain 'papers' table")
-            conn.close()
-            return pd.DataFrame()
+        # Scale features
+        features_scaled = ann_scaler.transform([features])
+        if np.any(np.isnan(features_scaled)):
+            logger.error("NaN values in scaled features")
+            raise ValueError("NaN values in scaled features")
         
-        cursor.execute("PRAGMA table_info(papers)")
-        columns = {col[1] for col in cursor.fetchall()}
-        required_columns = {'title'}
-        optional_columns = {'id', 'paper_id', 'year'}
-        missing_required = required_columns - columns
-        if missing_required:
-            update_log(f"Missing required columns: {missing_required}")
-            st.session_state.error_summary.append(f"Missing required columns: {missing_required}")
-            st.error(f"Missing required columns: {missing_required}")
-            conn.close()
-            return pd.DataFrame()
+        # Predict with ANN
+        probabilities = ann_classifier.predict_proba(features_scaled)[0]
+        material_type_idx = np.argmax(probabilities)
+        material_types = {0: 'n-type', 1: 'p-type'}
+        material_type = material_types.get(material_type_idx, 'Neutral')
+        confidence = probabilities[material_type_idx]
+        if confidence < 0.6:
+            material_type = 'Neutral'
         
-        id_column = detect_id_column(conn)
-        if not id_column:
-            update_log("Warning: No ID column (id, paper_id) found; proceeding without paper ID")
-            st.session_state.error_summary.append("Warning: No ID column found in database")
-        
-        has_year = 'year' in columns
-        if not has_year:
-            update_log("Warning: 'year' column not found; proceeding without year data")
-            st.session_state.error_summary.append("Warning: 'year' column not found in database")
-        
-        text_column = detect_text_column(conn)
-        if not text_column:
-            st.session_state.error_summary.append("No text column (content, text, abstract, body) found in database")
-            st.error("No text column (content, text, abstract, body) found in database")
-            conn.close()
-            return pd.DataFrame()
-        st.session_state.text_column = text_column
-        
-        columns_to_select = ['title', text_column]
-        if id_column:
-            columns_to_select.append(id_column)
-        if has_year:
-            columns_to_select.append('year')
-        query = f"SELECT {', '.join(columns_to_select)} FROM papers WHERE {text_column} IS NOT NULL AND {text_column} NOT LIKE 'Error%'"
-        if has_year and year_range:
-            query += f" AND year BETWEEN {year_range[0]} AND {year_range[1]}"
-        df = pd.read_sql_query(query, conn)
-        
-        # Rename id_column to paper_id for consistency
-        if id_column and id_column != 'paper_id':
-            df = df.rename(columns={id_column: 'paper_id'})
-        
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='standardized_formulas'")
-        if cursor.fetchone():
-            cached_df = pd.read_sql_query("SELECT material, classification FROM standardized_formulas", conn)
-            update_log("Loaded cached standardized formulas")
-            conn.close()
-            return cached_df
-        
-        conn.close()
-        
-        if df.empty:
-            update_log("No valid papers found for material classification")
-            st.session_state.error_summary.append("No valid papers found in database")
-            st.error("No valid papers found in database")
-            return pd.DataFrame()
-        
-        nlp = load_spacy_model(st.session_state.synonyms)
-        
-        material_classifications = []
-        p_type_patterns = [
-            r"p-type\s+([A-Za-z0-9\(\)\-\s,:]+?)(?=\s|,|\.|;|:|$)",
-            r"p-type\s+material.*?([A-Za-z0-9\(\)\-\s,:]+?)(?=\s|,|\.|;|:|$)",
-            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+is\s+p-type",
-            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+exhibits\s+p-type",
-            r"p-type\s+([A-Za-z0-9\(\)\-\s,:]+?)\s+thermoelectric",
-            r"p-type\s+doped\s+([A-Za-z0-9\(\)\-\s,:]+?)",
-            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+doped\s+p-type"
-        ]
-        n_type_patterns = [
-            r"n-type\s+([A-Za-z0-9\(\)\-\s,:]+?)(?=\s|,|\.|;|:|$)",
-            r"n-type\s+material.*?([A-Za-z0-9\(\)\-\s,:]+?)(?=\s|,|\.|;|:|$)",
-            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+is\s+n-type",
-            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+exhibits\s+n-type",
-            r"n-type\s+([A-Za-z0-9\(\)\-\s,:]+?)\s+thermoelectric",
-            r"n-type\s+doped\s+([A-Za-z0-9\(\)\-\s,:]+?)",
-            r"([A-Za-z0-9\(\)\-\s,:]+?)\s+doped\s+n-type"
-        ]
-        common_te_materials = [
-            "Bi2Te3", "PbTe", "SnSe", "CoSb3", "SiGe", "Skutterudite",
-            "Half-Heusler", "Clathrate", "Zn4Sb3", "Mg2Si", "Cu2Se"
-        ]
-        
-        def chunk_text(text, max_length=200000):
-            chunks = []
-            start = 0
-            while start < len(text):
-                end = min(start + max_length, len(text))
-                if end < len(text):
-                    last_period = text.rfind('.', start, end)
-                    end = last_period + 1 if last_period > start else end
-                chunks.append(text[start:end])
-                start = end
-            return chunks
-        
-        progress_bar = st.progress(0)
-        for i, row in df.iterrows():
-            paper_id = row.get('paper_id', f"paper_{i+1}")  # Fallback ID if missing
-            update_progress(f"Processing paper {paper_id} ({i+1}/{len(df)})")
-            content = row[text_column]
-            chunks = chunk_text(content)
-            
-            for chunk_idx, chunk in enumerate(chunks):
-                doc = nlp(chunk)
-                formula_entities = [ent.text for ent in doc.ents if ent.label_ == "FORMULA"]
-                material_entities = [ent for ent in doc.ents if ent.label_ == "MATERIAL_TYPE"]
-                
-                linked_pairs = link_formula_to_material(doc)
-                
-                for pair in linked_pairs:
-                    if pair["Material_Type"] in ["p-type", "n-type"]:
-                        classification_entry = {
-                            "paper_id": paper_id,
-                            "title": row["title"],
-                            "material": pair["Formula"],
-                            "classification": pair["Material_Type"],
-                            "context": f"Found in context: {chunk[max(0, chunk.find(pair['Formula'])-50):min(len(chunk), chunk.find(pair['Formula'])+50)]}..."
-                        }
-                        if has_year:
-                            classification_entry["year"] = row.get("year", None)
-                        material_classifications.append(classification_entry)
-                
-                p_type_materials = set()
-                for pattern in p_type_patterns:
-                    matches = re.finditer(pattern, chunk, re.IGNORECASE)
-                    for match in matches:
-                        material = match.group(1).strip()
-                        if material and len(material) > 2 and material in formula_entities and validate_formula(material):
-                            standardized_material = standardize_material_formula(material, preserve_stoichiometry)
-                            if standardized_material:
-                                p_type_materials.add((standardized_material, match.start()))
-                
-                n_type_materials = set()
-                for pattern in n_type_patterns:
-                    matches = re.finditer(pattern, chunk, re.IGNORECASE)
-                    for match in matches:
-                        material = match.group(1).strip()
-                        if material and len(material) > 2 and material in formula_entities and validate_formula(material):
-                            standardized_material = standardize_material_formula(material, preserve_stoichiometry)
-                            if standardized_material:
-                                n_type_materials.add((standardized_material, match.start()))
-                
-                p_type_context = re.search(r"p-type[^\.]{0,500}", chunk, re.IGNORECASE)
-                n_type_context = re.search(r"n-type[^\.]{0,500}", chunk, re.IGNORECASE)
-                
-                if p_type_context:
-                    context_doc = nlp(p_type_context.group(0))
-                    for ent in context_doc.ents:
-                        if ent.label_ == "FORMULA" and validate_formula(ent.text):
-                            standardized_material = standardize_material_formula(ent.text, preserve_stoichiometry)
-                            if standardized_material:
-                                p_type_materials.add((standardized_material, ent.start_char))
-                
-                if n_type_context:
-                    context_doc = nlp(n_type_context.group(0))
-                    for ent in context_doc.ents:
-                        if ent.label_ == "FORMULA" and validate_formula(ent.text):
-                            standardized_material = standardize_material_formula(ent.text, preserve_stoichiometry)
-                            if standardized_material:
-                                n_type_materials.add((standardized_material, ent.start_char))
-                
-                for material in common_te_materials:
-                    if material.lower() in chunk.lower():
-                        doc = nlp(material)
-                        if any(ent.label_ == "FORMULA" for ent in doc.ents) and validate_formula(material):
-                            standardized_material = standardize_material_formula(material, preserve_stoichiometry)
-                            if standardized_material:
-                                if p_type_context and material.lower() in p_type_context.group(0).lower():
-                                    p_type_materials.add((standardized_material, 0))
-                                if n_type_context and material.lower() in n_type_context.group(0).lower():
-                                    n_type_materials.add((standardized_material, 0))
-                
-                for material, start_pos in p_type_materials:
-                    context = chunk[max(0, start_pos-50):min(len(chunk), start_pos+50)]
-                    classification_entry = {
-                        "paper_id": paper_id,
-                        "title": row["title"],
-                        "material": material,
-                        "classification": "p-type",
-                        "context": f"Found in context: {context}..."
-                    }
-                    if has_year:
-                        classification_entry["year"] = row.get("year", None)
-                    material_classifications.append(classification_entry)
-                
-                for material, start_pos in n_type_materials:
-                    context = chunk[max(0, start_pos-50):min(len(chunk), start_pos+50)]
-                    classification_entry = {
-                        "paper_id": paper_id,
-                        "title": row["title"],
-                        "material": material,
-                        "classification": "n-type",
-                        "context": f"Found in context: {context}..."
-                    }
-                    if has_year:
-                        classification_entry["year"] = row.get("year", None)
-                    material_classifications.append(classification_entry)
-                
-                doc = None
-                import gc
-                gc.collect()
-            
-            progress_value = min((i + 1) / len(df), 1.0)
-            progress_bar.progress(progress_value)
-        
-        material_df = pd.DataFrame(material_classifications)
-        
-        if not material_df.empty:
-            material_df = material_df.drop_duplicates(subset=["paper_id", "material", "classification"])
-            material_df = material_df.sort_values(by=["material", "classification"])
-            update_log(f"Cleaned and sorted DataFrame: {len(material_df)} unique classifications")
-            
-            conn = sqlite3.connect(db_file)
-            material_df[["material", "classification"]].to_sql("standardized_formulas", conn, if_exists="replace", index=False)
-            conn.close()
-            update_log("Cached standardized formulas in database")
-            
-            formulas = material_df["material"].tolist()
-            labels = material_df["classification"].tolist()
-            model, scaler, model_files = train_ann(formulas, labels)
-            if model is None or scaler is None:
-                update_log("ANN training or model saving failed, returning material_df without model")
-                st.error("ANN training or model saving failed. Check logs for details.")
-            else:
-                st.session_state.ann_model = model
-                st.session_state.scaler = scaler
-                st.session_state.model_files = model_files
-        
-        update_log(f"Extracted {len(material_df)} material classifications")
-        return material_df
-    
-    except sqlite3.OperationalError as e:
-        update_log(f"SQLite error: {str(e)}")
-        st.session_state.error_summary.append(f"SQLite error: {str(e)}")
-        st.error(f"SQLite error: {str(e)}")
-        return pd.DataFrame()
+        summary_dict = {
+            'p_type_prob': float(probabilities[1]),
+            'n_type_prob': float(probabilities[0]),
+            'total_samples': 1,
+            'valid_predictions': 1
+        }
+        logger.info(f"ANN predicted {material_type} with probabilities: {probabilities.tolist()}")
+        return material_type, summary_dict, probabilities
     except Exception as e:
-        update_log(f"Error in material classification: {str(e)}")
-        st.session_state.error_summary.append(f"Extraction error: {str(e)}")
-        st.error(f"Error in material classification: {str(e)}")
-        return pd.DataFrame()
-
-def classify_formula(formula, material_df, fuzzy_match=False):
-    try:
-        if not formula.strip():
-            update_log("Empty formula input provided")
-            return None, "Please enter a valid chemical formula.", None
-        
-        normalized_formula = standardize_material_formula(formula, 
-                                                        preserve_stoichiometry=st.session_state.get('preserve_stoichiometry', False))
-        if not normalized_formula:
-            update_log(f"Invalid chemical formula: {formula}")
-            return None, f"'{formula}' is not a valid chemical formula.", None
-        
-        update_log(f"Normalized formula '{formula}' to '{normalized_formula}'")
-        
-        if material_df is None or material_df.empty:
-            update_log("No material classifications available for formula lookup")
-            return None, "Please run Material Classification Analysis first.", None
-        
-        formula_matches = material_df[material_df["material"].str.lower() == normalized_formula.lower()]
-        similar_formula = None
-        
-        if formula_matches.empty and fuzzy_match:
-            materials = material_df["material"].unique()
-            similarities = [(m, SequenceMatcher(None, normalized_formula.lower(), m.lower()).ratio()) for m in materials]
-            best_match, similarity = max(similarities, key=lambda x: x[1]) if similarities else (None, 0)
-            if similarity > 0.8:
-                formula_matches = material_df[material_df["material"].str.lower() == best_match.lower()]
-                similar_formula = best_match
-                update_log(f"Fuzzy matched '{normalized_formula}' to '{best_match}' (similarity: {similarity:.2%})")
-        
-        if not formula_matches.empty:
-            classifications = formula_matches["classification"].value_counts()
-            total_matches = len(formula_matches)
-            paper_ids = formula_matches["paper_id"].unique() if "paper_id" in formula_matches.columns else []
-            contexts = formula_matches["context"].tolist()
-            
-            confidence = {cls: count / total_matches for cls, count in classifications.items()}
-            primary_classification = classifications.idxmax()
-            confidence_score = confidence.get(primary_classification, 0.0)
-            
-            update_log(f"Formula '{normalized_formula}' classified as {primary_classification} (confidence: {confidence_score:.2%})")
-            return {
-                "formula": normalized_formula,
-                "classification": primary_classification,
-                "confidence": confidence_score,
-                "paper_ids": paper_ids.tolist(),
-                "count": total_matches,
-                "contexts": contexts,
-                "all_classifications": confidence
-            }, None, similar_formula
-        else:
-            update_log("No database matches found; database lookup selected")
-            return None, "No database matches found for formula.", None
-    
-    except Exception as e:
-        update_log(f"Error classifying formula '{formula}': {str(e)}")
-        return None, f"Error classifying formula: {str(e)}", None
-
-def classify_formula_ann(formula, preserve_stoichiometry=False):
-    """
-    Classify a chemical formula using the pre-trained ANN classifier.
-    
-    Args:
-        formula (str): Chemical formula to classify (e.g., 'Bi2Te3').
-        preserve_stoichiometry (bool): Whether to preserve exact stoichiometry in standardization.
-    
-    Returns:
-        tuple: (result_dict, error_message, similar_formula)
-            - result_dict: Dictionary with classification details or None if failed.
-            - error_message: Error message if classification fails, else None.
-            - similar_formula: Suggested similar formula if applicable (always None here).
-    """
-    try:
-        if not formula.strip():
-            update_log("Empty formula input provided for ANN classification")
-            return None, "Please enter a valid chemical formula.", None
-        
-        # Standardize the input formula
-        normalized_formula = standardize_material_formula(formula, preserve_stoichiometry=preserve_stoichiometry)
-        if not normalized_formula:
-            update_log(f"Invalid chemical formula for ANN: {formula}")
-            return None, f"'{formula}' is not a valid chemical formula.", None
-        
-        update_log(f"Normalized formula '{formula}' to '{normalized_formula}' for ANN")
-        
-        # Load pre-trained ANN model and scaler
-        model_path = os.path.join(DB_DIR, "ann_materialclassifier.pkl")
-        scaler_path = os.path.join(DB_DIR, "scaler_annclassifier.pkl")
-        
-        if not os.path.exists(model_path) or not os.path.exists(scaler_path):
-            update_log(f"ANN model or scaler file missing: {model_path}, {scaler_path}")
-            st.session_state.error_summary.append(f"ANN model or scaler file missing")
-            return None, "ANN model or scaler file not found. Please ensure 'ann_materialclassifier.pkl' and 'scaler_annclassifier.pkl' are in the directory.", None
-        
-        if st.session_state.get('ann_model') is None or st.session_state.get('scaler') is None:
-            try:
-                st.session_state.ann_model = joblib.load(model_path)
-                st.session_state.scaler = joblib.load(scaler_path)
-                update_log(f"Loaded ANN model from {model_path} and scaler from {scaler_path}")
-            except Exception as e:
-                update_log(f"Failed to load ANN model or scaler: {str(e)}")
-                st.session_state.error_summary.append(f"ANN model load error: {str(e)}")
-                return None, f"Failed to load ANN model or scaler: {str(e)}", None
-        
-        # Featurize the formula
-        X, valid_formulas, _ = featurize_formulas([normalized_formula])
-        if not X.size:
-            update_log(f"Failed to featurize formula '{normalized_formula}' for ANN")
-            return None, f"Could not featurize formula '{normalized_formula}' for ANN prediction.", None
-        
-        # Scale features and predict
-        X_scaled = st.session_state.scaler.transform(X)
-        prob = st.session_state.ann_model.predict_proba(X_scaled)[0]
-        prediction = "p-type" if prob[1] > prob[0] else "n-type"
-        confidence = float(max(prob))  # Convert to float for serialization
-        
-        update_log(f"ANN predicted '{normalized_formula}' as {prediction} (confidence: {confidence:.2%})")
-        return {
-            "formula": normalized_formula,
-            "classification": prediction,
-            "confidence": confidence,
-            "paper_ids": [],
-            "count": 0,
-            "contexts": [],
-            "all_classifications": {"p-type": float(prob[1]), "n-type": float(prob[0])}
-        }, None, None
-    
-    except Exception as e:
-        update_log(f"Error in ANN classification for '{formula}': {str(e)}")
+        logger.error(f"ANN classification failed: {str(e)}")
         st.session_state.error_summary.append(f"ANN classification error: {str(e)}")
-        return None, f"Error classifying formula with ANN: {str(e)}", None
+        return 'Neutral', {'p_type_prob': 0.0, 'n_type_prob': 0.0, 'total_samples': 0, 'valid_predictions': 0}, None
 
-def classify_formula_gnn(formula, preserve_stoichiometry=False):
-    """
-    Placeholder for GNN classifier function (assumed to be defined elsewhere).
-    Replace with actual GNN classification logic if available.
-    """
+# Compute z_mean statistics and bias vector
+def compute_z_mean_stats_and_bias(elements, temperature, available_elements, _scaler, _vae, steps=30):
+    z_means = []
     try:
-        normalized_formula = standardize_material_formula(formula, preserve_stoichiometry=preserve_stoichiometry)
-        if not normalized_formula:
-            update_log(f"Invalid chemical formula for GNN: {formula}")
-            return None, f"'{formula}' is not a valid chemical formula.", None
+        if len(elements) != 3:
+            logger.error(f"Expected 3 elements, got {len(elements)}: {elements}")
+            raise ValueError("Exactly 3 elements required")
+        if not all(e in available_elements for e in elements):
+            logger.error(f"Invalid elements: {elements}")
+            raise ValueError("All elements must be in available_elements")
+        if not isinstance(temperature, (int, float)) or temperature < 0:
+            logger.error(f"Invalid temperature: {temperature}")
+            raise ValueError("Temperature must be a non-negative number")
+        expected_features = len(available_elements) + 1
+        if _scaler.n_features_in_ != expected_features:
+            logger.error(f"Scaler expects {expected_features} features, got {_scaler.n_features_in_}")
+            raise ValueError("Scaler feature mismatch")
+        if _vae.input_dim != expected_features:
+            logger.error(f"VAE expects {expected_features} input dimensions, got {_vae.input_dim}")
+            raise ValueError("VAE input dimension mismatch")
         
-        # Placeholder: Implement GNN classification logic here
-        update_log("GNN classifier not implemented in this code snippet")
-        return None, "GNN classifier not implemented.", None
+        _vae.eval()
+        with torch.no_grad():
+            for a in np.linspace(0, 1, steps):
+                for b in np.linspace(0, 1 - a, steps):
+                    c = 1 - a - b
+                    if c >= 0:
+                        comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
+                        df = featurize_composition(comp_dict, available_elements, temperature)
+                        X_scaled = preprocess_new_data(df, available_elements, _scaler)
+                        if X_scaled.shape[1] != _vae.input_dim:
+                            logger.error(f"Input shape mismatch: expected {_vae.input_dim}, got {X_scaled.shape[1]}")
+                            raise ValueError("Input shape mismatch")
+                        X_tensor = torch.FloatTensor(X_scaled).to(device)
+                        logger.debug(f"Processing composition: {comp_dict}, X_tensor shape: {X_tensor.shape}")
+                        _, z_mean, _ = _vae(X_tensor)
+                        if z_mean.shape[1] != _vae.latent_dim:
+                            logger.error(f"z_mean shape mismatch: expected {_vae.latent_dim}, got {z_mean.shape[1]}")
+                            raise ValueError("z_mean shape mismatch")
+                        z_means.append(z_mean.cpu().numpy())
+        if not z_means:
+            logger.error("No valid compositions generated")
+            raise ValueError("No valid compositions generated")
+        z_means = np.vstack(z_means)
+        z_mean_avg = np.mean(z_means, axis=0)
+        z_mean_std = np.std(z_means, axis=0)
+        p_type_comp = {elements[0]: 0.0, elements[1]: 0.4, elements[2]: 0.6}
+        n_type_comp = {elements[0]: 0.33, elements[1]: 0.33, elements[2]: 0.34}
+        df_p = featurize_composition(p_type_comp, available_elements, temperature)
+        df_n = featurize_composition(n_type_comp, available_elements, temperature)
+        X_scaled_p = preprocess_new_data(df_p, available_elements, _scaler)
+        X_scaled_n = preprocess_new_data(df_n, available_elements, _scaler)
+        if X_scaled_p.shape[1] != _vae.input_dim or X_scaled_n.shape[1] != _vae.input_dim:
+            logger.error(f"p-type/n-type input shape mismatch: expected {_vae.input_dim}, got {X_scaled_p.shape[1]}/{X_scaled_n.shape[1]}")
+            raise ValueError("p-type/n-type input shape mismatch")
+        X_tensor_p = torch.FloatTensor(X_scaled_p).to(device)
+        X_tensor_n = torch.FloatTensor(X_scaled_n).to(device)
+        _, z_mean_p, _ = _vae(X_tensor_p)
+        _, z_mean_n, _ = _vae(X_tensor_n)
+        bias_vector = (z_mean_p - z_mean_n).cpu().numpy()
+        bias_norm = np.linalg.norm(bias_vector)
+        if bias_norm > 0:
+            bias_vector = bias_vector / bias_norm
+        else:
+            logger.warning("Bias vector has zero norm, using uniform vector")
+            bias_vector = np.ones(_vae.latent_dim) / np.sqrt(_vae.latent_dim)
+        bias_magnitude = 0.5 * np.mean(z_mean_std)
+        logger.info(f"Computed z_mean_avg: {z_mean_avg.tolist()}, z_mean_std: {z_mean_std.tolist()}, bias_vector: {bias_vector.tolist()}, bias_magnitude: {bias_magnitude}")
+        return z_mean_avg, z_mean_std, bias_vector, bias_magnitude
     except Exception as e:
-        update_log(f"Error in GNN classification for '{formula}': {str(e)}")
-        st.session_state.error_summary.append(f"GNN classification error: {str(e)}")
-        return None, f"Error classifying formula with GNN: {str(e)}", None
+        logger.error(f"Failed to compute z_mean statistics and bias: {e}")
+        fallback_z_mean_avg = np.array([-0.0003, -0.0000, 0.0004, 0.0003, 0.0003, -0.0006, 0.0009, -0.0001])
+        fallback_z_mean_std = np.array([0.0003, 0.0007, 0.0003, 0.0005, 0.0005, 0.0010, 0.0011, 0.0003])
+        fallback_bias_vector = np.ones(8) / np.sqrt(8)
+        fallback_bias_magnitude = 0.5 * np.mean(fallback_z_mean_std)
+        logger.warning(f"Using fallback statistics: z_mean_avg={fallback_z_mean_avg.tolist()}, z_mean_std={fallback_z_mean_std.tolist()}, bias_vector={fallback_bias_vector.tolist()}, bias_magnitude={fallback_bias_magnitude}")
+        return fallback_z_mean_avg, fallback_z_mean_std, fallback_bias_vector, fallback_bias_magnitude
 
-def batch_classify_formulas(formulas, material_df, fuzzy_match=False, classifier_type="Database Lookup"):
-    results = []
-    errors = []
-    suggestions = []
-    for formula in formulas:
-        if classifier_type == "ANN":
-            result, error, similar_formula = classify_formula_ann(formula.strip(), st.session_state.get('preserve_stoichiometry', False))
-        elif classifier_type == "GNN":
-            result, error, similar_formula = classify_formula_gnn(formula.strip(), st.session_state.get('preserve_stoichiometry', False))
-        else:
-            result, error, similar_formula = classify_formula(formula.strip(), material_df, fuzzy_match)
-        if error:
-            errors.append(error)
-            if similar_formula:
-                suggestions.append((formula, similar_formula))
-        else:
-            results.append(result)
-    return results, errors, suggestions
-
-def plot_material_classifications(df, top_n=20, year_range=None):
-    if df.empty:
-        update_log("Empty DataFrame provided to plot_material_classifications")
-        return None, None, None, None
-    
-    if year_range and 'year' in df.columns:
-        try:
-            df = df[(df["year"] >= year_range[0]) & (df["year"] <= year_range[1])]
-            if df.empty:
-                update_log("No data after year range filtering")
-                return None, None, None, None
-        except Exception as e:
-            update_log(f"Error filtering by year: {str(e)}")
-            st.session_state.error_summary.append(f"Year filtering error: {str(e)}")
-            return None, None, None, None
-    elif year_range and 'year' not in df.columns:
-        update_log("Year range specified but 'year' column missing; skipping year filtering")
-        st.session_state.error_summary.append("Warning: 'year' column missing, ignoring year range filter")
-    
-    material_counts = df.groupby(["material", "classification"]).size().reset_index(name="count")
-    top_materials = material_counts.groupby("material")["count"].sum().nlargest(top_n).index
-    filtered_df = material_counts[material_counts["material"].isin(top_materials)]
-    
-    fig_bar = px.bar(
-        filtered_df, 
-        x="material", 
-        y="count", 
-        color="classification",
-        title=f"Top {top_n} Materials by p-type/n-type Classification",
-        labels={"material": "Material", "count": "Frequency", "classification": "Type"},
-        color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"}
+# Plot z_mean bar chart (Plotly)
+def plot_z_mean_bar_chart(z_mean_avg, z_mean_std, font_size):
+    dimensions = [f"Dim {i+1}" for i in range(len(z_mean_avg))]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=dimensions,
+        y=z_mean_avg,
+        error_y=dict(type='data', array=z_mean_std, visible=True),
+        marker=dict(color='blue', opacity=0.7),
+        name='z_mean'
+    ))
+    fig.update_layout(
+        title=dict(text='Latent Space z_mean: Mean with SD Error Bars', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+        xaxis_title='Latent Dimension',
+        yaxis_title='z_mean Value',
+        xaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        yaxis=dict(tickfont=dict(size=font_size), title=dict(font=dict(size=font_size))),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(l=50, r=50, t=80, b=50)
     )
-    fig_bar.update_layout(xaxis_tickangle=-45, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-    
-    class_dist = df["classification"].value_counts()
-    fig_pie = px.pie(
-        values=class_dist.values,
-        names=class_dist.index,
-        title="Distribution of p-type vs n-type Classifications",
-        color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"}
-    )
-    fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-    
-    fig_timeline = None
-    if "year" in df.columns and df["year"].notna().any():
-        try:
-            yearly_data = df.groupby(["year", "classification"]).size().reset_index(name="count")
-            fig_timeline = px.line(
-                yearly_data,
-                x="year",
-                y="count",
-                color="classification",
-                title="Trend of p-type and n-type Classifications Over Time",
-                labels={"year": "Year", "count": "Number of Mentions", "classification": "Type"},
-                color_discrete_map={"p-type": "#636EFA", "n-type": "#EF553B"}
-            )
-            fig_timeline.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        except Exception as e:
-            update_log(f"Error creating timeline plot: {str(e)}")
-            st.session_state.error_summary.append(f"Timeline plot error: {str(e)}")
-    else:
-        update_log("No valid year data for timeline plot")
-        st.session_state.error_summary.append("No 'year' column for timeline plot")
-    
-    fig_heatmap = None
-    if "paper_id" in df.columns:
-        try:
-            material_papers = df.groupby(["material", "paper_id"]).size().unstack(fill_value=0)
-            co_occurrence = material_papers.T.dot(material_papers)
-            np.fill_diagonal(co_occurrence.values, 0)
-            
-            valid_materials = [m for m in top_materials if m in co_occurrence.index and m in co_occurrence.columns]
-            update_log(f"Top materials: {list(top_materials)}")
-            update_log(f"Valid materials for co-occurrence: {valid_materials}")
-            update_log(f"Co-occurrence index: {list(co_occurrence.index)}")
-            
-            if valid_materials:
-                co_occurrence = co_occurrence.loc[valid_materials, valid_materials]
-                fig_heatmap = go.Figure(data=go.Heatmap(
-                    z=co_occurrence.values,
-                    x=co_occurrence.columns,
-                    y=co_occurrence.index,
-                    colorscale="Viridis",
-                    text=co_occurrence.values,
-                    texttemplate="%{text}",
-                    textfont={"size": 10}
-                ))
-                fig_heatmap.update_layout(
-                    title="Material Co-occurrence Heatmap",
-                    xaxis_title="Material",
-                    yaxis_title="Material",
-                    xaxis_tickangle=-45,
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    paper_bgcolor="rgba(0,0,0,0)"
-                )
-            else:
-                update_log("No valid materials for co-occurrence heatmap")
-                st.session_state.error_summary.append("No valid materials for co-occurrence heatmap")
-        except Exception as e:
-            update_log(f"Error creating co-occurrence heatmap: {str(e)}")
-            st.session_state.error_summary.append(f"Co-occurrence heatmap error: {str(e)}")
-    else:
-        update_log("No 'paper_id' column for co-occurrence heatmap")
-        st.session_state.error_summary.append("No 'paper_id' column for co-occurrence heatmap")
-    
-    return fig_bar, fig_pie, fig_timeline, fig_heatmap
+    return fig
 
-# Main app
-st.header("Select or Upload Database")
-db_files = glob.glob(os.path.join(DB_DIR, "*.db"))
-db_options = [os.path.basename(f) for f in db_files] + ["Upload a new .db file"]
-db_selection = st.selectbox("Select Database", db_options, index=db_options.index("thermoelectric_universe.db") if "thermoelectric_universe.db" in db_options else 0, key="db_select")
-uploaded_file = None
-if db_selection == "Upload a new .db file":
-    uploaded_file = st.file_uploader("Upload SQLite Database (.db)", type=["db"], key="db_upload")
-    if uploaded_file:
-        temp_db_path = os.path.join(DB_DIR, f"uploaded_{uuid.uuid4().hex}.db")
-        try:
-            with open(temp_db_path, "wb") as f:
-                f.write(uploaded_file.read())
-            if not os.path.exists(temp_db_path):
-                raise FileNotFoundError(f"Failed to save uploaded database to {temp_db_path}")
-            st.session_state.db_file = temp_db_path
-            update_log(f"Uploaded database saved as {temp_db_path}")
-        except Exception as e:
-            st.error(f"Failed to save uploaded database: {str(e)}")
-            update_log(f"Failed to save uploaded database: {str(e)}")
-            st.stop()
-else:
-    if db_selection:
-        st.session_state.db_file = os.path.join(DB_DIR, db_selection)
-        update_log(f"Selected database: {db_selection}")
-
-if st.session_state.db_file:
+# Plot z_mean bar chart (Matplotlib)
+def plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, output_path='z_mean_bar_chart.pdf'):
+    plt.style.use('default')
+    fig, ax = plt.subplots(figsize=(8, 6), dpi=300)
+    dimensions = [f'Dim {i+1}' for i in range(len(z_mean_avg))]
+    x = np.arange(len(z_mean_avg))
+    ax.bar(x, z_mean_avg, yerr=z_mean_std, capsize=5, color='#1f77b4', edgecolor='black', alpha=0.7, label='z_mean')
+    ax.set_xlabel('Latent Dimension', fontsize=14, fontfamily='Arial')
+    ax.set_ylabel('z_mean Value', fontsize=14, fontfamily='Arial')
+    ax.set_title('Latent Space z_mean: Mean with SD Error Bars', fontsize=16, fontfamily='Arial', pad=15)
+    ax.set_xticks(x)
+    ax.set_xticklabels(dimensions, fontsize=12, fontfamily='Arial')
+    ax.tick_params(axis='both', which='major', labelsize=12)
+    ax.grid(True, which='major', axis='y', linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
+    plt.tight_layout()
     try:
-        conn = sqlite3.connect(st.session_state.db_file)
-        cursor = conn.cursor()
-        
-        text_column = detect_text_column(conn)
-        if not text_column:
-            st.error("No text column (content, text, abstract, body) found in database. Please check the database schema.")
-            conn.close()
-            st.stop()
-        
-        id_column = detect_id_column(conn)
-        
-        cursor.execute(f"SELECT COUNT(*) FROM papers WHERE {text_column} IS NOT NULL AND {text_column} NOT LIKE 'Error%'")
-        paper_count = cursor.fetchone()[0]
-        
-        columns_to_select = ['title', text_column]
-        if id_column:
-            columns_to_select.append(id_column)
-        if 'year' in {col[1] for col in cursor.execute("PRAGMA table_info(papers)").fetchall()}:
-            columns_to_select.append('year')
-        query = f"SELECT {', '.join(columns_to_select)} FROM papers WHERE {text_column} IS NOT NULL AND {text_column} NOT LIKE 'Error%' LIMIT 5"
-        preview_data = pd.read_sql_query(query, conn)
-        
-        # Rename id_column to paper_id for consistency
-        if id_column and id_column != 'paper_id':
-            preview_data = preview_data.rename(columns={id_column: 'paper_id'})
-        
-        conn.close()
-        
-        st.info(f"Database contains {paper_count} valid papers.")
-        
-        st.subheader("Database Preview (First 5 Papers)")
-        display_columns = [col for col in ["paper_id", "title", "year"] if col in preview_data.columns]
-        update_log(f"Preview data columns: {preview_data.columns.tolist()}")
-        
-        if text_column in preview_data.columns:
-            preview_data_display = preview_data[display_columns].copy()
-            preview_data_display[f"{text_column}_preview"] = preview_data[text_column].str[:100] + "..."
-            st.dataframe(preview_data_display, use_container_width=True)
-        else:
-            st.dataframe(preview_data[display_columns], use_container_width=True)
-            st.warning(f"Text column '{text_column}' not found in preview data. Available columns: {', '.join(preview_data.columns)}")
-        
-        if st.button("Clear Cached Formulas", key="clear_cache"):
-            conn = sqlite3.connect(st.session_state.db_file)
-            cursor = conn.cursor()
-            cursor.execute("DROP TABLE IF EXISTS standardized_formulas")
-            cursor.execute("DROP TABLE IF EXISTS models")
-            conn.commit()
-            conn.close()
-            update_log("Cleared cached standardized formulas and models")
-            st.success("Cached formulas and models cleared. Run extraction again to refresh.")
-    
-    except sqlite3.OperationalError as e:
-        st.error(f"Database error: {str(e)}")
-        st.session_state.error_summary.append(f"Database error: {str(e)}")
-        st.stop()
-    
-    tab1, tab2 = st.tabs(["Material Classification", "Formula Classification"])
-    
-    with tab1:
-        st.header("Material Classification Analysis (p-type vs n-type)")
-        
-        with st.sidebar:
-            st.subheader("Material Classification Parameters")
-            material_top_n = st.slider("Number of Top Materials to Show", min_value=5, max_value=30, value=10, key="material_top_n")
-            preserve_stoichiometry = st.checkbox("Preserve Exact Stoichiometry", value=False, key="preserve_stoichiometry")
-            year_range = st.slider("Year Range", min_value=1980, max_value=2025, value=(2000, 2025), key="year_range")
-            
-            st.subheader("Model Save Formats")
-            save_formats = st.multiselect(
-                "Select formats to save models",
-                options=["pkl", "db", "pt", "h5"],
-                default=st.session_state.get('save_formats', ["pkl", "db", "pt", "h5"]),
-                key="save_formats_selector"
-            )
-            # Update save_formats safely
-            if save_formats != st.session_state.get('save_formats', []):
-                st.session_state['save_formats'] = save_formats
-                update_log(f"Updated save formats to: {save_formats}")
-            st.write("Models will be saved in:", ", ".join(st.session_state.save_formats) if st.session_state.save_formats else "None")
-            
-            st.subheader("Synonym Settings")
-            with st.form("add_synonym_form"):
-                st.write("➕ Add new synonym")
-                synonym_text = st.text_input("Phrase (e.g. 'hole transport'):", key="synonym_text")
-                synonym_type = st.selectbox("Maps to:", ["p-type", "n-type"], key="synonym_type")
-                submitted = st.form_submit_button("Add Synonym")
-                if submitted and synonym_text.strip():
-                    st.session_state.synonyms[synonym_type].append(synonym_text.strip())
-                    st.success(f"Added '{synonym_text}' → {synonym_type}")
-            
-            st.write("### Current synonyms:")
-            st.json(st.session_state.synonyms)
-            
-            material_filter_options = st.session_state.get("material_filter_options", [])
-            material_filter = st.multiselect("Filter Materials", options=material_filter_options, 
-                                           placeholder="Select materials after extraction", key="material_filter")
-        
-        if st.button("Extract Material Classifications", key="extract_materials"):
-            st.session_state.error_summary = []
-            st.session_state.progress_log = []
-            with st.spinner("Extracting p-type and n-type material classifications..."):
-                material_df = extract_material_classifications(st.session_state.db_file, preserve_stoichiometry, year_range)
-                st.session_state.material_classifications = material_df
-                
-                if not material_df.empty:
-                    st.session_state.material_filter_options = sorted(material_df["material"].unique())
-            
-            if material_df.empty:
-                st.warning("No material classifications found. Check logs for details.")
-                if st.session_state.error_summary:
-                    st.error("Errors encountered:\n- " + "\n- ".join(set(st.session_state.error_summary)))
+        plt.savefig(output_path, format='pdf', bbox_inches='tight')
+        logger.info(f"Saved Matplotlib figure to {output_path}")
+    except Exception as e:
+        logger.error(f"Failed to save Matplotlib figure: {e}")
+    return fig
+
+def predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=0.0003):
+    try:
+        df = featurize_composition(composition_dict, available_elements, temperature)
+        X_scaled = preprocess_new_data(df, available_elements, _scaler)
+        if X_scaled.shape[1] != _vae.input_dim:
+            logger.error(f"Input shape mismatch in predict_seebeck: expected {_vae.input_dim}, got {X_scaled.shape[1]}")
+            raise ValueError("Input shape mismatch")
+        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        _vae.eval()
+        _regressor.eval()
+        with torch.no_grad():
+            _, z_mean, _ = _vae(X_tensor)
+            z_mean_original = z_mean.clone()
+            y_scaled_pred_unbiased = _regressor(z_mean_original)
+            y_pred_unbiased = _y_scaler.inverse_transform(y_scaled_pred_unbiased.cpu().numpy().reshape(-1, 1)).ravel()
+            y_pred_unbiased = np.clip(y_pred_unbiased, -300, 300)
+            logger.debug(f"Unbiased z_mean: {z_mean_original.cpu().numpy().tolist()}, y_pred_unbiased: {y_pred_unbiased.tolist()}")
+            if sign_bias is not None and bias_vector is not None:
+                bias_vector = torch.FloatTensor(bias_vector).to(device) * bias_magnitude
+                if sign_bias == 'p-type':
+                    z_mean = z_mean + bias_vector
+                    logger.info(f"Applied p-type bias: {bias_vector.tolist()}")
+                elif sign_bias == 'n-type':
+                    z_mean = z_mean - bias_vector
+                    logger.info(f"Applied n-type bias: {bias_vector.tolist()}")
+                y_scaled_pred = _regressor(z_mean)
+                y_pred = _y_scaler.inverse_transform(y_scaled_pred.cpu().numpy().reshape(-1, 1)).ravel()
+                y_pred = np.clip(y_pred, -300, 300)
+                if sign_bias == 'n-type' and y_pred[0] > 0:
+                    y_pred = -y_pred
+                    logger.warning(f"N-type bias produced positive Seebeck {y_pred[0]:.2f}, enforced negative sign")
+                if abs(y_pred[0]) > 0:
+                    y_pred = y_pred * (abs(y_pred_unbiased[0]) / abs(y_pred[0]))
+                logger.debug(f"Biased z_mean: {z_mean.cpu().numpy().tolist()}, y_pred: {y_pred.tolist()}")
             else:
-                st.success(f"Extracted {len(material_df)} unique material classifications!")
-                
-                filtered_df = material_df if not material_filter else \
-                             material_df[material_df["material"].isin(material_filter)]
-                
-                st.subheader("Classification Summary")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Classifications", len(filtered_df))
-                with col2:
-                    p_type_count = len(filtered_df[filtered_df["classification"] == "p-type"])
-                    st.metric("p-type Materials", p_type_count)
-                with col3:
-                    n_type_count = len(filtered_df[filtered_df["classification"] == "n-type"])
-                    st.metric("n-type Materials", n_type_count)
-                
-                st.subheader("Visualizations")
-                fig_bar, fig_pie, fig_timeline, fig_heatmap = plot_material_classifications(filtered_df, material_top_n, year_range)
-                
-                if fig_bar:
-                    st.plotly_chart(fig_bar, use_container_width=True)
-                else:
-                    st.warning("No data available for bar chart.")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if fig_pie:
-                        st.plotly_chart(fig_pie, use_container_width=True)
-                    else:
-                        st.warning("No data available for pie chart.")
-                with col2:
-                    if fig_timeline:
-                        st.plotly_chart(fig_timeline, use_container_width=True)
-                    else:
-                        st.warning("No data available for timeline chart.")
-                
-                if fig_heatmap:
-                    st.plotly_chart(fig_heatmap, use_container_width=True)
-                else:
-                    st.warning("No data available for co-occurrence heatmap.")
-                
-                st.subheader("Extracted Material Classifications")
-                display_columns = [col for col in ["paper_id", "title", "year", "material", "classification", "context"] if col in filtered_df.columns]
-                st.dataframe(
-                    filtered_df[display_columns].head(100),
-                    use_container_width=True
-                )
-                
-                csv_df = filtered_df[["material", "classification"]].rename(columns={"material": "formula", "classification": "material_type"})
-                material_csv = csv_df.to_csv(index=False)
-                st.download_button(
-                    "Download Formula Classifications CSV", 
-                    material_csv, 
-                    "formula_classifications.csv", 
-                    "text/csv", 
-                    key="download_materials"
-                )
-                
-                if hasattr(st.session_state, 'model_files') and st.session_state.model_files:
-                    st.subheader("Download Saved Models")
-                    for model_file, file_path in st.session_state.model_files.items():
-                        try:
-                            with open(file_path, 'rb') as f:
-                                st.download_button(
-                                    f"Download {model_file}",
-                                    f,
-                                    model_file,
-                                    key=f"download_{model_file}"
-                                )
-                        except Exception as e:
-                            st.error(f"Failed to provide download for {model_file}: {str(e)}")
-                            update_log(f"Failed to provide download for {model_file}: {str(e)}")
-                
-                st.subheader("Extraction Progress")
-                progress_log_display = "\n".join(st.session_state.progress_log) if st.session_state.progress_log else "No progress messages yet."
-                st.text(progress_log_display)
-        
-        st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="material_logs")
+                y_pred = y_pred_unbiased
+        return y_pred[0], y_pred_unbiased[0]
+    except Exception as e:
+        logger.error(f"Prediction failed: {e}")
+        if sign_bias is not None:
+            logger.warning(f"Retrying prediction without sign bias due to error with {sign_bias} bias.")
+            return predict_seebeck(composition_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=None, bias_vector=None, bias_magnitude=bias_magnitude)
+        return None, None
+
+# Load models and scalers
+try:
+    vae = VAE().to(device)
+    regressor = Regressor().to(device)
+    vae.load_state_dict(torch.load(os.path.join(script_dir, 'vae_model.pt'), map_location=device))
+    regressor.load_state_dict(torch.load(os.path.join(script_dir, 'regressor_model.pt'), map_location=device))
+    ann_classifier = joblib.load(os.path.join(script_dir, 'ann_materialclassifier.pkl'))
+    ann_scaler = joblib.load(os.path.join(script_dir, 'scaler_annclassifier.pkl'))
+    scaler = joblib.load(os.path.join(script_dir, 'vrnumeric_scaler.pkl'))
+    y_scaler = joblib.load(os.path.join(script_dir, 'y_vrnumeric_scaler.pkl'))
+    st.session_state.ann_classifier = ann_classifier
+    st.session_state.ann_scaler = ann_scaler
+except FileNotFoundError as e:
+    st.error(f"Required files not found: {e}")
+    st.session_state.error_summary.append(f"File not found: {e}")
+    st.stop()
+except Exception as e:
+    st.error(f"Error loading model or scaler: {e}")
+    st.session_state.error_summary.append(f"Model/scaler load error: {e}")
+    st.stop()
+
+# Available elements (exactly 65 elements)
+available_elements = [
+    'Mg', 'Cs', 'Co', 'Zr', 'Se', 'Dy', 'Pb', 'Ga', 'O', 'Sn', 'Yb', 'B', 'La', 'Si', 'V', 'Fe', 'S', 'Sc', 'Tl', 'Zn',
+    'Cl', 'Ce', 'Er', 'Nd', 'Pd', 'Y', 'P', 'Ta', 'In', 'Te', 'Ru', 'Rb', 'Tm', 'Tb', 'Sb', 'Al', 'Lu', 'Bi', 'Pr', 'Eu',
+    'Sm', 'Ba', 'Cr', 'Sr', 'Ni', 'Ca', 'As', 'Mn', 'Mo', 'Cd', 'Ti', 'Nb', 'Hf', 'Gd', 'Ag', 'Ge', 'Li', 'Br', 'Au', 'I',
+    'N', 'Na', 'Cu', 'Ho', 'K'
+]
+
+# All elements for full periodic table
+all_elements = [
+    'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
+    'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr',
+    'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te', 'I', 'Xe',
+    'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu',
+    'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi'
+]
+
+# Enhanced color map for all elements
+base_color_list = (
+    px.colors.qualitative.Plotly +
+    px.colors.qualitative.Pastel1 +
+    px.colors.qualitative.D3 +
+    px.colors.qualitative.G10 +
+    px.colors.qualitative.T10 +
+    px.colors.qualitative.Set1 +
+    px.colors.qualitative.Set2 +
+    px.colors.qualitative.Set3 +
+    px.colors.qualitative.Pastel2 +
+    px.colors.qualitative.Dark2
+)
+num_additional_colors = len(all_elements) - len(base_color_list)
+additional_colors = []
+for i in range(num_additional_colors):
+    hue = i / num_additional_colors
+    rgb = colorsys.hsv_to_rgb(hue, 0.7, 0.9)
+    hex_color = '#{:02x}{:02x}{:02x}'.format(int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
+    additional_colors.append(hex_color)
+default_color_list = base_color_list + additional_colors
+default_element_color_map = dict(zip(all_elements, default_color_list[:len(all_elements)]))
+
+# Streamlit UI
+st.title("Ternary Seebeck Coefficient Predictor with ANN Classification")
+st.markdown("""
+This application predicts the Seebeck coefficient for a ternary composition of selected elements at a specified temperature, visualized in a ternary diagram. Select up to three elements, input their proportions, and choose a material type (p-type, n-type, or Neutral) either manually or using an ANN-based classifier. The app quantifies the VAE's latent space (z_mean) statistics with a bar chart and uses a direction-specific bias vector to control the Seebeck coefficient's sign. It identifies the composition with the maximum absolute Seebeck coefficient and plots its variation with temperature.
+
+**Material Type Selection**: Check the box to manually select p-type, n-type, or Neutral. If unchecked, the material type is predicted by an ANN classifier based on composition features. The bias vector (p-type to n-type) is scaled to 0.5 * avg(std(z_mean)) to ensure sign flipping while keeping values ~50–300 μV/K. Biased predictions are normalized to match the unbiased magnitude, with n-type enforced to be negative.
+
+**Maximum Seebeck Calculation**: The maximum |S(x)| is computed from 496 ternary compositions at the specified temperature, where x = [x₁, x₂, x₃] satisfies x₁ + x₂ + x₃ = 1 and 0 ≤ xᵢ ≤ 1. Data is downloadable as CSV.
+
+**Date and Time**: 05:43 AM CEST, Monday, September 01, 2025
+""")
+
+# Sidebar for figure customization
+st.sidebar.header("Figure Customization")
+color_scales = [
+    'aggrnyl', 'agsunset', 'blackbody', 'bluered', 'blues', 'blugrn', 'bluyl', 'brwnyl',
+    'bugn', 'bupu', 'burg', 'burgyl', 'cividis', 'darkmint', 'electric', 'emrld', 'gnbu',
+    'greens', 'greys', 'hot', 'hsv', 'ice', 'icefire', 'inferno', 'jet', 'magma', 'mint',
+    'orrd', 'oranges', 'oryel', 'peach', 'pinkyl', 'plasma', 'plotly3', 'pubu', 'pubugn',
+    'purp', 'purples', 'purpor', 'rainbow', 'rdpu', 'reds', 'sunset', 'sunsetdark', 'teal',
+    'tealgrn', 'turbo', 'viridis', 'ylgn', 'ylgnbu', 'ylorbr', 'ylorrd'
+]
+color_scale = st.sidebar.selectbox("Ternary Color Scale", color_scales, index=color_scales.index('viridis'))
+legend_font_size = st.sidebar.slider("Legend Font Size", 8, 20, 12)
+axes_line_width = st.sidebar.slider("Axes Line Width", 1, 5, 2)
+font_size = st.sidebar.slider("Font Size (Axes/Title)", 8, 20, 16)
+grid_width = st.sidebar.slider("Grid Width", 0.5, 3.0, 1.0, step=0.5)
+user_point_color = st.sidebar.color_picker("User Composition Point Color", '#FF0000')
+max_point_color = st.sidebar.color_picker("Max |Seebeck| Point Color", '#00FF00')
+ternary_grid_color = st.sidebar.color_picker("Ternary Grid Color", '#000000')
+ternary_axes_color = st.sidebar.color_picker("Ternary Axes Color", '#000000')
+point_size = st.sidebar.slider("Point Size (Ternary/Temperature)", 5, 20, 10)
+axes_box_thickness = st.sidebar.slider("Axes Box Thickness", 1, 5, 2)
+legend_spacing = st.sidebar.slider("Legend Spacing (Point Legend to Ternary)", 0.0, 0.5, 0.3, step=0.05)
+
+# Periodic Table for Reference
+st.header("Periodic Table Reference")
+st.write("Below are two periodic tables: one showing only available elements in color, and another showing the full periodic table with unavailable elements in gray. Selected elements have bold outlines in both.")
+
+def plot_periodic_table(available_elements, selected_elements, element_color_map, show_all_elements=False, fontsize=14):
+    periodic_table_positions = {
+        'Li': (3, 1), 'Na': (4, 1), 'K': (5, 1), 'Rb': (6, 1), 'Cs': (7, 1),
+        'Be': (3, 2), 'Mg': (4, 2), 'Ca': (5, 2), 'Sr': (6, 2), 'Ba': (7, 2),
+        'Sc': (5, 3), 'Y': (6, 3), 'La': (8, 3), 'Ce': (8, 4), 'Pr': (8, 5), 'Nd': (8, 6),
+        'Sm': (8, 7), 'Eu': (8, 8), 'Gd': (8, 9), 'Tb': (8, 10), 'Dy': (8, 11), 'Ho': (8, 12),
+        'Er': (8, 13), 'Tm': (8, 14), 'Yb': (8, 15), 'Lu': (8, 16),
+        'Ti': (5, 4), 'Zr': (6, 4), 'Hf': (7, 4), 'V': (5, 5), 'Nb': (6, 5), 'Ta': (7, 5),
+        'Cr': (5, 6), 'Mo': (6, 6), 'Mn': (5, 7), 'Fe': (5, 8), 'Co': (5, 9), 'Ni': (5, 10),
+        'Cu': (5, 11), 'Zn': (5, 12), 'B': (3, 13), 'Al': (4, 13), 'Ga': (5, 13), 'In': (6, 13),
+        'Tl': (7, 13), 'Si': (4, 14), 'Ge': (5, 14), 'Sn': (6, 14), 'Pb': (7, 14),
+        'P': (4, 15), 'As': (5, 15), 'Sb': (6, 15), 'Bi': (7, 15), 'S': (4, 16), 'Se': (5, 16),
+        'Te': (6, 16), 'Cl': (4, 17), 'Br': (5, 17), 'I': (6, 17), 'Au': (7, 11), 'Ag': (6, 11),
+        'Cd': (6, 12), 'Pd': (6, 10), 'Ru': (6, 8), 'N': (3, 15), 'Na': (3, 1), 'K': (4, 1)
+    }
+    elements_to_plot = all_elements if show_all_elements else [e for e in all_elements if e in available_elements or e in selected_elements]
+    fig = go.Figure()
+    for element in elements_to_plot:
+        if element in periodic_table_positions:
+            row, col = periodic_table_positions[element]
+            color = element_color_map.get(element, '#D3D3D3') if element in available_elements else '#D3D3D3'
+            opacity = 1.0 if element in selected_elements else (0.7 if element in available_elements else 0.3)
+            line_width = 4 if element in selected_elements else 2
+            fig.add_trace(go.Scatter(
+                x=[col], y=[-row],
+                mode='markers+text',
+                text=[element],
+                textposition='middle center',
+                textfont=dict(size=fontsize, family='Arial'),
+                marker=dict(size=40, color=color, opacity=opacity, line=dict(width=line_width, color='black')),
+                hoverinfo='text',
+                hovertext=[f"Element: {element}<br>Electronegativity: {electronegativity.get(element, 1.0):.2f}<br>Thermoelectric Weight: {thermoelectric_weights.get(element, 1.0):.2f}"],
+                name=element,
+                showlegend=False
+            ))
+    title_text = 'Periodic Table: Available Elements' if not show_all_elements else 'Periodic Table: Full (Unavailable in Gray)'
+    fig.update_layout(
+        title=dict(text=f"{title_text} (Selected Elements with Bold Outline)", x=0.5, xanchor='center', font=dict(size=fontsize + 4, family='Arial')),
+        xaxis=dict(range=[0, 19], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        yaxis=dict(range=[-9, -2], showgrid=False, zeroline=False, showticklabels=False, title=''),
+        plot_bgcolor='white', paper_bgcolor='white',
+        width=900, height=450,
+        margin=dict(l=20, r=20, t=50, b=20)
+    )
+    return fig
+
+# Plot both periodic tables
+st.subheader("Available Elements Only")
+fig_present = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=False)
+st.plotly_chart(fig_present, use_container_width=True)
+
+st.subheader("Full Periodic Table")
+fig_full = plot_periodic_table(available_elements, st.session_state.selected_elements, default_element_color_map, show_all_elements=True)
+st.plotly_chart(fig_full, use_container_width=True)
+
+# Element selection via dropdown
+st.header("Select Elements")
+st.session_state.selected_elements = st.multiselect(
+    "Select up to three elements",
+    options=available_elements,
+    default=st.session_state.selected_elements,
+    max_selections=3,
+    key='element_selector'
+)
+
+# Update proportions and compositions based on selected elements
+for element in st.session_state.selected_elements:
+    if element not in st.session_state.proportions:
+        st.session_state.proportions[element] = 0.0
+    if element not in st.session_state.compositions:
+        st.session_state.compositions[element] = 0.0
+st.session_state.proportions = {k: v for k, v in st.session_state.proportions.items() if k in st.session_state.selected_elements}
+st.session_state.compositions = {k: v for k, v in st.session_state.compositions.items() if k in st.session_state.selected_elements}
+
+# Proportion and Composition input
+st.header("Input Proportions and View Normalized Compositions")
+if st.session_state.selected_elements:
+    st.write(f"Selected Elements: {', '.join(st.session_state.selected_elements)}")
     
-    with tab2:
-        st.header("Formula Classification")
-        st.markdown("""
-        Enter a chemical formula or upload a CSV file with formulas to check their p-type or n-type classification.
-        Classifications are based on extracted data or ANN/GNN predictions for unseen formulas.
-        **Note**: Run Material Classification Analysis first to populate the classification data and train the models.
-        """)
-        
-        with st.sidebar:
-            st.subheader("Formula Classification Parameters")
-            classification_mode = st.radio("Input Mode", ["Single Formula", "Batch CSV Upload"], key="classification_mode")
-            fuzzy_match = st.checkbox("Enable Fuzzy Matching", value=False, key="fuzzy_match")
-            classifier_type = st.radio("Classifier Type", ["Database Lookup", "ANN", "GNN"], key="classifier_type")
-        
-        if classification_mode == "Single Formula":
-            formula_input = st.text_input("Enter Chemical Formula (e.g., Bi2Te3, PbTe)", key="formula_input")
-            corrected_formula = st.text_input("Corrected Formula (optional)", value=formula_input, key="corrected_formula")
-            if st.button("Classify Formula", key="classify_formula"):
-                if not formula_input:
-                    st.error("Please enter a chemical formula.")
-                else:
-                    with st.spinner(f"Classifying formula '{corrected_formula}'..."):
-                        if classifier_type == "ANN":
-                            result, error, similar_formula = classify_formula_ann(corrected_formula, st.session_state.get('preserve_stoichiometry', False))
-                        elif classifier_type == "GNN":
-                            result, error, similar_formula = classify_formula_gnn(corrected_formula, st.session_state.get('preserve_stoichiometry', False))
-                        else:
-                            result, error, similar_formula = classify_formula(corrected_formula, st.session_state.material_classifications, fuzzy_match)
-                        
-                        if error:
-                            st.error(error)
-                            if similar_formula:
-                                st.warning(f"Suggested similar formula: {similar_formula}")
-                                if st.button(f"Classify Suggested Formula: {similar_formula}", key="classify_similar"):
-                                    if classifier_type == "ANN":
-                                        result, error, _ = classify_formula_ann(similar_formula, st.session_state.get('preserve_stoichiometry', False))
-                                    elif classifier_type == "GNN":
-                                        result, error, _ = classify_formula_gnn(similar_formula, st.session_state.get('preserve_stoichiometry', False))
-                                    else:
-                                        result, error, _ = classify_formula(similar_formula, st.session_state.material_classifications, fuzzy_match)
-                                    if error:
-                                        st.error(error)
-                                    else:
-                                        st.success(f"Formula: **{result['formula']}**")
-                                        st.write(f"Classification: **{result['classification']}** (Confidence: {result['confidence']:.2%})")
-                                        if result['count'] > 0:
-                                            st.write(f"Found in {result['count']} paper(s): {', '.join(result['paper_ids'])}")
-                                            st.write("Context Snippets:")
-                                            for i, context in enumerate(result['contexts'][:5], 1):
-                                                st.write(f"{i}. {context}")
-                                        else:
-                                            st.write(f"Classification based on {classifier_type} prediction.")
-                                        st.write("All Classifications:", {k: f"{v:.2%}" for k, v in result['all_classifications'].items()})
-                        else:
-                            st.success(f"Formula: **{result['formula']}**")
-                            st.write(f"Classification: **{result['classification']}** (Confidence: {result['confidence']:.2%})")
-                            if result['count'] > 0:
-                                st.write(f"Found in {result['count']} paper(s): {', '.join(result['paper_ids'])}")
-                                st.write("Context Snippets:")
-                                for i, context in enumerate(result['contexts'][:5], 1):
-                                    st.write(f"{i}. {context}")
-                            else:
-                                st.write(f"Classification based on {classifier_type} prediction.")
-                            st.write("All Classifications:", {k: f"{v:.2%}" for k, v in result['all_classifications'].items()})
-        
+    # Proportion input
+    st.subheader("Proportions")
+    cols = st.columns(len(st.session_state.selected_elements))
+    for idx, element in enumerate(st.session_state.selected_elements):
+        with cols[idx]:
+            st.session_state.proportions[element] = st.number_input(
+                f"Proportion for {element}", min_value=0.0, value=st.session_state.proportions.get(element, 0.0), step=0.1, key=f"prop_{element}"
+            )
+    
+    # Normalize proportions to compositions
+    if st.button("Normalize Proportions"):
+        total = sum(st.session_state.proportions.values())
+        if total > 0:
+            for element in st.session_state.proportions:
+                st.session_state.compositions[element] = st.session_state.proportions[element] / total
+            st.rerun()
         else:
-            uploaded_csv = st.file_uploader("Upload CSV with Formulas (column: 'formula')", type=["csv"], key="formula_csv")
-            if uploaded_csv and st.button("Classify Batch Formulas", key="classify_batch"):
-                with st.spinner("Classifying batch formulas..."):
-                    formulas_df = pd.read_csv(uploaded_csv)
-                    if 'formula' not in formulas_df.columns:
-                        st.error("CSV must contain a 'formula' column.")
-                    else:
-                        formulas = formulas_df['formula'].dropna().tolist()
-                        results, errors, suggestions = batch_classify_formulas(formulas, st.session_state.material_classifications, fuzzy_match, classifier_type)
-                        
-                        if errors:
-                            st.error("Errors encountered:\n- " + "\n- ".join(set(errors)))
-                            if suggestions:
-                                st.warning("Suggested corrections for some formulas:")
-                                for formula, suggestion in suggestions:
-                                    st.write(f"{formula} -> {suggestion}")
-                        
-                        if results:
-                            batch_df = pd.DataFrame([{
-                                "Formula": r["formula"],
-                                "Classification": r["classification"],
-                                "Confidence": f"{r['confidence']:.2%}",
-                                "Paper Count": r["count"],
-                                "Paper IDs": ", ".join(r["paper_ids"])
-                            } for r in results])
-                            st.subheader("Batch Classification Results")
-                            st.dataframe(batch_df, use_container_width=True)
-                            
-                            batch_csv = batch_df.to_csv(index=False)
-                            st.download_button(
-                                "Download Batch Classification Results", 
-                                batch_csv, 
-                                "batch_formula_classifications.csv", 
-                                "text/csv", 
-                                key="download_batch"
-                            )
-        
-        st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="formula_logs")
+            st.error("Please provide non-zero proportions for at least one element.")
+    
+    # Display normalized compositions
+    st.subheader("Normalized Compositions")
+    cols = st.columns(len(st.session_state.selected_elements))
+    for idx, element in enumerate(st.session_state.selected_elements):
+        with cols[idx]:
+            st.number_input(
+                f"Composition for {element}", min_value=0.0, max_value=1.0,
+                value=st.session_state.compositions.get(element, 0.0), step=0.1, key=f"comp_{element}", disabled=True
+            )
 else:
-    st.warning("Select or upload a database file.")
+    st.write("Please select up to three elements from the dropdown.")
+
+# Temperature input
+st.session_state.temperature = st.number_input("Enter Temperature (K):", min_value=0, max_value=5000, value=st.session_state.temperature, step=10)
+
+# Material type selection
+st.header("Material Type Selection")
+st.session_state.use_manual_material_type = st.checkbox("Manually Select Material Type", value=st.session_state.use_manual_material_type)
+if st.session_state.use_manual_material_type:
+    st.session_state.sign_bias = st.selectbox(
+        "Select Material Type (Sign Bias)",
+        options=['Neutral', 'p-type', 'n-type'],
+        index=['Neutral', 'p-type', 'n-type'].index(st.session_state.sign_bias),
+        key='sign_bias_selector'
+    )
+else:
+    st.write("Using ANN-based material type prediction.")
+    if st.session_state.selected_elements and sum(st.session_state.compositions.values()) > 0:
+        try:
+            elements = st.session_state.selected_elements.copy()
+            comp_dict = {e: st.session_state.compositions[e] for e in elements}
+            material_type, summary_dict, _ = classify_formula_ann(elements, comp_dict, st.session_state.ann_classifier, st.session_state.ann_scaler)
+            st.session_state.sign_bias = material_type
+            st.write(f"**Predicted Material Type**: {material_type}")
+            st.write(f"**p-type Probability**: {summary_dict['p_type_prob']:.3f}")
+            st.write(f"**n-type Probability**: {summary_dict['n_type_prob']:.3f}")
+            st.write(f"**Total Samples Processed**: {summary_dict['total_samples']}")
+            st.write(f"**Valid Predictions**: {summary_dict['valid_predictions']}")
+        except Exception as e:
+            st.error(f"Failed to get ANN prediction: {e}. Defaulting to Neutral.")
+            logger.error(f"ANN material type error: {e}")
+            st.session_state.error_summary.append(f"ANN prediction error: {e}")
+            st.session_state.sign_bias = 'Neutral'
+    else:
+        st.warning("Please select elements and normalize proportions to get an ANN prediction.")
+        st.session_state.sign_bias = 'Neutral'
+
+# Complete to three elements if fewer are selected
+def complete_to_three_elements(selected_elements, proportions, compositions, available_elements):
+    while len(selected_elements) < 3:
+        remaining_elements = [e for e in available_elements if e in ['Ag', 'Bi', 'Te'] and e not in selected_elements]
+        if not remaining_elements:
+            remaining_elements = [e for e in available_elements if e not in selected_elements]
+        if remaining_elements:
+            random_element = np.random.choice(remaining_elements)
+            selected_elements.append(random_element)
+            proportions[random_element] = 0.0
+            compositions[random_element] = 0.0
+        else:
+            st.error("Not enough available elements to complete the ternary composition.")
+            return selected_elements, proportions, compositions
+    return selected_elements, proportions, compositions
+
+# Generate ternary data with caching
+@st.cache_resource
+def generate_ternary_data(_vae, _regressor, _scaler, _y_scaler, elements, temperature, available_elements, sign_bias, bias_vector, bias_magnitude, steps=30):
+    compositions = []
+    seebeck_values = []
+    for a in np.linspace(0, 1, steps):
+        for b in np.linspace(0, 1 - a, steps):
+            c = 1 - a - b
+            if c >= 0:
+                comp_dict = {elements[0]: a, elements[1]: b, elements[2]: c}
+                seebeck, _ = predict_seebeck(comp_dict, temperature, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
+                if seebeck is not None:
+                    compositions.append([a, b, c])
+                    seebeck_values.append(abs(seebeck))
+                else:
+                    logger.warning(f"Prediction failed for composition {comp_dict}, skipping.")
+    if not compositions:
+        logger.error("No valid compositions generated.")
+    return np.array(compositions), np.array(seebeck_values)
+
+def plot_ternary_diagram(compositions, seebeck_values, elements, user_composition, user_seebeck, max_comp, max_seebeck, color_scale, font_size, axes_line_width, point_size, axes_box_thickness, legend_spacing, user_point_color, max_point_color, ternary_grid_color, ternary_axes_color):
+    if len(compositions) == 0:
+        st.warning("No valid ternary data to plot. Please check inputs or model files.")
+        return None
+    fig = go.Figure()
+    hover_texts = [f"{elements[0]}: {comp[0]:.2f}<br>{elements[1]}: {comp[1]:.2f}<br>{elements[2]}: {comp[2]:.2f}<br>|Seebeck|: {s:.2f} μV/K" for comp, s in zip(compositions, seebeck_values)]
+    fig.add_trace(go.Scatterternary(
+        a=compositions[:, 0], b=compositions[:, 1], c=compositions[:, 2],
+        mode='markers',
+        marker=dict(
+            size=point_size,
+            color=seebeck_values,
+            colorscale=color_scale,
+            showscale=True,
+            colorbar=dict(
+                title='|Seebeck| (μV/K)',
+                tickfont=dict(size=font_size),
+                x=1.0 + legend_spacing / 2,
+                y=0.5,
+                len=0.75
+            )
+        ),
+        text=hover_texts,
+        hoverinfo='text',
+        name='Compositions'
+    ))
+    if user_seebeck is not None:
+        user_hover_text = f"User Composition<br>{elements[0]}: {user_composition[0]:.2f}<br>{elements[1]}: {user_composition[1]:.2f}<br>{elements[2]}: {user_composition[2]:.2f}<br>|Seebeck|: {abs(user_seebeck):.2f} μV/K"
+        fig.add_trace(go.Scatterternary(
+            a=[user_composition[0]], b=[user_composition[1]], c=[user_composition[2]],
+            mode='markers',
+            marker=dict(size=point_size + 5, color=user_point_color, symbol='star'),
+            text=[user_hover_text],
+            hoverinfo='text',
+            name='User Composition'
+        ))
+    if max_seebeck != float('-inf'):
+        max_hover_text = f"Max |Seebeck|<br>{elements[0]}: {max_comp[0]:.2f}<br>{elements[1]}: {max_comp[1]:.2f}<br>{elements[2]}: {max_comp[2]:.2f}<br>|Seebeck|: {max_seebeck:.2f} μV/K"
+        fig.add_trace(go.Scatterternary(
+            a=[max_comp[0]], b=[max_comp[1]], c=[max_comp[2]],
+            mode='markers',
+            marker=dict(size=point_size + 5, color=max_point_color, symbol='square'),
+            text=[max_hover_text],
+            hoverinfo='text',
+            name='Max |Seebeck|'
+        ))
+    try:
+        fig.update_layout(
+            title=dict(text=f"Ternary Diagram: |Seebeck Coefficient| at {st.session_state.temperature} K", x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+            ternary=dict(
+                sum=1,
+                aaxis=dict(
+                    title=dict(text=elements[0], font=dict(size=font_size)),
+                    tickfont=dict(size=font_size),
+                    gridcolor=ternary_grid_color,
+                    linecolor=ternary_axes_color,
+                    linewidth=axes_line_width
+                ),
+                baxis=dict(
+                    title=dict(text=elements[1], font=dict(size=font_size)),
+                    tickfont=dict(size=font_size),
+                    gridcolor=ternary_grid_color,
+                    linecolor=ternary_axes_color,
+                    linewidth=axes_line_width
+                ),
+                caxis=dict(
+                    title=dict(text=elements[2], font=dict(size=font_size)),
+                    tickfont=dict(size=font_size),
+                    gridcolor=ternary_grid_color,
+                    linecolor=ternary_axes_color,
+                    linewidth=axes_line_width
+                )
+            ),
+            showlegend=True,
+            legend=dict(x=-(0.15 + legend_spacing), y=1, xanchor='right', font=dict(size=legend_font_size)),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=50, r=50, t=80, b=50)
+        )
+    except Exception as e:
+        st.error(f"Error updating ternary plot layout: {e}")
+        return None
+    return fig
+
+def plot_temperature_variance(elements, user_composition, max_comp, temp_range, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias, bias_vector, bias_magnitude, font_size, axes_line_width, grid_width, user_point_color, max_point_color, point_size, axes_box_thickness):
+    temps = np.linspace(temp_range[0], temp_range[1], 20)
+    user_seebeck = []
+    max_seebeck = []
+    for temp in temps:
+        user_val, _ = predict_seebeck({elements[i]: user_composition[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
+        max_val, _ = predict_seebeck({elements[i]: max_comp[i] for i in range(3)}, temp, available_elements, _scaler, _vae, _regressor, _y_scaler, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude)
+        user_seebeck.append(abs(user_val) if user_val is not None else np.nan)
+        max_seebeck.append(abs(max_val) if max_val is not None else np.nan)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=temps, y=user_seebeck, mode='lines+markers', name='User Composition', line=dict(color=user_point_color, width=axes_line_width), marker=dict(size=point_size)))
+    fig.add_trace(go.Scatter(x=temps, y=max_seebeck, mode='lines+markers', name='Max |Seebeck|', line=dict(color=max_point_color, width=axes_line_width), marker=dict(size=point_size)))
+    try:
+        fig.update_layout(
+            title=dict(text='|Seebeck Coefficient| vs Temperature', x=0.5, xanchor='center', font=dict(size=font_size + 4, family='Arial')),
+            xaxis_title='Temperature (K)', yaxis_title='|Seebeck Coefficient| (μV/K)',
+            xaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)',
+                gridwidth=grid_width,
+                zeroline=False,
+                showline=True,
+                linewidth=axes_box_thickness,
+                linecolor='black',
+                title=dict(text='Temperature (K)', font=dict(size=font_size)),
+                tickfont=dict(size=font_size)
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridcolor='rgba(0,0,0,0.1)',
+                gridwidth=grid_width,
+                zeroline=False,
+                showline=True,
+                linewidth=axes_box_thickness,
+                linecolor='black',
+                title=dict(text='|Seebeck Coefficient| (μV/K)', font=dict(size=font_size)),
+                tickfont=dict(size=font_size)
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            legend=dict(x=1.05, y=1, font=dict(size=legend_font_size)),
+            margin=dict(l=50, r=50, t=80, b=50)
+        )
+    except Exception as e:
+        st.error(f"Error updating temperature variance plot layout: {e}")
+        return None, None, None, None
+    return fig, temps, user_seebeck, max_seebeck
+
+# Generate ternary diagram and temperature variance plot
+if st.button("Generate Ternary Diagram"):
+    if len(st.session_state.selected_elements) > 0:
+        elements, proportions, compositions = complete_to_three_elements(
+            st.session_state.selected_elements.copy(),
+            st.session_state.proportions.copy(),
+            st.session_state.compositions.copy(),
+            available_elements
+        )
+        total = sum(proportions.values())
+        if total == 0:
+            st.error("Please provide non-zero proportions for at least one element.")
+        else:
+            # Compute z_mean statistics and bias vector
+            z_mean_avg, z_mean_std, bias_vector, bias_magnitude = compute_z_mean_stats_and_bias(elements, st.session_state.temperature, available_elements, scaler, vae)
+            # Display z_mean statistics and bar charts
+            st.write("### Latent Space Statistics (z_mean)")
+            st.write(f"**Mean per dimension**: {[f'{x:.4f}' for x in z_mean_avg]}")
+            st.write(f"**Std per dimension**: {[f'{x:.4f}' for x in z_mean_std]}")
+            st.write(f"**Bias vector (p-type to n-type)**: {[f'{x:.4f}' for x in bias_vector]}")
+            st.write(f"**Applied bias magnitude**: {bias_magnitude:.4f}")
+            # Plotly bar chart
+            fig_z_mean = plot_z_mean_bar_chart(z_mean_avg, z_mean_std, font_size)
+            st.plotly_chart(fig_z_mean, use_container_width=True)
+            # Matplotlib bar chart
+            fig_z_mean_matplotlib = plot_z_mean_bar_chart_matplotlib(z_mean_avg, z_mean_std, os.path.join(script_dir, 'z_mean_bar_chart.pdf'))
+            st.pyplot(fig_z_mean_matplotlib)
+            st.download_button(
+                label="Download z_mean Bar Chart as PDF",
+                data=open(os.path.join(script_dir, 'z_mean_bar_chart.pdf'), 'rb').read(),
+                file_name="z_mean_bar_chart.pdf",
+                mime="application/pdf"
+            )
+            
+            # Normalize user composition
+            user_composition = [compositions.get(elements[i], 0) for i in range(3)]
+            user_composition_dict = {elements[i]: user_composition[i] for i in range(3)}
+            # Predict Seebeck for user composition with sign bias
+            sign_bias = st.session_state.sign_bias if st.session_state.sign_bias != 'Neutral' else None
+            user_seebeck, user_seebeck_unbiased = predict_seebeck(
+                user_composition_dict,
+                st.session_state.temperature,
+                available_elements,
+                scaler,
+                vae,
+                regressor,
+                y_scaler,
+                sign_bias=sign_bias,
+                bias_vector=bias_vector,
+                bias_magnitude=bias_magnitude
+            )
+            if user_seebeck is None:
+                st.warning("Failed to predict Seebeck coefficient for user composition with sign bias, using unbiased prediction.")
+                user_seebeck, user_seebeck_unbiased = predict_seebeck(
+                    user_composition_dict,
+                    st.session_state.temperature,
+                    available_elements,
+                    scaler,
+                    vae,
+                    regressor,
+                    y_scaler,
+                    sign_bias=None,
+                    bias_vector=None,
+                    bias_magnitude=bias_magnitude
+                )
+            if user_seebeck is None:
+                st.error("Failed to predict Seebeck coefficient even without bias. Please check inputs or model files.")
+                user_seebeck = 0.0
+                user_seebeck_unbiased = 0.0
+            # Generate ternary data with error handling
+            try:
+                compositions_array, seebeck_values = generate_ternary_data(
+                    vae, regressor, scaler, y_scaler, elements, st.session_state.temperature, available_elements, sign_bias=sign_bias, bias_vector=bias_vector, bias_magnitude=bias_magnitude
+                )
+            except Exception as e:
+                st.error(f"Failed to generate ternary data due to computation error: {e}")
+                compositions_array, seebeck_values = [], []
+            if len(compositions_array) == 0:
+                st.error("No valid ternary data generated. Using user composition as fallback.")
+                max_comp, max_seebeck_abs, max_seebeck_signed = user_composition, abs(user_seebeck), user_seebeck
+            else:
+                # Find maximum Seebeck from ternary data
+                ternary_df = pd.DataFrame(compositions_array, columns=[elements[0], elements[1], elements[2]])
+                ternary_df['|Seebeck| (μV/K)'] = seebeck_values
+                max_row = ternary_df.loc[ternary_df['|Seebeck| (μV/K)'].idxmax()]
+                max_comp = [max_row[elements[0]], max_row[elements[1]], max_row[elements[2]]]
+                max_seebeck_abs = max_row['|Seebeck| (μV/K)']
+                max_seebeck_signed, _ = predict_seebeck(
+                    {elements[i]: max_comp[i] for i in range(3)},
+                    st.session_state.temperature,
+                    available_elements,
+                    scaler,
+                    vae,
+                    regressor,
+                    y_scaler,
+                    sign_bias=sign_bias,
+                    bias_vector=bias_vector,
+                    bias_magnitude=bias_magnitude
+                )
+                if max_seebeck_signed is None:
+                    max_seebeck_signed, _ = predict_seebeck(
+                        {elements[i]: max_comp[i] for i in range(3)},
+                        st.session_state.temperature,
+                        available_elements,
+                        scaler,
+                        vae,
+                        regressor,
+                        y_scaler,
+                        sign_bias=None,
+                        bias_vector=None,
+                        bias_magnitude=bias_magnitude
+                    )
+                    if max_seebeck_signed is None:
+                        max_seebeck_signed = user_seebeck
+                        max_comp = user_composition
+                        max_seebeck_abs = abs(user_seebeck)
+            # Display composition and Seebeck
+            st.write("### Composition and Seebeck Coefficient")
+            st.write(f"**User Composition**: {elements[0]}: {user_composition[0]:.2f}, {elements[1]}: {user_composition[1]:.2f}, {elements[2]}: {user_composition[2]:.2f}")
+            st.write(f"**Material Type Used**: {st.session_state.sign_bias} ({'Manual' if st.session_state.use_manual_material_type else 'ANN Prediction'})")
+            st.write(f"**User |Seebeck Coefficient| (Biased)**: {abs(user_seebeck):.2f} μV/K")
+            st.write(f"**User Signed Seebeck Coefficient (Biased)**: {user_seebeck:.2f} μV/K ({'p-type' if user_seebeck > 0 else 'n-type' if user_seebeck < 0 else 'neutral'})")
+            st.write(f"**User |Seebeck Coefficient| (Unbiased)**: {abs(user_seebeck_unbiased):.2f} μV/K")
+            st.write(f"**User Signed Seebeck Coefficient (Unbiased)**: {user_seebeck_unbiased:.2f} μV/K ({'p-type' if user_seebeck_unbiased > 0 else 'n-type' if user_seebeck_unbiased < 0 else 'neutral'})")
+            st.write(f"**Maximum |Seebeck| Composition**: {elements[0]}: {max_comp[0]:.2f}, {elements[1]}: {max_comp[1]:.2f}, {elements[2]}: {max_comp[2]:.2f}")
+            st.write(f"**Maximum |Seebeck Coefficient|**: {max_seebeck_abs:.2f} μV/K")
+            st.write(f"**Maximum Signed Seebeck Coefficient**: {max_seebeck_signed:.2f} μV/K ({'p-type' if max_seebeck_signed > 0 else 'n-type' if max_seebeck_signed < 0 else 'neutral'})")
+            # Plot ternary diagram
+            st.write("### Ternary Diagram")
+            fig_ternary = plot_ternary_diagram(
+                compositions_array, seebeck_values, elements, user_composition, user_seebeck,
+                max_comp, max_seebeck_abs, color_scale, font_size, axes_line_width, point_size,
+                axes_box_thickness, legend_spacing, user_point_color, max_point_color,
+                ternary_grid_color, ternary_axes_color
+            )
+            if fig_ternary:
+                st.plotly_chart(fig_ternary, use_container_width=True)
+                try:
+                    fig_ternary.write_html(os.path.join(script_dir, 'ternary_diagram.html'))
+                except Exception as e:
+                    st.warning(f"Failed to save ternary diagram: {e}")
+                # Prepare ternary data for download
+                ternary_df = pd.DataFrame(compositions_array, columns=[elements[0], elements[1], elements[2]])
+                ternary_df['|Seebeck| (μV/K)'] = seebeck_values
+                csv = ternary_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Ternary Data as CSV",
+                    data=csv,
+                    file_name="ternary_data.csv",
+                    mime="text/csv"
+                )
+            # Plot temperature variance
+            st.write("### |Seebeck Coefficient| vs Temperature")
+            fig_temp, temps, user_seebeck_vals, max_seebeck_vals = plot_temperature_variance(
+                elements, user_composition, max_comp, [100, 1000], available_elements,
+                scaler, vae, regressor, y_scaler, sign_bias, bias_vector, bias_magnitude, font_size, axes_line_width, grid_width,
+                user_point_color, max_point_color, point_size, axes_box_thickness
+            )
+            if fig_temp:
+                st.plotly_chart(fig_temp, use_container_width=True)
+                try:
+                    fig_temp.write_html(os.path.join(script_dir, 'temperature_variance.html'))
+                except Exception as e:
+                    st.warning(f"Failed to save temperature variance plot: {e}")
+                # Prepare temperature variance data for download
+                temp_df = pd.DataFrame({
+                    'Temperature (K)': temps,
+                    'User |Seebeck| (μV/K)': user_seebeck_vals,
+                    'Max |Seebeck| (μV/K)': max_seebeck_vals
+                })
+                csv = temp_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Temperature Variance Data as CSV",
+                    data=csv,
+                    file_name="temperature_variance_data.csv",
+                    mime="text/csv"
+                )
+    else:
+        st.error("Please select at least one element.")
+
+# Display logs
+st.text_area("Logs", "\n".join(st.session_state.log_buffer), height=150, key="logs")
