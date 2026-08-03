@@ -7381,16 +7381,1170 @@ def main() -> None:
 
 
 # ============================================================================
-# ADD MISSING FUNCTIONS (export_publication_figure, generate_analysis_report,
-# apply_graph_edits, GraphEditHistory, detect_keyword_bursts, etc.)
-# These are present in the original code but need to be included.
-# For brevity, I assume they are unchanged. The user can copy the full original
-# implementation for these, as they are domain-agnostic.
+# MISSING DOMAIN-AGNOSTIC FUNCTIONS (Adapted from Cu@Ag v6.2)
 # ============================================================================
-# (The actual code would include all the functions from the original file.
-#  To keep this answer manageable, I have omitted the repetitive blocks,
-#  but the final downloadable file must contain all of them.)
-# ============================================================================
+
+class AdvancedConceptResolver:
+    """
+    Multi-level concept resolution using ontology, embeddings, and context.
+    Faithful port of AgNPs pattern:
+    - EAGER single-batch precomputation of ontology embeddings
+    - Batch matrix resolution
+    """
+    def __init__(
+        self,
+        ontology: DomainOntology,
+        embed_model,
+        cache_max: int = 2000,
+    ) -> None:
+        self.ontology = ontology
+        self.embed_model = embed_model
+        self.resolution_cache: Dict[str, str] = {}
+        self.embedding_cache: Dict[str, np.ndarray] = {}
+        self._cache_max = max(100, int(cache_max))
+        self.similarity_threshold = 0.85
+        self.ontology_concepts_list: Optional[List[str]] = None
+        self.ontology_embedding_matrix: Optional[np.ndarray] = None
+        self._precompute_ontology_embeddings()
+
+    def _trim_embedding_cache(self) -> None:
+        if len(self.embedding_cache) > self._cache_max:
+            keys = list(self.embedding_cache.keys())
+            for k in keys[:int(len(keys) * 0.3)]:
+                del self.embedding_cache[k]
+            gc.collect()
+
+    def _trim_resolution_cache(self) -> None:
+        if len(self.resolution_cache) > self._cache_max * 4:
+            keys = list(self.resolution_cache.keys())
+            for k in keys[:int(len(keys) * 0.3)]:
+                del self.resolution_cache[k]
+
+    def _precompute_ontology_embeddings(self) -> None:
+        concepts: List[str] = []
+        all_texts: List[str] = []
+        text_counts: List[int] = []
+
+        for canonical, node in self.ontology.concepts.items():
+            concepts.append(canonical)
+            texts = [canonical] + list(node.synonyms)
+            all_texts.extend(texts)
+            text_counts.append(len(texts))
+
+        if not all_texts:
+            self.ontology_concepts_list = []
+            self.ontology_embedding_matrix = np.empty((0, 0))
+            return
+
+        with torch.no_grad():
+            all_embeddings = self.embed_model.encode(
+                all_texts,
+                show_progress_bar=False,
+                batch_size=64,
+                convert_to_numpy=True,
+            )
+
+        embeddings: List[np.ndarray] = []
+        idx = 0
+        for count in text_counts:
+            concept_embs = all_embeddings[idx:idx + count]
+            embeddings.append(np.mean(concept_embs, axis=0))
+            idx += count
+
+        del all_embeddings
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        self.ontology_concepts_list = concepts
+        self.ontology_embedding_matrix = (
+            np.array(embeddings) if embeddings else np.empty((0, 0))
+        )
+
+    @timed
+    def resolve(self, text: str, context: str = "", use_embedding: bool = True) -> Optional[str]:
+        self._trim_resolution_cache()
+        text_lower = text.lower().strip()
+        if text_lower in self.resolution_cache:
+            return self.resolution_cache[text_lower]
+
+        canonical = self.ontology.resolve_concept(text)
+        if canonical:
+            self.resolution_cache[text_lower] = canonical
+            return canonical
+
+        canonical = self._substring_match(text_lower)
+        if canonical:
+            self.resolution_cache[text_lower] = canonical
+            return canonical
+
+        if use_embedding and self.ontology_embedding_matrix.size > 0:
+            canonical = self._embedding_match(text, context)
+            if canonical:
+                self.resolution_cache[text_lower] = canonical
+                return canonical
+
+        if context:
+            canonical = self._context_disambiguation(text_lower, context)
+            if canonical:
+                self.resolution_cache[text_lower] = canonical
+                return canonical
+
+        return None
+
+    @timed
+    def resolve_batch(self, phrases: List[str], context: str = "") -> Dict[str, Optional[str]]:
+        results: Dict[str, Optional[str]] = {}
+        need_embedding: List[str] = []
+
+        for phrase in phrases:
+            phrase_lower = phrase.lower().strip()
+            if phrase_lower in self.resolution_cache:
+                results[phrase] = self.resolution_cache[phrase_lower]
+                continue
+            canonical = self.ontology.resolve_concept(phrase)
+            if canonical:
+                self.resolution_cache[phrase_lower] = canonical
+                results[phrase] = canonical
+                continue
+            sub_match = self._substring_match(phrase_lower)
+            if sub_match:
+                self.resolution_cache[phrase_lower] = sub_match
+                results[phrase] = sub_match
+                continue
+            need_embedding.append(phrase)
+
+        if need_embedding and self.ontology_embedding_matrix.size > 0:
+            query_texts = [
+                p if not context else f"{p} in context of {context}"
+                for p in need_embedding
+            ]
+            with torch.no_grad():
+                query_embs = self.embed_model.encode(
+                    query_texts,
+                    show_progress_bar=False,
+                    batch_size=64,
+                    convert_to_numpy=True,
+                )
+            sims = cosine_similarity(query_embs, self.ontology_embedding_matrix)
+            best_indices = np.argmax(sims, axis=1)
+            best_scores = np.max(sims, axis=1)
+            for idx, phrase in enumerate(need_embedding):
+                if best_scores[idx] > self.similarity_threshold:
+                    canonical = self.ontology_concepts_list[best_indices[idx]]
+                    self.resolution_cache[phrase.lower().strip()] = canonical
+                    results[phrase] = canonical
+                else:
+                    results[phrase] = None
+            del query_embs, sims, best_indices, best_scores
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        else:
+            for phrase in need_embedding:
+                results[phrase] = None
+
+        self._trim_resolution_cache()
+        return results
+
+    def _substring_match(self, text: str) -> Optional[str]:
+        for canonical, node in self.ontology.concepts.items():
+            all_forms = {canonical.lower()} | node.synonyms
+            for form in all_forms:
+                if form in text or text in form:
+                    if len(form) > 4 and len(text) > 4:
+                        return canonical
+        return None
+
+    def _embedding_match(self, text: str, context: str = "") -> Optional[str]:
+        try:
+            query_text = (
+                text if not context else f"{text} in context of {context}"
+            )
+            if query_text not in self.embedding_cache:
+                with torch.no_grad():
+                    self.embedding_cache[query_text] = self.embed_model.encode(
+                        query_text,
+                        show_progress_bar=False,
+                        convert_to_numpy=True,
+                    )
+            query_emb = self.embedding_cache[query_text]
+            sims = cosine_similarity(
+                [query_emb], self.ontology_embedding_matrix
+            )[0]
+            best_idx = int(np.argmax(sims))
+            if sims[best_idx] > self.similarity_threshold:
+                return self.ontology_concepts_list[best_idx]
+            return None
+        except Exception:
+            return None
+        finally:
+            self._trim_embedding_cache()
+
+    def _context_disambiguation(self, text: str, context: str) -> Optional[str]:
+        context_lower = context.lower()
+        te_indicators = [
+            'seebeck', 'thermopower', 'conductivity', 'thermal', 'zt',
+            'phonon', 'carrier', 'doping', 'sintering', 'band'
+        ]
+        if any(ind in context_lower for ind in te_indicators):
+            if 'seebeck' in text or 'thermopower' in text:
+                return "seebeck_coefficient"
+            if 'conductivity' in text and 'thermal' not in text:
+                return "electrical_conductivity"
+            if 'thermal' in text and 'conductivity' in text:
+                return "thermal_conductivity"
+            if 'zt' in text or 'figure of merit' in text:
+                return "zt_figure_of_merit"
+        return None
+
+    def find_equivalent_concepts(self, concepts: List[str]) -> Dict[str, str]:
+        equivalence_map: Dict[str, str] = {}
+        for concept in concepts:
+            canonical = self.resolve(concept)
+            if canonical:
+                equivalence_map[concept] = canonical
+            else:
+                equivalence_map[concept] = concept
+        return equivalence_map
+
+    def compute_semantic_similarity(self, concept1: str, concept2: str) -> float:
+        c1 = self.resolve(concept1) or concept1
+        c2 = self.resolve(concept2) or concept2
+        if c1 == c2:
+            return 1.0
+        if (
+            c2 in self.ontology.get_hypernyms(c1)
+            or c1 in self.ontology.get_hypernyms(c2)
+        ):
+            return 0.9
+        if (
+            c2 in self.ontology.get_hyponyms(c1)
+            or c1 in self.ontology.get_hyponyms(c2)
+        ):
+            return 0.9
+        try:
+            with torch.no_grad():
+                emb1 = self.embed_model.encode(
+                    c1, show_progress_bar=False, convert_to_numpy=True
+                )
+                emb2 = self.embed_model.encode(
+                    c2, show_progress_bar=False, convert_to_numpy=True
+                )
+            return float(cosine_similarity([emb1], [emb2])[0][0])
+        except Exception:
+            return 0.0
+
+
+class ReasoningEnhancedGraphBuilder:
+    def __init__(
+        self, ontology: DomainOntology, extractor: EnhancedConceptExtractor
+    ) -> None:
+        self.ontology = ontology
+        self.extractor = extractor
+        self.reasoning_paths: List[List[str]] = []
+        self.inferred_edges: Set[Tuple[str, str]] = set()
+
+    @timed
+    def build_graph(
+        self,
+        all_concepts: List[List[str]],
+        valid_concepts: List[str],
+        concept_to_id: Dict[str, int],
+        embed_model=None,
+        config: Dict = None,
+    ) -> nx.Graph:
+        if config is None:
+            config = get_adaptive_config(3000)
+        nx_graph = nx.Graph()
+
+        for c in valid_concepts:
+            concept_type = self.ontology.get_concept_type(c)
+            freq = self.extractor.concept_frequencies.get(c, 0)
+            definition = self.ontology.get_definition(c)
+            nx_graph.add_node(
+                c,
+                frequency=freq,
+                concept_type=concept_type.value,
+                definition=definition,
+                degree=0,
+            )
+
+        cooccurrence_map: Dict[Tuple[str, str], int] = defaultdict(int)
+        for concepts in all_concepts:
+            valid_in_doc = [c for c in concepts if c in concept_to_id]
+            for i in range(len(valid_in_doc)):
+                for j in range(i + 1, len(valid_in_doc)):
+                    u, v = valid_in_doc[i], valid_in_doc[j]
+                    if u != v:
+                        key = tuple(sorted([u, v]))
+                        cooccurrence_map[key] += 1
+
+        for (u, v), count in cooccurrence_map.items():
+            nx_graph.add_edge(
+                u, v,
+                weight=count,
+                cooccurrence=count,
+                semantic=0,
+                edge_type='cooccurrence',
+                inferred=False,
+            )
+
+        if embed_model and len(valid_concepts) >= 10:
+            self._add_semantic_edges(nx_graph, valid_concepts, embed_model, config)
+
+        if st.session_state.get('use_inference', True):
+            self._add_inferred_edges(nx_graph, valid_concepts)
+            self._add_cause_effect_edges(nx_graph)
+            self._add_hierarchical_edges(nx_graph, valid_concepts)
+
+        self._compute_final_weights(nx_graph, config)
+        return nx_graph
+
+    def _add_semantic_edges(
+        self, nx_graph: nx.Graph, valid_concepts: List[str],
+        embed_model, config: Dict,
+    ) -> None:
+        try:
+            with torch.no_grad():
+                embeddings = embed_model.encode(
+                    valid_concepts,
+                    show_progress_bar=False,
+                    batch_size=64,
+                    convert_to_numpy=True,
+                )
+            sim_matrix = cosine_similarity(embeddings)
+            sim_thresh = config.get("SIMILARITY_THRESHOLD", 0.85)
+            for i, c1 in enumerate(valid_concepts):
+                for j, c2 in enumerate(valid_concepts[i + 1:], start=i + 1):
+                    if c1 == c2 or nx_graph.has_edge(c1, c2):
+                        continue
+                    sim = sim_matrix[i][j]
+                    if sim > sim_thresh:
+                        if nx_graph.degree(c1) < 3 or nx_graph.degree(c2) < 3:
+                            nx_graph.add_edge(
+                                c1, c2,
+                                weight=sim * 2,
+                                cooccurrence=0,
+                                semantic=sim,
+                                edge_type='semantic',
+                                inferred=False,
+                            )
+            del embeddings, sim_matrix
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception as e:
+            st.warning(f"Semantic edge addition skipped: {e}")
+
+    def _add_inferred_edges(
+        self, nx_graph: nx.Graph, valid_concepts: List[str]
+    ) -> None:
+        for rel in self.ontology.relationships:
+            if rel.source in valid_concepts and rel.target in valid_concepts:
+                if not nx_graph.has_edge(rel.source, rel.target):
+                    nx_graph.add_edge(
+                        rel.source, rel.target,
+                        weight=rel.confidence * 2,
+                        cooccurrence=0,
+                        semantic=rel.confidence,
+                        edge_type=rel.rel_type.value,
+                        inferred=True,
+                        confidence=rel.confidence,
+                    )
+                    self.inferred_edges.add((rel.source, rel.target))
+        self._infer_cross_domain_bridges(nx_graph, valid_concepts)
+
+    def _infer_cross_domain_bridges(
+        self, nx_graph: nx.Graph, valid_concepts: List[str]
+    ) -> None:
+        material_nodes = [
+            c for c in valid_concepts
+            if self.ontology.get_concept_type(c) == ConceptType.MATERIAL
+        ]
+        property_nodes = [
+            c for c in valid_concepts
+            if self.ontology.get_concept_type(c) == ConceptType.PROPERTY
+        ]
+        for mat in material_nodes:
+            for prop in property_nodes:
+                if not nx_graph.has_edge(mat, prop):
+                    paths = self.ontology.infer_path(mat, prop, max_depth=2)
+                    if paths:
+                        avg_confidence = 0.6
+                        nx_graph.add_edge(
+                            mat, prop,
+                            weight=avg_confidence,
+                            cooccurrence=0,
+                            semantic=avg_confidence,
+                            edge_type='bridge',
+                            inferred=True,
+                            path=" -> ".join(paths[0]),
+                        )
+                        self.inferred_edges.add((mat, prop))
+                        self.reasoning_paths.append(paths[0])
+
+    def _add_cause_effect_edges(self, nx_graph: nx.Graph) -> None:
+        pass
+
+    def _add_hierarchical_edges(
+        self, nx_graph: nx.Graph, valid_concepts: List[str]
+    ) -> None:
+        for concept in valid_concepts:
+            if concept not in self.ontology.concepts:
+                continue
+            node = self.ontology.concepts[concept]
+            for hypernym in node.hypernyms:
+                if (
+                    hypernym in valid_concepts
+                    and not nx_graph.has_edge(concept, hypernym)
+                ):
+                    nx_graph.add_edge(
+                        concept, hypernym,
+                        weight=1.0, cooccurrence=0, semantic=0.95,
+                        edge_type='hypernym', inferred=True,
+                    )
+            for hyponym in node.hyponyms:
+                if (
+                    hyponym in valid_concepts
+                    and not nx_graph.has_edge(concept, hyponym)
+                ):
+                    nx_graph.add_edge(
+                        concept, hyponym,
+                        weight=1.0, cooccurrence=0, semantic=0.95,
+                        edge_type='hyponym', inferred=True,
+                    )
+
+    def _compute_final_weights(
+        self, nx_graph: nx.Graph, config: Dict
+    ) -> None:
+        cooc_weight = config.get("COOCCURRENCE_WEIGHT", 0.7)
+        sem_weight = config.get("SEMANTIC_WEIGHT", 0.2)
+        inf_weight = config.get("INFERENCE_WEIGHT", 0.1)
+        for u, v, data in nx_graph.edges(data=True):
+            cooc = data.get('cooccurrence', 0)
+            sem = data.get('semantic', 0)
+            inf = 1.0 if data.get('inferred', False) else 0
+            conf = data.get('confidence', 0.5)
+            data['weight'] = (
+                cooc_weight * cooc
+                + sem_weight * sem
+                + inf_weight * inf * conf
+            )
+
+
+class GraphEditHistory:
+    def __init__(self, max_history: int = 20) -> None:
+        self.history: deque = deque(maxlen=max_history)
+        self.redo_stack: deque = deque(maxlen=max_history)
+        self._snapshot_counter = 0
+
+    def save_snapshot(
+        self, nx_graph, valid_concepts, concept_to_id,
+        id_to_concept, concept_abstract_map,
+    ) -> int:
+        snapshot = {
+            'id': self._snapshot_counter,
+            'nx_graph': copy.copy(nx_graph),
+            'valid_concepts': list(valid_concepts),
+            'concept_to_id': dict(concept_to_id),
+            'id_to_concept': dict(id_to_concept),
+            'concept_abstract_map': {
+                k: list(v) for k, v in concept_abstract_map.items()
+            },
+            'timestamp': datetime.now().isoformat(),
+        }
+        self.history.append(snapshot)
+        self._snapshot_counter += 1
+        self.redo_stack.clear()
+        return snapshot['id']
+
+    def undo(self) -> Optional[Dict]:
+        if len(self.history) < 2:
+            return None
+        current = self.history.pop()
+        self.redo_stack.append(current)
+        previous = self.history[-1]
+        return previous
+
+    def redo(self) -> Optional[Dict]:
+        if not self.redo_stack:
+            return None
+        snapshot = self.redo_stack.pop()
+        self.history.append(snapshot)
+        return snapshot
+
+    def can_undo(self) -> bool:
+        return len(self.history) >= 2
+
+    def can_redo(self) -> bool:
+        return len(self.redo_stack) > 0
+
+    def get_history_summary(self) -> List[str]:
+        return [
+            f"Snapshot {s['id']} @ {s['timestamp']}" for s in self.history
+        ]
+
+
+def apply_graph_edits(
+    nx_graph, valid_concepts, concept_to_id, id_to_concept,
+    concept_abstract_map,
+    nodes_to_remove=None, nodes_to_merge=None, merge_name=None,
+    new_edge=None, new_edge_weight=1.0, min_degree=0, min_freq=0,
+):
+    edited = False
+    if nodes_to_remove:
+        for node in nodes_to_remove:
+            if node in nx_graph:
+                nx_graph.remove_node(node)
+                edited = True
+        valid_concepts = [
+            c for c in valid_concepts if c not in nodes_to_remove
+        ]
+        for node in nodes_to_remove:
+            if node in concept_abstract_map:
+                del concept_abstract_map[node]
+    if nodes_to_merge and merge_name and len(nodes_to_merge) >= 2:
+        merged_edges: Dict[str, Dict[str, Any]] = {}
+        merged_freq = 0
+        merged_abstracts: Set[int] = set()
+        for node in nodes_to_merge:
+            if node in nx_graph:
+                for neighbor in list(nx_graph.neighbors(node)):
+                    if neighbor not in nodes_to_merge:
+                        w = nx_graph[node][neighbor].get('weight', 1)
+                        cooc = nx_graph[node][neighbor].get('cooccurrence', 0)
+                        sem = nx_graph[node][neighbor].get('semantic', 0)
+                        etype = nx_graph[node][neighbor].get('edge_type', 'unknown')
+                        if neighbor in merged_edges:
+                            merged_edges[neighbor]['weight'] += w
+                            merged_edges[neighbor]['cooccurrence'] += cooc
+                            merged_edges[neighbor]['semantic'] += sem
+                        else:
+                            merged_edges[neighbor] = {
+                                'weight': w, 'cooccurrence': cooc,
+                                'semantic': sem, 'edge_type': etype,
+                            }
+                merged_freq += nx_graph.nodes[node].get('frequency', 0)
+                if node in concept_abstract_map:
+                    merged_abstracts.update(concept_abstract_map[node])
+                nx_graph.remove_node(node)
+        nx_graph.add_node(merge_name, frequency=merged_freq)
+        for neighbor, edge_data in merged_edges.items():
+            nx_graph.add_edge(merge_name, neighbor, **edge_data)
+        concept_abstract_map[merge_name] = list(merged_abstracts)
+        valid_concepts = [
+            c for c in valid_concepts if c not in nodes_to_merge
+        ]
+        if merge_name not in valid_concepts:
+            valid_concepts.append(merge_name)
+        for node in nodes_to_merge:
+            if node in concept_abstract_map and node != merge_name:
+                del concept_abstract_map[node]
+        edited = True
+    if new_edge and len(new_edge) == 2:
+        u, v = new_edge
+        if (
+            u in nx_graph and v in nx_graph
+            and not nx_graph.has_edge(u, v)
+        ):
+            nx_graph.add_edge(
+                u, v, weight=new_edge_weight,
+                cooccurrence=0, semantic=0, edge_type='manual',
+            )
+            edited = True
+    if min_degree > 0:
+        low_degree = [
+            n for n in nx_graph.nodes() if nx_graph.degree(n) < min_degree
+        ]
+        for node in low_degree:
+            nx_graph.remove_node(node)
+        valid_concepts = [c for c in valid_concepts if c not in low_degree]
+        for node in low_degree:
+            if node in concept_abstract_map:
+                del concept_abstract_map[node]
+        edited = True
+    if min_freq > 0:
+        low_freq = [
+            n for n in nx_graph.nodes()
+            if nx_graph.nodes[n].get('frequency', 0) < min_freq
+        ]
+        for node in low_freq:
+            nx_graph.remove_node(node)
+        valid_concepts = [c for c in valid_concepts if c not in low_freq]
+        for node in low_freq:
+            if node in concept_abstract_map:
+                del concept_abstract_map[node]
+        edited = True
+    valid_concepts = sorted(set(valid_concepts))
+    concept_to_id = {c: i for i, c in enumerate(valid_concepts)}
+    id_to_concept = {i: c for i, c in enumerate(valid_concepts)}
+    return (
+        nx_graph, valid_concepts, concept_to_id,
+        id_to_concept, concept_abstract_map, edited,
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def detect_keyword_bursts(
+    df_filtered: pd.DataFrame,
+    valid_concepts: List[str],
+    concept_abstract_map: Dict[str, List[int]],
+    text_columns: List[str],
+    burst_threshold: float = 2.0,
+) -> pd.DataFrame:
+    if "Year" not in df_filtered.columns or df_filtered["Year"].isna().all():
+        return pd.DataFrame(columns=["concept", "burst_score", "burst_year", "total_mentions", "year_range"])
+    years = df_filtered["Year"].dropna().astype(int)
+    if len(years.unique()) < 3:
+        return pd.DataFrame(columns=["concept", "burst_score", "burst_year", "total_mentions", "year_range"])
+    year_range = sorted(years.unique())
+    burst_data: List[Dict[str, Any]] = []
+    for concept in valid_concepts:
+        doc_indices = concept_abstract_map.get(concept, [])
+        if len(doc_indices) < 5:
+            continue
+        concept_years: List[int] = []
+        for idx in doc_indices:
+            if (
+                idx < len(df_filtered)
+                and pd.notna(df_filtered.iloc[idx].get("Year"))
+            ):
+                concept_years.append(int(df_filtered.iloc[idx]["Year"]))
+        if len(concept_years) < 3:
+            continue
+        year_counts = Counter(concept_years)
+        counts = [year_counts.get(y, 0) for y in year_range]
+        if len(counts) < 3:
+            continue
+        window = max(2, len(counts) // 5)
+        moving_avg = pd.Series(counts).rolling(
+            window=window, min_periods=1
+        ).mean()
+        burst_scores: List[float] = []
+        for i in range(window, len(counts)):
+            if moving_avg.iloc[i - 1] > 0:
+                ratio = counts[i] / max(moving_avg.iloc[i - 1], 0.1)
+                burst_scores.append(float(ratio))
+        if burst_scores:
+            max_burst = max(burst_scores)
+            burst_year = year_range[window + burst_scores.index(max_burst)]
+            if max_burst >= burst_threshold:
+                burst_data.append({
+                    "concept": concept,
+                    "burst_score": round(max_burst, 2),
+                    "burst_year": burst_year,
+                    "total_mentions": len(concept_years),
+                    "year_range": f"{min(concept_years)}-{max(concept_years)}",
+                })
+    if not burst_data:
+        return pd.DataFrame(columns=["concept", "burst_score", "burst_year", "total_mentions", "year_range"])
+    return pd.DataFrame(burst_data).sort_values(
+        "burst_score", ascending=False
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def detect_semantic_drift(
+    df_filtered: pd.DataFrame,
+    valid_concepts: List[str],
+    concept_abstract_map: Dict[str, List[int]],
+    text_columns: List[str],
+    early_fraction: float = 0.3,
+    late_fraction: float = 0.3,
+) -> pd.DataFrame:
+    if "Year" not in df_filtered.columns or df_filtered["Year"].isna().all():
+        return pd.DataFrame(columns=["concept", "semantic_drift", "early_papers", "late_papers", "early_period", "late_period"])
+    years = df_filtered["Year"].dropna().astype(int)
+    if len(years.unique()) < 4:
+        return pd.DataFrame(columns=["concept", "semantic_drift", "early_papers", "late_papers", "early_period", "late_period"])
+    embed_model = load_embedding_model()
+    sorted_years = sorted(years.unique())
+    n_years = len(sorted_years)
+    early_cutoff = sorted_years[int(n_years * early_fraction)]
+    late_cutoff = sorted_years[int(n_years * (1 - late_fraction))]
+    drift_data: List[Dict[str, Any]] = []
+    for concept in valid_concepts:
+        doc_indices = concept_abstract_map.get(concept, [])
+        if len(doc_indices) < 10:
+            continue
+        early_texts: List[str] = []
+        late_texts: List[str] = []
+        for idx in doc_indices:
+            if idx >= len(df_filtered):
+                continue
+            row = df_filtered.iloc[idx]
+            year = row.get("Year")
+            if pd.isna(year):
+                continue
+            year = int(year)
+            text = " ".join([
+                str(row.get(col, ""))
+                for col in text_columns if pd.notna(row.get(col))
+            ])
+            if year <= early_cutoff:
+                early_texts.append(text)
+            elif year >= late_cutoff:
+                late_texts.append(text)
+        if len(early_texts) < 3 or len(late_texts) < 3:
+            continue
+        try:
+            with torch.no_grad():
+                early_emb = embed_model.encode(
+                    early_texts, show_progress_bar=False,
+                    batch_size=32, convert_to_numpy=True,
+                )
+                late_emb = embed_model.encode(
+                    late_texts, show_progress_bar=False,
+                    batch_size=32, convert_to_numpy=True,
+                )
+            early_centroid = np.mean(early_emb, axis=0)
+            late_centroid = np.mean(late_emb, axis=0)
+            drift = 1.0 - cosine_similarity(
+                [early_centroid], [late_centroid]
+            )[0][0]
+            drift_data.append({
+                "concept": concept,
+                "semantic_drift": round(float(drift), 4),
+                "early_papers": len(early_texts),
+                "late_papers": len(late_texts),
+                "early_period": f"{sorted_years[0]}-{early_cutoff}",
+                "late_period": f"{late_cutoff}-{sorted_years[-1]}",
+            })
+            del early_emb, late_emb
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            continue
+    if not drift_data:
+        return pd.DataFrame(columns=["concept", "semantic_drift", "early_papers", "late_papers", "early_period", "late_period"])
+    return pd.DataFrame(drift_data).sort_values(
+        "semantic_drift", ascending=False
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def build_concept_genealogy(
+    _nx_graph: nx.Graph,
+    valid_concepts: List[str],
+    concept_abstract_map: Dict[str, List[int]],
+) -> pd.DataFrame:
+    if _nx_graph.number_of_nodes() < 5:
+        return pd.DataFrame()
+    try:
+        pagerank = nx.pagerank(_nx_graph, weight='weight')
+    except Exception:
+        pagerank = {n: 1.0 for n in _nx_graph.nodes()}
+    try:
+        betweenness = nx.betweenness_centrality(_nx_graph, weight='weight')
+    except Exception:
+        betweenness = {n: 0.0 for n in _nx_graph.nodes()}
+    genealogy_data: List[Dict[str, Any]] = []
+    for concept in valid_concepts:
+        if concept not in _nx_graph:
+            continue
+        pr = pagerank.get(concept, 0)
+        bc = betweenness.get(concept, 0)
+        freq = len(concept_abstract_map.get(concept, []))
+        degree = _nx_graph.degree(concept)
+        if (
+            pr > np.percentile(list(pagerank.values()), 75)
+            and degree > np.percentile(
+                [_nx_graph.degree(n) for n in _nx_graph.nodes()], 75
+            )
+        ):
+            generation = "Foundational (Parent)"
+        elif (
+            pr < np.percentile(list(pagerank.values()), 25)
+            and degree < np.percentile(
+                [_nx_graph.degree(n) for n in _nx_graph.nodes()], 25
+            )
+        ):
+            generation = "Emerging (Child)"
+        else:
+            generation = "Intermediate"
+        genealogy_data.append({
+            "concept": concept,
+            "pagerank": round(pr, 5),
+            "betweenness": round(bc, 5),
+            "frequency": freq,
+            "degree": degree,
+            "generation": generation,
+        })
+    if not genealogy_data:
+        return pd.DataFrame(columns=["concept", "pagerank", "betweenness", "frequency", "degree", "generation"])
+    return pd.DataFrame(genealogy_data).sort_values(
+        "pagerank", ascending=False
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def detect_cross_domain_bridges(
+    _nx_graph: nx.Graph,
+    valid_concepts: List[str],
+    concept_abstract_map: Dict[str, List[int]],
+) -> pd.DataFrame:
+    if _nx_graph.number_of_nodes() < 5:
+        return pd.DataFrame()
+    category_map = abstract_concepts_to_categories(valid_concepts)
+    try:
+        betweenness = nx.betweenness_centrality(_nx_graph, weight='weight')
+    except Exception:
+        betweenness = {n: 0.0 for n in _nx_graph.nodes()}
+    bridge_data: List[Dict[str, Any]] = []
+    for concept in valid_concepts:
+        if concept not in _nx_graph:
+            continue
+        neighbors = list(_nx_graph.neighbors(concept))
+        if len(neighbors) < 2:
+            continue
+        own_cat = category_map.get(concept, 'general')
+        neighbor_cats = [category_map.get(n, 'general') for n in neighbors]
+        unique_cats = set(neighbor_cats)
+        if len(unique_cats) < 2:
+            continue
+        bridge_score = betweenness.get(concept, 0) * len(unique_cats)
+        bridge_data.append({
+            "concept": concept,
+            "bridge_score": round(bridge_score, 4),
+            "betweenness": round(betweenness.get(concept, 0), 4),
+            "connected_categories": len(unique_cats),
+            "categories": ", ".join(sorted(unique_cats)),
+            "degree": len(neighbors),
+            "own_category": own_cat,
+        })
+    if not bridge_data:
+        return pd.DataFrame(columns=["concept", "bridge_score", "betweenness", "connected_categories", "categories", "degree", "own_category"])
+    return pd.DataFrame(bridge_data).sort_values(
+        "bridge_score", ascending=False
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def analyze_network_motifs(_nx_graph: nx.Graph) -> Dict[str, Any]:
+    if _nx_graph.number_of_nodes() < 3:
+        return {}
+    motifs: Dict[str, Any] = {}
+    try:
+        triangles = nx.triangles(_nx_graph)
+        motifs["total_triangles"] = sum(triangles.values()) // 3
+        motifs["avg_triangles_per_node"] = round(
+            np.mean(list(triangles.values())), 2
+        )
+        motifs["nodes_in_triangles"] = sum(
+            1 for v in triangles.values() if v > 0
+        )
+    except Exception:
+        motifs["total_triangles"] = 0
+    try:
+        cliques = list(nx.find_cliques(_nx_graph))
+        clique_sizes = [len(c) for c in cliques]
+        motifs["total_cliques"] = len(cliques)
+        motifs["max_clique_size"] = max(clique_sizes) if clique_sizes else 0
+        motifs["avg_clique_size"] = (
+            round(np.mean(clique_sizes), 2) if clique_sizes else 0
+        )
+        motifs["4cliques"] = sum(1 for c in clique_sizes if c >= 4)
+    except Exception:
+        motifs["total_cliques"] = 0
+    try:
+        clustering = nx.clustering(_nx_graph)
+        stars: List[Tuple[str, int, float]] = []
+        for node in _nx_graph.nodes():
+            deg = _nx_graph.degree(node)
+            clust = clustering.get(node, 0)
+            if deg >= 5 and clust < 0.2:
+                stars.append((node, deg, clust))
+        stars.sort(key=lambda x: x[1], reverse=True)
+        motifs["star_motifs"] = len(stars)
+        motifs["top_stars"] = stars[:10]
+    except Exception:
+        motifs["star_motifs"] = 0
+    return motifs
+
+
+def export_publication_figure(
+    nx_graph, valid_concepts, concept_abstract_map,
+    cmap_name="viridis", dpi=300, figsize=(14, 12),
+    filename="te_graph_pub.png",
+) -> bytes:
+    try:
+        pos = nx.spring_layout(nx_graph, seed=42, k=2.5, iterations=200)
+        plt.figure(figsize=figsize, dpi=dpi)
+        node_colors = [get_te_category_color(n) for n in nx_graph.nodes()]
+        node_sizes = [
+            max(100, min(800, len(concept_abstract_map.get(n, [])) * 20 + 50))
+            for n in nx_graph.nodes()
+        ]
+        nx.draw(
+            nx_graph, pos,
+            with_labels=True,
+            node_color=node_colors,
+            edge_color='lightgray',
+            node_size=node_sizes,
+            font_size=6,
+            font_weight='bold',
+            edgecolors='white',
+            linewidths=1.5,
+            width=0.5,
+            alpha=0.9,
+        )
+        plt.title(
+            "Thermoelectric Concept Graph",
+            fontsize=14, fontweight='bold', pad=20,
+        )
+        buf = io.BytesIO()
+        plt.savefig(
+            buf, format='png', dpi=dpi, bbox_inches='tight',
+            facecolor='white', edgecolor='none',
+        )
+        buf.seek(0)
+        plt.close()
+        return buf.read()
+    except Exception as e:
+        st.error(f"Publication figure export failed: {e}")
+        return b''
+
+
+def generate_analysis_report(
+    nx_graph, valid_concepts, concept_abstract_map,
+    top_scores, distill_df, burst_df, drift_df,
+    genealogy_df, bridge_df, motifs, val_metrics,
+    df_filtered,
+) -> str:
+    report: List[str] = []
+    report.append("# Thermoelectric Concept Graph Analysis Report")
+    report.append(
+        f"\n*Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n"
+    )
+    report.append("## 1. Dataset Overview")
+    report.append(f"- **Total Records**: {len(df_filtered)}")
+    if 'Year' in df_filtered.columns:
+        years = df_filtered['Year'].dropna()
+        report.append(
+            f"- **Year Range**: {int(years.min())} - {int(years.max())}"
+        )
+    report.append(f"- **Total Concepts**: {len(valid_concepts)}")
+    report.append(f"- **Total Edges**: {nx_graph.number_of_edges()}")
+    report.append(f"- **Graph Density**: {nx.density(nx_graph):.4f}")
+    report.append("")
+    report.append("## 2. Top Concepts by Frequency")
+    top_concepts = sorted(
+        valid_concepts,
+        key=lambda c: len(concept_abstract_map.get(c, [])),
+        reverse=True,
+    )[:20]
+    for i, c in enumerate(top_concepts, 1):
+        freq = len(concept_abstract_map.get(c, []))
+        deg = nx_graph.degree(c)
+        report.append(f"{i}. **{c}** - Freq: {freq}, Degree: {deg}")
+    report.append("")
+    report.append("## 3. Concept Distillation Efficiency (Top 15)")
+    if not distill_df.empty:
+        for _, row in distill_df.head(15).iterrows():
+            report.append(
+                f"- **{row['concept']}**: Efficiency="
+                f"{row['distillation_efficiency']:.3f}, "
+                f"Freq={row['frequency']}, "
+                f"Coherence={row['coherence_score']:.3f}"
+            )
+    report.append("")
+    report.append("## 4. Research Direction Recommendations (Top 10)")
+    if not top_scores.empty:
+        for i, (_, row) in enumerate(top_scores.head(10).iterrows(), 1):
+            report.append(
+                f"{i}. **{row['concept_u']}** + **{row['concept_v']}** - "
+                f"Composite Score: {row['composite_score']:.3f}"
+            )
+    report.append("")
+    report.append("## 5. Keyword Burst Detection")
+    if not burst_df.empty:
+        for _, row in burst_df.head(10).iterrows():
+            report.append(
+                f"- **{row['concept']}**: Burst Score={row['burst_score']:.2f} "
+                f"(Year {row['burst_year']})"
+            )
+    else:
+        report.append("No significant keyword bursts detected.")
+    report.append("")
+    report.append("## 6. Semantic Drift Detection")
+    if not drift_df.empty:
+        for _, row in drift_df.head(10).iterrows():
+            report.append(
+                f"- **{row['concept']}**: Drift={row['semantic_drift']:.4f} "
+                f"({row['early_period']} -> {row['late_period']})"
+            )
+    else:
+        report.append("No significant semantic drift detected.")
+    report.append("")
+    report.append("## 7. Cross-Domain Bridge Concepts")
+    if not bridge_df.empty:
+        for _, row in bridge_df.head(10).iterrows():
+            report.append(
+                f"- **{row['concept']}**: Bridge Score={row['bridge_score']:.4f}, "
+                f"Connects {row['connected_categories']} categories"
+            )
+    else:
+        report.append("No cross-domain bridges detected.")
+    report.append("")
+    report.append("## 8. Network Motif Analysis")
+    report.append(f"- Total Triangles: {motifs.get('total_triangles', 0)}")
+    report.append(f"- Total Cliques: {motifs.get('total_cliques', 0)}")
+    report.append(f"- Max Clique Size: {motifs.get('max_clique_size', 0)}")
+    report.append(f"- Star Motifs: {motifs.get('star_motifs', 0)}")
+    report.append("")
+    report.append("## 9. Graph Validation Metrics")
+    report.append(f"- Modularity: {val_metrics.get('modularity', 0):.3f}")
+    report.append(
+        f"- Silhouette Score: {val_metrics.get('silhouette_score', 0):.3f}"
+    )
+    report.append(f"- Number of Communities: {val_metrics.get('n_communities', 0)}")
+    report.append(f"- Avg Betweenness: {val_metrics.get('avg_betweenness', 0):.3f}")
+    report.append("")
+    report.append("---")
+    report.append("*Report generated by Thermoelectric Concept Graph v1.0*")
+    return "\n".join(report)
+
+
+def export_graph(
+    nx_graph, concept_abstract_map, export_format: str,
+    include_metadata: bool = True,
+) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+    if export_format == "GraphML":
+        try:
+            if include_metadata:
+                nx_graph.graph['created'] = datetime.now().isoformat()
+                nx_graph.graph['version'] = '1.0'
+                nx_graph.graph['tool'] = 'TE-ConceptGraph'
+            try:
+                nx.write_graphml_lxml(nx_graph, "te_graph.graphml")
+            except Exception:
+                nx.write_graphml(nx_graph, "te_graph.graphml")
+            with open("te_graph.graphml", "rb") as f:
+                return f.read(), "application/graphml+xml", "te_graph.graphml"
+        except Exception as e:
+            st.error(f"GraphML export failed: {e}")
+            return None, None, None
+    elif export_format == "JSON (Full Metadata)":
+        data = nx.node_link_data(nx_graph)
+        if include_metadata:
+            data['metadata'] = {
+                'created': datetime.now().isoformat(),
+                'version': '1.0',
+                'tool': 'TE-ConceptGraph',
+                'node_count': len(nx_graph.nodes()),
+                'edge_count': len(nx_graph.edges()),
+                'inferred_edges': sum(
+                    1 for u, v, d in nx_graph.edges(data=True)
+                    if d.get('inferred', False)
+                ),
+                'categories': list(set(
+                    abstract_concepts_to_categories(
+                        list(nx_graph.nodes())
+                    ).values()
+                )),
+            }
+        json_str = json.dumps(data, indent=2, default=str)
+        return json_str.encode('utf-8'), "application/json", "te_graph_full.json"
+    elif export_format == "JSON (Compact)":
+        data = nx.node_link_data(nx_graph)
+        json_str = json.dumps(data, indent=2, default=str)
+        return json_str.encode('utf-8'), "application/json", "te_graph.json"
+    elif export_format == "CSV (Edges + Metadata)":
+        edge_data: List[Dict[str, Any]] = []
+        for u, v, data in nx_graph.edges(data=True):
+            row = {
+                "source": u, "target": v,
+                "weight": data.get('weight', 1),
+                "cooccurrence": data.get('cooccurrence', 0),
+                "semantic_similarity": data.get('semantic', 0),
+                "edge_type": data.get('edge_type', 'unknown'),
+                "inferred": data.get('inferred', False),
+                "confidence": data.get('confidence', 1.0),
+                "path": data.get('path', ''),
+            }
+            edge_data.append(row)
+        csv_df = pd.DataFrame(edge_data)
+        return csv_df.to_csv(index=False).encode('utf-8'), "text/csv", "te_edges_enhanced.csv"
+    elif export_format == "CSV (Nodes + Metadata)":
+        node_data: List[Dict[str, Any]] = []
+        for node in nx_graph.nodes():
+            row = {
+                "concept": node,
+                "frequency": len(concept_abstract_map.get(node, [])),
+                "degree": nx_graph.degree(node),
+                "concept_type": nx_graph.nodes[node].get('concept_type', 'general'),
+                "definition": nx_graph.nodes[node].get('definition', ''),
+                "category": abstract_concepts_to_categories([node]).get(node, 'general'),
+            }
+            row.update({
+                k: v for k, v in nx_graph.nodes[node].items()
+                if isinstance(v, (str, int, float, bool))
+            })
+            node_data.append(row)
+        csv_df = pd.DataFrame(node_data)
+        return csv_df.to_csv(index=False).encode('utf-8'), "text/csv", "te_nodes_enhanced.csv"
+    elif export_format == "PNG":
+        try:
+            pos = nx.spring_layout(nx_graph, seed=42)
+            plt.figure(figsize=(14, 12), dpi=300)
+            node_colors = [
+                get_te_category_color(n) for n in nx_graph.nodes()
+            ]
+            nx.draw(
+                nx_graph, pos, with_labels=True,
+                node_color=node_colors, edge_color='gray',
+                node_size=400, font_size=7, font_weight='bold',
+                edgecolors='white', linewidths=1,
+            )
+            buf = io.BytesIO()
+            plt.savefig(
+                buf, format='png', dpi=300,
+                bbox_inches='tight', facecolor='white',
+            )
+            buf.seek(0)
+            plt.close()
+            return buf.read(), "image/png", "te_graph.png"
+        except Exception as e:
+            st.error(f"PNG export failed: {e}")
+            return None, None, None
+    elif export_format == "SVG":
+        try:
+            pos = nx.spring_layout(nx_graph, seed=42)
+            plt.figure(figsize=(14, 12), dpi=150)
+            node_colors = [
+                get_te_category_color(n) for n in nx_graph.nodes()
+            ]
+            nx.draw(
+                nx_graph, pos, with_labels=True,
+                node_color=node_colors, edge_color='gray',
+                node_size=400, font_size=7, font_weight='bold',
+                edgecolors='white', linewidths=1,
+            )
+            buf = io.BytesIO()
+            plt.savefig(
+                buf, format='svg', bbox_inches='tight', facecolor='white',
+            )
+            buf.seek(0)
+            plt.close()
+            return buf.read(), "image/svg+xml", "te_graph.svg"
+        except Exception as e:
+            st.error(f"SVG export failed: {e}")
+            return None, None, None
+    elif export_format == "GEXF":
+        try:
+            if include_metadata:
+                nx_graph.graph['created'] = datetime.now().isoformat()
+                nx_graph.graph['version'] = '1.0'
+            nx.write_gexf(nx_graph, "te_graph.gexf")
+            with open("te_graph.gexf", "rb") as f:
+                return f.read(), "application/xml", "te_graph.gexf"
+        except Exception as e:
+            st.error(f"GEXF export failed: {e}")
+            return None, None, None
+    return None, None, None
+
 
 if __name__ == "__main__":
     main()
