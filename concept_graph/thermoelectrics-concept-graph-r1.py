@@ -2824,7 +2824,6 @@ def detect_semantic_drift(
     )
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def build_concept_genealogy(
     _nx_graph: nx.Graph,
     valid_concepts: List[str],
@@ -2879,7 +2878,6 @@ def build_concept_genealogy(
     )
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def detect_cross_domain_bridges(
     _nx_graph: nx.Graph,
     valid_concepts: List[str],
@@ -2921,7 +2919,6 @@ def detect_cross_domain_bridges(
     )
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def analyze_network_motifs(_nx_graph: nx.Graph) -> Dict[str, Any]:
     if _nx_graph.number_of_nodes() < 3:
         return {}
@@ -4709,7 +4706,6 @@ def apply_graph_edits(
     )
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 # ============================================================================
 # GRAPH METRICS DASHBOARD (unchanged)
 # ============================================================================
