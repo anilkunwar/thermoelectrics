@@ -1,4 +1,5 @@
 streamlit
+starlette<0.40.0  # use older version of starlette to prevent TypeError: GZipResponder
 #matplotlib<3.9.0
 matplotlib
 scipy
